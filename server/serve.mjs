@@ -8,6 +8,7 @@
 // 这一条只能在服务端做，浏览器端做不了。
 
 import http from 'node:http';
+import { isIP } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import { URL } from 'node:url';
@@ -222,27 +223,89 @@ function sendError(res, err) {
   });
 }
 
+function requestError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+function normalizeHostname(hostname) {
+  return String(hostname).toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+}
+
+function parseHostHeader(value) {
+  if (typeof value !== 'string' || !value || value.length > 255 || /[\s/\\?#@]/.test(value)) return null;
+  try {
+    const url = new URL(`http://${value}`);
+    if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) return null;
+    return {
+      hostname: normalizeHostname(url.hostname),
+      port: url.port || '80',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isTrustedHost(hostname) {
+  if (['localhost', '127.0.0.1', '::1'].includes(hostname)) return true;
+  const configured = normalizeHostname(HOST);
+  if (!['0.0.0.0', '::', '*'].includes(configured) && configured === hostname) return true;
+  return ['0.0.0.0', '::', '*'].includes(configured) && isIP(hostname) !== 0;
+}
+
+function apiTrustError(req, host) {
+  const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  if (fetchSite && !['same-origin', 'none'].includes(fetchSite)) {
+    return requestError(403, '拒绝跨站 API 请求');
+  }
+
+  if (req.headers.origin !== undefined) {
+    if (req.headers.origin === 'null') return requestError(403, '拒绝跨站 API 请求');
+    let origin;
+    try {
+      origin = new URL(req.headers.origin);
+    } catch {
+      return requestError(403, 'Origin 不合法');
+    }
+    if (
+      !['http:', 'https:'].includes(origin.protocol) ||
+      origin.username || origin.password ||
+      normalizeHostname(origin.hostname) !== host.hostname ||
+      (origin.port || (origin.protocol === 'https:' ? '443' : '80')) !== host.port
+    ) {
+      return requestError(403, 'Origin 与当前站点不一致');
+    }
+  }
+  return null;
+}
+
 async function readBody(req, limitBytes = 25 * 1024 * 1024) {
+  const contentLength = Number(req.headers['content-length']);
+  if (Number.isFinite(contentLength) && contentLength > limitBytes) {
+    throw requestError(413, `请求体超过 ${Math.round(limitBytes / 1024 / 1024)}MB 上限`);
+  }
+
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
     if (size > limitBytes) {
-      const err = new Error(`请求体超过 ${Math.round(limitBytes / 1024 / 1024)}MB 上限`);
-      err.status = 413;
-      throw err;
+      throw requestError(413, `请求体超过 ${Math.round(limitBytes / 1024 / 1024)}MB 上限`);
     }
     chunks.push(chunk);
   }
   if (!chunks.length) return {};
+  const contentType = String(req.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
+  if (contentType !== 'application/json') {
+    throw requestError(415, '请求体必须使用 application/json');
+  }
   const raw = Buffer.concat(chunks).toString('utf8');
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    const err = new Error('请求体不是合法 JSON');
-    err.status = 400;
-    throw err;
+    throw requestError(400, '请求体不是合法 JSON');
   }
   /*
    * 请求体必须是 JSON 对象（第二十二轮）。这一道收口以前不在：全仓 18 个调用点都只按
@@ -462,14 +525,25 @@ class TurnHandle {
 // ---------------------------------------------------------------- routes
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const { pathname } = url;
-  const method = req.method || 'GET';
-
   try {
+    const host = parseHostHeader(req.headers.host);
+    if (!host) return sendJson(res, 400, { error: 'Host 请求头不合法' });
+    if (!isTrustedHost(host.hostname)) return sendJson(res, 403, { error: '不受信任的 Host' });
+
+    let url;
+    try {
+      url = new URL(req.url, 'http://localhost');
+    } catch {
+      throw requestError(400, '请求地址不合法');
+    }
+    const { pathname } = url;
+    const method = req.method || 'GET';
+
     if (!pathname.startsWith('/api/')) {
       return serveStatic(req, res, pathname);
     }
+    const trustError = apiTrustError(req, host);
+    if (trustError) throw trustError;
 
     // ---------- 仅测试用：装载脚本化回复（需 SOCRATIC_ENABLE_FAUX=1）
     if (pathname === '/api/__faux' && method === 'POST') {

@@ -8,6 +8,7 @@
 // 用法：node test/http-smoke.mjs   （或 npm run test:http）
 
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -84,6 +85,24 @@ async function jfetch(url, { method = 'GET', headers = {}, body } = {}) {
     /* 非 JSON 响应（如静态文件） */
   }
   return { status: res.status, data, res };
+}
+
+function requestWithHost(host, pathname = '/api/bootstrap') {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      host: '127.0.0.1',
+      port: Number(new URL(BASE).port),
+      path: pathname,
+      headers: { Host: host },
+    }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { text += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, text }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 async function waitForServer() {
@@ -253,6 +272,46 @@ try {
   check('index.html 可访问', idx.status === 200, `status=${idx.status}`);
   const js = await fetch(`${BASE}/app.js`);
   check('app.js 可访问', js.status === 200, `status=${js.status}`);
+
+  console.log('\n1b. 本机 API 信任边界');
+  const beforeTrustChecks = await jfetch(`${BASE}/api/notebooks`);
+  const hostileHost = await requestWithHost('attacker.example');
+  check('任意域名 Host 被拒绝', hostileHost.status === 403, `status=${hostileHost.status}`);
+  const malformedHost = await requestWithHost('bad%host');
+  check('畸形 Host 返回 400', malformedHost.status === 400, `status=${malformedHost.status}`);
+  const stillAlive = await jfetch(`${BASE}/api/bootstrap`);
+  check('畸形 Host 不会终止服务', stillAlive.status === 200, `status=${stillAlive.status}`);
+  const loopbackHost = await jfetch(`${BASE}/api/bootstrap`, { headers: { Host: `localhost:${new URL(BASE).port}` } });
+  check('本机 localhost Host 被接受', loopbackHost.status === 200, `status=${loopbackHost.status}`);
+
+  const hostileOrigin = await jfetch(`${BASE}/api/bootstrap`, { headers: { Origin: 'https://attacker.example' } });
+  check('跨站 Origin 被拒绝', hostileOrigin.status === 403, `status=${hostileOrigin.status}`);
+  const nullOrigin = await jfetch(`${BASE}/api/bootstrap`, { headers: { Origin: 'null' } });
+  check('Origin: null 被拒绝', nullOrigin.status === 403, `status=${nullOrigin.status}`);
+  const wrongPortOrigin = await jfetch(`${BASE}/api/bootstrap`, { headers: { Origin: 'http://127.0.0.1:1' } });
+  check('端口不一致的 Origin 被拒绝', wrongPortOrigin.status === 403, `status=${wrongPortOrigin.status}`);
+  const crossSiteFetch = await jfetch(`${BASE}/api/notebooks`, { headers: { 'Sec-Fetch-Site': 'cross-site' } });
+  check('无 Origin 的跨站 Fetch Metadata 也被拒绝', crossSiteFetch.status === 403, `status=${crossSiteFetch.status}`);
+
+  const crossSiteJson = await jfetch(`${BASE}/api/notebooks`, {
+    method: 'POST', headers: { ...H, Origin: 'https://attacker.example' }, body: JSON.stringify({ topic: '跨站写入' }),
+  });
+  check('跨站 JSON 写入被拒绝', crossSiteJson.status === 403, `status=${crossSiteJson.status}`);
+  const crossSiteSimple = await jfetch(`${BASE}/api/notebooks`, {
+    method: 'POST', headers: { 'Content-Type': 'text/plain', Origin: 'https://attacker.example' }, body: JSON.stringify({ topic: '简单请求写入' }),
+  });
+  check('跨站 text/plain 简单请求被拒绝', crossSiteSimple.status === 403, `status=${crossSiteSimple.status}`);
+  const wrongJsonType = await jfetch(`${BASE}/api/notebooks`, {
+    method: 'POST', headers: { 'Content-Type': 'text/plain', Origin: BASE }, body: JSON.stringify({ topic: '错误类型' }),
+  });
+  check('同源请求体仍要求 application/json', wrongJsonType.status === 415, `status=${wrongJsonType.status}`);
+  const trustedJson = await jfetch(`${BASE}/api/notebooks`, {
+    method: 'POST', headers: { ...H, Origin: BASE }, body: JSON.stringify({}),
+  });
+  check('同源合法 JSON 通过来源与类型检查', trustedJson.status === 400, JSON.stringify(trustedJson.data));
+  const afterTrustChecks = await jfetch(`${BASE}/api/notebooks`);
+  check('被拒绝的请求没有创建学习', afterTrustChecks.data?.notebooks?.length === beforeTrustChecks.data?.notebooks?.length,
+    JSON.stringify(afterTrustChecks.data));
 
   console.log('\n2. 建学习 + 装载脚本');
   const nb = await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: 'JavaScript 闭包', goal: '在项目里用对闭包' }) });

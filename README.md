@@ -24,6 +24,10 @@ npm run test:all   # 六个套件，见第 9 节
 
 模型接入不通过环境变量配置。启动后在「模型配置」中接入订阅，密钥写入 `data/credentials.json`，模型选择写入 `data/settings.json`；两者都不应提交到版本库。
 
+**本机 API 信任边界：** 应用没有账号系统。API 只接受本机回环地址、`localhost` 或 `SOCRATIC_HOST` 明确指定的主机名；绑定通配地址时接受 IP 字面量，但不接受任意域名，以防 DNS 重绑定。浏览器 API 请求会校验 `Origin` 与 `Sec-Fetch-Site`，跨站来源一律拒绝；命令行等无浏览器来源的客户端仍可调用。非空 JSON 请求体必须声明 `Content-Type: application/json`，防止 `text/plain` 绕过跨站写入防线；原始素材上传除外。
+
+`SOCRATIC_HOST=0.0.0.0` 或 `::` 会把一个**没有身份认证**的应用暴露给可达网络，只应用于可信网络。若要通过域名访问，请将 `SOCRATIC_HOST` 明确设为该域名，并自行在反向代理层补充认证与访问控制。
+
 ## 2. 目录结构
 
 | 路径 | 职责 |
