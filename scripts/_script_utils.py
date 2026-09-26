@@ -6,7 +6,7 @@
 2. 落盘与进程原语：`write_json_atomic`（先写带 PID 的 .tmp → fsync → os.replace）、
    `setup_stdio`（Windows 重定向场景强制 UTF-8）、`guard_not_in_skill_dir`
    （产物不得落进技能目录的守卫）、`is_inside`。
-3. 图算法：`topo_sort`（concepts / milestones 共用的确定性拓扑排序）。
+3. 图算法：`topo_sort`（concepts 按 depends_on 的确定性拓扑排序）。
 """
 import json
 import os
@@ -107,9 +107,8 @@ def guard_not_in_skill_dir(*labeled_paths, **kw):
 
 
 # ── 拓扑排序（全仓一份实现）────────────────────────────────────────
-# concepts / milestones 的 Kahn 排序此前有三份逐行拷贝，修一处漏两处。
-# 收口成一个函数：同入度按 id 升序出队（确定性输出），检测到环时抛
-# ValueError(cycle_msg)，消息文案由调用方给定以保持各自语境。
+# 同入度按 id 升序出队（确定性输出），检测到环时抛 ValueError(cycle_msg)，
+# 消息文案由调用方给定以保持各自语境。
 def topo_sort(ids, deps_by_id, cycle_msg):
     """返回拓扑序列表；存在循环依赖时抛 ValueError(cycle_msg)。
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ffmpeg 音频操作（从 narration.py 拆出）。
 
-包含：时长测量、静音生成、atempo 变速、拼接、BGM 混音。
+包含：时长测量、静音生成、atempo 变速、拼接。
 所有函数都只依赖"ffmpeg 路径 + 参数"，不碰 TTS/网络，可脱离 pipeline 单独测试。
 """
 import os
@@ -253,74 +253,6 @@ def concat_audio(ffmpeg_path, file_list, gap_sec, out_path):
 
     return result is not None and result.returncode == 0
 
-
-def mix_bgm(ffmpeg_path, voice_path, bgm_path, bgm_volume, out_path):
-    """Mix background music under voice audio. BGM loops to match voice duration.
-
-    全程使用固定的 bgm_volume。
-    """
-    volume_filter = f"volume={bgm_volume}"
-    # normalize=0：amix 默认把每路输入各乘 1/inputs（两路即人声 -6dB），
-    # 带 BGM 的成片会系统性比不带的一半响度；关掉 normalize 后音量
-    # 关系完全交给 volume_filter 控制
-    try:
-        result = subprocess.run([
-            ffmpeg_path, "-y",
-            "-i", voice_path,
-            "-i", bgm_path,
-            "-filter_complex",
-            f"[1:a]{volume_filter},aloop=loop=-1[bgm];"
-            f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=3:normalize=0",
-            "-ar", "24000", "-ac", "1", out_path
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=300)
-    except (subprocess.TimeoutExpired, OSError) as e:
-        print(f"  [BGM mix failed] ffmpeg 混音失败/超时: {e}", file=sys.stderr)
-        return False
-    if result.returncode != 0:
-        print(f"  [BGM mix failed] {result.stderr[-300:]}", file=sys.stderr)
-        return False
-    return True
-
-
-def build_loudnorm_filter(target_lufs=-16.0):
-    """构建 ffmpeg loudnorm 滤镜串（单遍，目标整体响度 target_lufs LUFS）。
-
-    目标 -16 LUFS 是网络视频/播客常见响度；TP/LRA 用固定值即可。
-    target_lufs 被钳制在 [-70, 0] 范围内，防止非法值进入 ffmpeg 滤镜串。
-    """
-    _MIN_LUFS, _MAX_LUFS = -70.0, 0.0
-    if target_lufs < _MIN_LUFS or target_lufs > _MAX_LUFS:
-        print(f"[loudnorm] target_lufs {target_lufs} 超出 [{_MIN_LUFS}, {_MAX_LUFS}] "
-              f"范围，自动钳制到边界。", file=sys.stderr)
-        target_lufs = max(_MIN_LUFS, min(_MAX_LUFS, target_lufs))
-    return f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11"
-
-
-def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs=-16.0):
-    """对整条音频做响度归一化，输出到 out_path。返回是否成功。
-
-    用于把逐句 TTS 拼出来的音频统一到目标响度（跨句/跨视频音量一致）。在 concat
-    之后、对 combined 整段做，loudnorm 只做增益、不做变速，不改变句子间相对时序，
-    字幕时间轴仍按 narration_timing.json 的实测值对齐。
-    """
-    filt = build_loudnorm_filter(target_lufs)
-    try:
-        result = subprocess.run([
-            ffmpeg_path, "-y", "-i", in_path,
-            "-af", filt,
-            "-ar", "24000", "-ac", "1", out_path,
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=120)
-    except (subprocess.TimeoutExpired, OSError) as e:
-        # 同模块其它 ffmpeg 封装都显式接 TimeoutExpired/OSError：
-        # ffmpeg 卡死或路径失效时用户不该直接吃裸栈
-        print(f"  [loudnorm] ffmpeg 失败/超时 (120s): {e}", file=sys.stderr)
-        return False
-    if result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-        return True
-    print(f"  [loudnorm] failed: {result.stderr[-200:]}", file=sys.stderr)
-    return False
 
 # ── FFmpeg runtime helpers ─────────────────────────────────────────
 def _system_ffmpeg():

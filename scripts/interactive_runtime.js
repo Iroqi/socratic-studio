@@ -4,21 +4,10 @@
   // HTML 时，若需要「时间轴推进 + 旁白聚焦 + 阻塞式交互门禁」的引导体验，
   // 把这个文件放进制品目录并引入即可；不需要就不引入。
   //
-  // 契约：页面里放一个 <script type="application/json" id="lesson-timeline">
-  // （id 可用 window.SOCRATIC_STUDIO_TIMELINE_ID 指定），内容形如：
-  //   {"scenes":[{"step_id":"s1",
-  //               "runtime":{"start":0,"duration":8,"end":8,
-  //                          "narration":[{"start":0,"duration":3,"text":"...","target":"t1"}]},
-  //               "runtime_actions":[{"type":"focus","target":"t1"},
-  //                                  {"type":"wait","for":"interaction","gate":"blocking"}]}]}
-  // 页面结构与选择器约定（皆可在 HTML 里自由组织，运行时只认这些 data-*）：
-  //   [data-step-id]                 —— 每个场景的容器
-  //   [data-begin]                   —— 可选的极简开始触点（有音频时需用户手势起播）
-  //   [data-interaction='<json>'][data-interaction-type] —— 交互块（只写这一个
-  //   data-interaction 属性；重复属性 HTML 只认第一个，空值会吞掉 JSON 配置）
-  //   [data-gate="blocking"]         —— 阻塞门禁（未完成则冻结时钟）
-  //   #main-audio                    —— 可选；有则用音频时钟，无则用虚拟时钟
-  //   timeline.missing_gate_policy   —— 可选："open"（默认）或 "closed"
+  // 时间轴 JSON 形状与页面 data-* 选择器契约的唯一之家是
+  // `references/interactive-runtime.md` §1–§2（含 lesson-timeline 标签、
+  // SOCRATIC_STUDIO_TIMELINE_ID、missing_gate_policy）——这里刻意不复制一份，
+  // 抄本必然与原文漂移。
   //
   // 本运行时**只负责引导时序**：场景切换、旁白聚焦、阻塞式门禁。
   // 不计算掌握度、不采集作答、不写文件——这些交由 Agent（脚本 / 对话窗口）完成。
@@ -135,7 +124,7 @@
       const complete=(msg='')=>finish(el,msg);
       if(kind==='toggle') el.querySelector('[data-toggle-action]')?.addEventListener('click',()=>{el.dataset.toggled=el.dataset.toggled==='1'?'0':'1';complete(el.dataset.toggled==='1'?'已展开':'已收起');});
       if(['choice','self_check','predict','compare'].includes(kind)){
-        const opts=config.options||config.choices||[];
+        const opts=config.options||[];
         // 契约（interactive-runtime.md）：只有声明了 correct:true 的选项集才要求答对；
         // 只标了 correct:false（无 true）的集合视为"无标准答案"，选出即完成——
         // 若按"声明过任意布尔"判定，阻塞门禁会因不存在正确答案而永不放行。
@@ -177,13 +166,13 @@
         el.querySelector('[data-sequence-submit]')?.addEventListener('click',()=>{
           if(el.dataset.locked==='1')return;
           const order=[...el.querySelectorAll('.sequence-item')].map(x=>String(x.dataset.sequenceId));
-          const expected=(config.correct_order||config.answer||[]).map(String);
+          const expected=(config.correct_order||[]).map(String);
           const detail=order.join(',');
           const fb=el.querySelector('.interaction-feedback');
           if(!expected.length){
             if(el.dataset.gate==='blocking'){
-              console.warn('[socratic-studio] 阻塞排序题缺少 correct_order/answer，无法判定正误，提交已拒绝。');
-              if(fb){fb.textContent='该排序题缺少 correct_order/answer，无法判定。';fb.hidden=false;}
+              console.warn('[socratic-studio] 阻塞排序题缺少 correct_order，无法判定正误，提交已拒绝。');
+              if(fb){fb.textContent='该排序题缺少 correct_order，无法判定。';fb.hidden=false;}
               return;
             }
             finish(el,'已记录排序。',{detail});
@@ -192,7 +181,7 @@
           const correct=order.length===expected.length&&order.every((v,i)=>v===expected[i]);
           if(!correct){
             recordEvidence(el,{correct:false,detail});
-            // 契约（interactive-runtime.md「门禁完成信号」/ui-patterns.md「DOM 观测映射」）：
+            // 契约（interactive-runtime.md「门禁完成信号」/writing.md「DOM 观测映射」）：
             // 明确答错一律回到 '0'，不分是否阻塞门禁——与 choice 的 finish 路径同一语义。
             el.dataset.completed='0';
             if(fb){fb.textContent='顺序还不对，再调整一次。';fb.hidden=false;fb.classList.remove('is-correct');fb.classList.add('is-wrong');}
@@ -206,8 +195,14 @@
   }
   function startVirtualClock(){state.clockMode='virtual';state.virtualStartedAt=performance.now();state.started=true;document.querySelector('[data-begin]')?.setAttribute('hidden','hidden');if(state.virtualLoopStarted)return;state.virtualLoopStarted=true;let last=-1;const tick=()=>{if(!state.userPaused){const t=clockNow();if(Math.abs(t-last)>=.05){applyAt(t);last=t;}}requestAnimationFrame(tick)};requestAnimationFrame(tick);}
   function bindAudio(audio){if(state.audioBound)return;state.audioBound=true;const useAudioClock=()=>{state.clockMode='audio';if(state.started&&!state.gatePaused)applyAt(audio.currentTime);};audio.addEventListener('loadedmetadata',useAudioClock,{once:true});audio.addEventListener('durationchange',useAudioClock);audio.addEventListener('timeupdate',()=>{if(!state.userPaused&&state.started&&!state.gatePaused)applyAt(audio.currentTime);});audio.addEventListener('seeked',()=>{if(state.started)applyAt(audio.currentTime);});audio.addEventListener('play',()=>{if(state.gatePaused){audio.pause();return;}state.userPaused=false;/* ended 后不点复位，timeupdate 会永久跳过场景推进 */state.clockMode='audio';state.started=true;applyAt(audio.currentTime);document.querySelector('[data-begin]')?.setAttribute('hidden','hidden');});audio.addEventListener('ended',()=>{state.userPaused=true;});audio.addEventListener('error',()=>startVirtualClock());}
-  async function startGuidance(){if(state.started)return;const audio=document.getElementById('main-audio');if(!audio){startVirtualClock();return;}try{await audio.play();state.clockMode='audio';state.started=true;applyAt(audio.currentTime);}catch(_){startVirtualClock();}}
-  document.querySelector('[data-begin]')?.addEventListener('click',startGuidance);
+  async function startGuidance(fromGesture){if(state.started)return;const audio=document.getElementById('main-audio');if(!audio){startVirtualClock();return;}try{await audio.play();state.clockMode='audio';state.started=true;applyAt(audio.currentTime);}catch(_){
+    // 已有手势仍起不来 = 媒体真的坏了 → 按无 TTS 降级走虚拟时钟。
+    if(fromGesture){startVirtualClock();return;}
+    // 没有手势被拦下时不伪装成"声音在放"：画面停在 0 等手势，不偷偷切虚拟时钟——
+    // 否则学习者看着场景无声推进，等他点播放时又被音频时间拽回去。
+    console.warn('[socratic-studio] 音频起播被浏览器拦下：画面停在 0 等待用户手势（加 [data-begin] 触点，或直接点音频控件都会恢复推进）。');
+    state.userPaused=true;applyAt(0);}}
+  document.querySelector('[data-begin]')?.addEventListener('click',()=>startGuidance(true));
   wireInteractions();
   // 宿主页面若按时间轴**动态生成**交互块（例如到点浮出的门禁），
   // 建好 DOM 后要主动调这个入口重新接线。语义是幂等的：已经接过的不会重复挂。

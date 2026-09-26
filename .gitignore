@@ -5,7 +5,6 @@ audio_output/
 out/
 snapshots/
 narration_timing.json
-lesson_ir.json
 
 # Python 运行时
 __pycache__/

@@ -1,12 +1,11 @@
 # 可选引导式运行时库
 
-> `scripts/interactive_runtime.js` 是一个**可选**库。你自由编写 HTML 时，如果想要
-> 「时间轴推进 + 旁白高亮 + 阻塞式交互门禁」，把它拷进制品目录
-> 并引入即可；不需要它，页面照样是完整制品。它不是必选宿主，也不是一条产品路线。
+> `scripts/interactive_runtime.js` 是一个**可选**库。想要「时间轴推进 + 旁白高亮 + 阻塞式交互门禁」时
+> 把它拷进制品目录引入即可；不用它，页面照样是完整制品。
 
 ## 1. 定位：库，不是宿主
 
-HTML 由 Agent 自由编写。运行时库只提供**行为**，不提供页面结构：
+HTML 由 Agent 自由编写，运行时只提供**行为**，不提供页面结构：
 
 ```text
 你写的 HTML（结构 / 样式 / 内容 —— 全部由你决定）
@@ -14,8 +13,8 @@ HTML 由 Agent 自由编写。运行时库只提供**行为**，不提供页面�
 interactive_runtime.js（只做：时钟推进 / 聚焦 / 门禁）
 ```
 
-页面本体必须**先作为普通可阅读、可滚动、可操作的 HTML 成立**。引导式推进是增强层，
-没有音频、没有自动播放时页面仍然完整可用。
+页面本体必须**先作为普通可阅读、可滚动、可操作的 HTML 成立**（底线见
+`writing.md`「Learning-first 写作原则」）。引导式推进是增强层。
 
 ## 2. 契约：timeline JSON + data-* 约定
 
@@ -51,15 +50,12 @@ interactive_runtime.js（只做：时钟推进 / 聚焦 / 门禁）
 `missing_gate_policy`（见 §4）。标签内 JSON 语法解析失败时，运行时在控制台 `error` 指明并
 **整体停用时间轴引导**——页面内容保持可正常阅读操作，不白屏、不炸脚本。
 
-门禁放**独立场景**（如上 `s2-gate`，`duration: 0`）：时钟一进场景就冻结，本场景不会再逐句
-推进旁白——问题陈述与引导话术都放在**前一个场景**里。规则详见 §4「冻结发生在场景入口」。
-
 `runtime_actions` 由你按内容填（聚焦 / 揭示 / 门禁 / 动画），脚本只知道时间不知道页面上有什么。
 
-### narration_timing.json 字段形状（canonical）
+### narration_timing.json 字段形状
 
-`narration.py` 产出的 `narration_timing.json` 是本契约的**超集**：配置了 TTS 时不必手写
-timeline JSON，把这份 manifest **原样**内联进 script 标签即可——运行时只读它认识的字段，
+`narration.py` 产出的 `narration_timing.json` 是本契约的**超集**：配了 TTS 就不必手写 timeline JSON，
+把这份 manifest **原样**内联进 script 标签即可——运行时只读它认识的字段，
 其余字段是给人（和画面演进逻辑）用的，无害共存。完整形状：
 
 ```json
@@ -102,7 +98,7 @@ timeline JSON，把这份 manifest **原样**内联进 script 标签即可——
 | 顶层 `total_duration` | 整条音轨实测总时长（秒） | 宿主页（进度条等） |
 | 顶层 `gap` | 合成时使用的句间静音秒数 | 人读 |
 | 顶层 `voice_id` | CLI 默认音色；逐段/逐说话人覆盖不体现在此处 | 人读 |
-| 顶层 `audio` | **最终音轨的文件名**（只有 basename）。带 `--bgm` / `--loudness` 时是处理后的文件名而非 `combined.wav`——页面里 `<audio id="main-audio">` 的 `src` 一律以这个字段为准 | 宿主 |
+| 顶层 `audio` | **音轨的文件名**（只有 basename，即 `combined.wav`）——页面里 `<audio id="main-audio">` 的 `src` 一律以这个字段为准 | 宿主 |
 | 顶层 `degraded` | `{tts_silence_fallback_count: n}`：n 句为静音占位 | 人读 / 宿主自查 |
 | `scenes[].step_id` / `scene_id` | 场景键（两者同值；运行时只读 `step_id`，缺失时回退 `id`） | 运行时 |
 | `scenes[].title` | 段落标题，供宿主页呈现 | 宿主 |
@@ -119,13 +115,13 @@ timeline JSON，把这份 manifest **原样**内联进 script 标签即可——
   不必自己算时间。
 - **场景容器整段没有句子时会被从时间轴剔除**并 `warn`：这是一条防御分支——`--on-fail abort`
   下任何句子失败都会在写 manifest 前终止整条管线，`--on-fail silence` 下失败句会拿静音占位，
-  两者都到不了"整段无音频"；实际触发它的是段落范围没覆盖到任何句子。
+  两者都到不了"整段无音频"。
   宿主页按 `step_id` 找场景时要容忍"少场景"，画面与门禁以实际输出的 scenes 为准。
 
 ### data-* 约定
 
 页面结构只需满足这些 `data-*` 约定（怎么组织 HTML 随你）。「谁写谁读」列指属性的写入方与
-消费者；宿主页自己维护的证据标记（审计快照之类）不经过运行时，见各节指针。
+消费者。
 
 | 选择器 / 属性 | 含义 | 谁写 → 谁读 |
 |---|---|---|
@@ -138,7 +134,7 @@ timeline JSON，把这份 manifest **原样**内联进 script 标签即可——
 | `data-wired='1'` | 接线幂等标记，见「接线幂等」 | 运行时写 → 运行时读 |
 | `data-toggled='0'/'1'` | toggle 交互当前开合状态 | 运行时写 → 宿主样式可读 |
 | `data-selected='0'/'1'` | 当前选中的选项（每次点击先清全部再置选中） | 运行时写 → 宿主样式可读 |
-| `data-attempts` / `data-result` / `data-response` / `data-completed` / `data-locked` | 作答证据，唯一契约在 §4「门禁完成信号（MutationObserver）」 | 运行时写 → 宿主页读 |
+| `data-attempts` / `data-result` / `data-response` / `data-completed` / `data-locked` | 作答证据，见 §4「门禁完成信号」 | 运行时写 → 宿主页读 |
 | `[data-narration-focused]` | 运行时写入：当前旁白句绑定的 DOM 目标（只读，别自己设） | 运行时写 → 宿主样式读 |
 | `[data-narration-index="<n>"]` | 旁白第 n 句（**场景内** 0-based）的聚焦目标；`narration` 条目没有 `target` 时按此回退匹配 | 宿主写 → 运行时读 |
 | `[data-narration-target="<id>"]` | 具名旁白绑定；`narration` 条目写了 `target` 且页面上按名字定位时用它 | 宿主写 → 运行时读 |
@@ -185,13 +181,13 @@ timeline JSON，把这份 manifest **原样**内联进 script 标签即可——
 | `choice` / `self_check` / `predict` / `compare` | 每个选项按钮 `[data-choice-id="<id>"]`，id 与 `data-interaction` JSON 里 `options[].id` 对应 | 挂点击判定；写 `data-selected`；答对后所有按钮 `disabled` |
 | `explore` | `[data-explore-input]`，可选 `[data-explore-output]`，input 上 `data-explore-initial`（基线值，缺省用 `defaultValue`） | 同步 output 值；`change` 且值偏离基线才算完成 |
 | `reflection` | `[data-reflection-input]` + `[data-reflection-submit]` | 提交时校验文本 ≥2 字符，通过才算完成 |
-| `sequence` | `.sequence-list` 容器、每个条目 `.sequence-item[data-sequence-id]`、`[data-sequence-submit]` | 拖拽排序（insertBefore）；提交时按 DOM 顺序比对 `correct_order`/`answer` |
+| `sequence` | `.sequence-list` 容器、每个条目 `.sequence-item[data-sequence-id]`、`[data-sequence-submit]` | 拖拽排序（insertBefore）；提交时按 DOM 顺序比对 `correct_order` |
 
 块上 `data-interaction` 的 JSON 解析失败时：运行时在控制台 `error` 指明是哪个块，并把该块
 按"无配置"处理（选项题会因没有 `options[].correct` 声明而变成"任意选择即完成"）——
 写完交互块别漏验这一块 JSON。
 
-### 接线幂等（canonical）
+### 接线幂等
 
 - 每个 `[data-interaction]` 首次接线后运行时写 `data-wired='1'`；重复接线调用不会重复挂监听。
   没有这层标记，每接一次就多挂一层 click 监听——点一下记成多次作答。
@@ -211,8 +207,10 @@ timeline JSON，把这份 manifest **原样**内联进 script 标签即可——
 音频不定义整个制品的时序模型——没有音频，虚拟时钟一样推进。
 
 启动行为（如实）：页面加载时，有 `#main-audio` 且有 `[data-begin]` → 绑定音频等用户手势起播；
-有音频但无触点 → 立即尝试 `play()`（被浏览器拦截则自动退回虚拟时钟）；无音频有触点 → 等点击；
-无音频无触点 → 直接启动虚拟时钟。
+有音频但无触点 → 立即尝试 `play()`，**被浏览器拦下时画面停在 0 等手势**（控制台一次 warn；点了
+音频控件或再给一次手势都会恢复，推进权交给音频时间，不会出现"无声地自己走"）；无音频有触点 →
+等点击；无音频无触点 → 直接启动虚拟时钟。**只有"用户已经点过、音频仍然起不来"才按无 TTS 降级
+走虚拟时钟**——那是媒体真坏了。
 
 虚拟时钟的暂停/门禁转换会**先提交已流逝时间**再进入暂停态，并从提交的偏移恢复。
 这样跨「音频暂停 / 阻塞门禁 / 无 TTS 降级推进」时场景位置不会丢。
@@ -238,9 +236,9 @@ timeline JSON，把这份 manifest **原样**内联进 script 标签即可——
 
 - `choice` / `self_check` / `predict` / `compare`：只有当选项声明了 `correct: true` 时才要求答对；
   没有任何选项带 `correct` 字段时，选出即算完成。
-- `sequence`：作为阻塞门禁时必须提供 `correct_order` / `answer`，并按同一套归一化选项 id 判定。
+- `sequence`：作为阻塞门禁时必须提供 `correct_order`，并按同一套归一化选项 id 判定。
   缺失时运行时**拒绝提交并在控制台告警**——阻塞门禁不会因"没有正确答案可比"而解除；
-  非阻塞的 `sequence` 缺少这两者时按"已记录排序"完成。
+  非阻塞的 `sequence` 缺少它时按"已记录排序"完成。
 - `reflection`：要求学习者输入文本（去空白后至少 2 个字符）。
 - `explore`：要求发生一次真实的值变更，而不是任意 input 事件。
 
@@ -275,7 +273,7 @@ Runtime action 默认只执行一次；需要连续执行的 action 必须显式
 整个元素，或初始化时先读一次 `dataset.completed`，别只监听 `'0' → '1'` 的值变化。
 
 页面用 `MutationObserver` 观察这些属性即可，这是运行时主动通知的唯一时点：
-运行时只做**机械比对**——按题目自带的声明（选项 `correct`、`correct_order`/`answer`）判完成与正误，
+运行时只做**机械比对**——按题目自带的声明（选项 `correct`、`correct_order`）判完成与正误，
 不发明判定标准、不计算掌握度，也不暴露作答汇总。
 
 **音频模式下的解除**：门禁冻结期间宿主页调 `audio.play()`（例如空格键直通）会被运行时的
@@ -366,7 +364,7 @@ start/end，保持多步骤内容按声明顺序连续推进。
 
 ## 7. 边界
 
-这个库是可选件，不负责制品审计或离线打包。页面是否需要保存、如何组织资源，由 Agent 根据当前教学目标决定。
+这个库是可选件，不负责制品审计或离线打包——页面是否保存、如何组织资源由 Agent 决定。
 
 ### 运行时状态导出
 
@@ -377,9 +375,6 @@ start/end，保持多步骤内容按声明顺序连续推进。
 
 ### 测试挂点
 
-**它保留了一个行为验证挂点，本 skill 不自带测试。** 页面若设置 `window.__SOCRATIC_STUDIO_TEST__`
-（任意真值），运行时会把内部时钟函数（`clockNow` / `commitVirtualClock` / `freezeForGate` /
-`resumeAfterGate` / `startVirtualClock` / `applyAt`）挂到
-`window.__SOCRATIC_STUDIO_TEST__.api` 上，供宿主自行验证门禁与时钟行为。**默认不开，
-不影响正常使用**；本 skill 不提供测试脚本（见 `SKILL.md`「Canonical scripts」）。
-这是本 skill 唯一的测试钩子，边界定义见 `protocols.md` §0。
+页面若设置 `window.__SOCRATIC_STUDIO_TEST__`（任意真值），运行时会把内部时钟函数（`clockNow` /
+`commitVirtualClock` / `freezeForGate` / `resumeAfterGate` / `startVirtualClock` / `applyAt`）挂到
+`window.__SOCRATIC_STUDIO_TEST__.api` 上，供宿主自行验证门禁与时钟行为。默认不开，本 skill 不自带测试脚本。

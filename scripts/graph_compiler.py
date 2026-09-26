@@ -1,29 +1,25 @@
 #!/usr/bin/env python3
-"""Learning Graph -> canonical Lesson IR compiler.
+"""Learning Graph 校验器：严格校验 + 误解归一 + 按 depends_on 拓扑排序。
 
-No presentation/theme/aspect decisions are made here.
+产物仍是 Learning Graph（可直接用 --json-input 回读再校验）——写讲解和制品时直接读
+这份有序清单，不做任何表现层决定。
 """
 from __future__ import annotations
 import argparse, os, re, sys
 SCRIPTS_DIR=os.path.dirname(os.path.abspath(__file__))
 if SCRIPTS_DIR not in sys.path: sys.path.insert(0,SCRIPTS_DIR)
 from _contracts import (ASSESSMENT_ITEM_FIELDS, KEBAB_ID_RE,
-                        apply_concept_defaults, normalize_misconceptions,
-                        strict_json_loads, validate_assessment_item_fields,
-                        validate_milestone_fields)
-from lesson_ir import build_lesson_ir, validate_lesson_ir
+                        normalize_misconceptions, strict_json_loads,
+                        validate_assessment_item_fields)
 from _script_utils import (guard_not_in_skill_dir, setup_stdio, topo_sort,
                            write_json_atomic)
 
 # 字段白名单单一来源：Markdown 入口与严格校验器共用同一份定义。手抄两份时
 # 漏改一处就会出现"上游合法、下游判未知字段"或反之——与 _contracts 里
 # ASSESSMENT_ITEM_FIELDS 收口的动机相同。
-CONCEPT_FIELDS = {"id", "name", "summary", "explanation", "insight", "difficulty",
-                  "importance", "estimated_time", "depends_on", "misconceptions",
-                  "confused_with", "examples", "counterexamples",
-                  "observable_skills", "assessment_items"}
-MILESTONE_FIELDS = {"id", "name", "introduces_concepts", "depends_on",
-                    "deliverable_type", "deliverable_owner", "acceptance_criteria"}
+CONCEPT_FIELDS = {"id", "name", "summary", "explanation", "importance",
+                  "depends_on", "misconceptions", "confused_with", "examples",
+                  "counterexamples", "observable_skills", "assessment_items"}
 
 def _parse_pipe_fields(line):
     fields={}
@@ -152,13 +148,17 @@ def _parse_list(value):
 
     items=_split_top_level(inner)
     # Canonical compact object syntax: [type: apply, prompt: "..."] is one object.
-    # 字段白名单与校验器共用同一份定义（_contracts.ASSESSMENT_ITEM_FIELDS）：
-    # 手抄一份漏掉 evaluation_mode/rationale 等键时，合法紧凑写法会被误拆成
-    # 字符串列表，报错还指不到根因。
+    # 字段白名单与校验器共用同一份定义（_contracts.ASSESSMENT_ITEM_FIELDS）。
+    # 每一段都带 ":" 却认不出字段名时，几乎总是条目里写了不存在的键——直接点名，
+    # 不要退回"把它当字符串列表"再报一句和字段无关的 scalar 错误。
     if len(items) >= 2 and all(':' in item for item in items):
         keys=[item.split(':',1)[0].strip().strip('"').lower() for item in items]
         if all(k in ASSESSMENT_ITEM_FIELDS for k in keys):
             return [_parse_loose_object('{' + inner + '}')]
+        if any(k in ASSESSMENT_ITEM_FIELDS for k in keys):
+            unknown=[k for k in keys if k not in ASSESSMENT_ITEM_FIELDS]
+            raise ValueError(f'assessment_items 条目含未知字段：{", ".join(unknown)}'
+                             f'（题面用 prompt，离散选项用 options）')
 
     parsed=[]
     for item in items:
@@ -176,8 +176,6 @@ def _concept_from_fields(fields):
     concept={}
     for key in allowed - set(list_fields):
         if key in fields and fields.get(key)!="": concept[key]=fields[key]
-    # 默认值不在这里补——由 compile_graph 统一走 _contracts.apply_concept_defaults，
-    # Markdown 与 JSON 两条入口才不会各有一份默认值定义。
     for key in list_fields:
         if key in fields:
             concept[key]=fields[key] if isinstance(fields[key], list) else _parse_list(fields[key])
@@ -193,10 +191,9 @@ def parse_markdown_graph(path):
     if not m_topic:
         raise ValueError('Learning Graph Markdown 缺少合法的 [LEARNING GRAPH — <topic>] 标题')
 
-    meta={'topic':m_topic.group(1).strip()}; learner={}; concepts=[]; milestones=[]
-    allowed_header={'goal','pedagogy','graph_version','generated_at','key_insight_concept_id','learner_profile'}
+    meta={'topic':m_topic.group(1).strip()}; learner={}; concepts=[]
+    allowed_header={'goal','pedagogy','graph_version','learner_profile'}
     allowed_learner={'background','known_concepts','pace'}
-    allowed_milestone=MILESTONE_FIELDS
     seen_meta=set(); seen_sections=set(); section='meta'; i=1
 
     def set_meta(key,value):
@@ -211,22 +208,8 @@ def parse_markdown_graph(path):
         if stripped=='=== Concepts ===':
             if 'concepts' in seen_sections: raise ValueError('重复 Concepts section')
             seen_sections.add('concepts'); section='concepts'; i+=1; continue
-        if stripped.startswith('=== Milestones') and stripped.endswith('==='):
-            if 'milestones' in seen_sections: raise ValueError('重复 Milestones section')
-            seen_sections.add('milestones'); section='milestones'; i+=1; continue
         if stripped.startswith('==='):
             raise ValueError(f'第 {lineno} 行存在未知 section: {stripped}')
-        if stripped.startswith('里程碑（可选）') or stripped.startswith('里程碑(可选)'):
-            if 'milestones' in seen_sections: raise ValueError('重复 Milestones section')
-            seen_sections.add('milestones'); section='milestones'; i+=1; continue
-        if stripped.startswith('关键洞察节点'):
-            # 全角冒号是中文稿最常见写法，与 ASCII 冒号同等接受
-            parts = re.split(r'[:：]', stripped, maxsplit=1)
-            if len(parts) < 2: raise ValueError(f'第 {lineno} 行关键洞察节点语法非法')
-            v = parts[1].strip()
-            if not v: raise ValueError('关键洞察节点不能为空')
-            set_meta('key_insight_concept_id',v); section='post_concepts'; i+=1; continue
-
         # Meta fields before Concepts, or after a learner_profile block.
         if section in {'meta','post_concepts'} and not raw[:1].isspace():
             m=re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s*:(.*)$',stripped)
@@ -264,7 +247,7 @@ def parse_markdown_graph(path):
                 if not ns: i+=1; continue
                 if not nxt[:1].isspace(): break
                 # Indented lines belong to the current concept only.
-                if re.match(r'^\s*\d+\.\s+id\s*:',ns,re.I) or ns.startswith(('关键洞察节点','里程碑（可选）','里程碑(可选)')):
+                if re.match(r'^\s*\d+\.\s+id\s*:',ns,re.I):
                     break
                 cont=_parse_pipe_fields(ns)
                 dup=sorted(set(c_fields).intersection(cont))
@@ -277,23 +260,11 @@ def parse_markdown_graph(path):
         if section=='post_concepts':
             raise ValueError(f'第 {lineno} 行无法匹配 canonical Learning Graph 语法: {stripped}')
 
-        if section=='milestones':
-            mm=re.match(r'^\s*\d+\.\s+id\s*:',stripped,re.I)
-            if not mm: raise ValueError(f'第 {lineno} 行 Milestones section 中存在非法语法: {stripped}')
-            mf=_parse_pipe_fields(re.sub(r'^\s*\d+\.\s+','',stripped)); unknown=sorted(set(mf)-allowed_milestone)
-            if unknown: raise ValueError(f'Milestone 含未知字段: {", ".join(unknown)}')
-            for k in ('introduces_concepts','depends_on','acceptance_criteria'):
-                if k in mf and not isinstance(mf[k], list): mf[k]=_parse_list(mf[k])
-            if not mf.get('id'): raise ValueError('Milestone 缺少 id')
-            milestones.append(mf); i+=1; continue
-
         raise ValueError(f'第 {lineno} 行无法匹配 canonical Learning Graph 语法: {stripped}')
 
     if learner: meta['learner_profile']=learner
     if not concepts: raise ValueError('未找到 canonical Learning Graph 的 === Concepts === 条目')
-    out={'meta':meta,'concepts':concepts}
-    if milestones: out['milestones']=milestones
-    return out
+    return {'meta':meta,'concepts':concepts}
 
 def parse_json_graph(path):
     data=strict_json_loads(open(path,encoding='utf-8').read())
@@ -323,23 +294,22 @@ def _reject_unknown(obj, allowed, path):
 
 def _validate_assessment_item(a, path):
     _require_type(a, dict, path)
-    # 字段集与校验规则（枚举、题干 prompt/question 至少其一非空、options/choices
-    # 互斥≥2）与 Lesson IR
-    # 共用同一份定义（_contracts）：两边各写一份时，上游合法的字段会被下游判
-    # "未知字段"，或更糟——上游拦不住的坏数据下游也不查，编译链带着坏 IR 通过。
+    # 字段集与校验规则（枚举、题干 prompt 非空、options ≥2）的唯一定义处在
+    # _contracts：Markdown 与 --json-input 两个入口各写一份
+    # 时，必然出现一个入口拦得住、另一个拦不住的坏数据。
     _reject_unknown(a, ASSESSMENT_ITEM_FIELDS, path)
     validate_assessment_item_fields(a, path)
 
 def validate_learning_graph(graph):
     """Strict executable validation for the Learning Graph contract; fail fast, never silently drop fields."""
     _require_type(graph, dict, "root")
-    allowed_root = {"meta", "concepts", "milestones"}
+    allowed_root = {"meta", "concepts"}
     unknown_root = sorted(set(graph) - allowed_root)
     if unknown_root:
         raise ValueError(f"Learning Graph root 含未知字段: {', '.join(unknown_root)}")
     meta = graph.get("meta", {})
     _require_type(meta, dict, "meta")
-    allowed_meta = {"topic", "goal", "pedagogy", "graph_version", "key_insight_concept_id", "learner_profile", "generated_at"}
+    allowed_meta = {"topic", "goal", "pedagogy", "graph_version", "learner_profile"}
     unknown_meta = sorted(set(meta) - allowed_meta)
     if unknown_meta:
         raise ValueError(f"Learning Graph meta 含未知字段: {', '.join(unknown_meta)}")
@@ -349,8 +319,6 @@ def validate_learning_graph(graph):
     if "goal" in meta: _require_type(meta["goal"], str, "meta.goal")
     if "graph_version" in meta and (not isinstance(meta["graph_version"], int) or isinstance(meta["graph_version"], bool) or meta["graph_version"] < 1):
         raise ValueError("Learning Graph meta.graph_version 必须是 >=1 的整数")
-    if "generated_at" in meta: _require_type(meta["generated_at"], str, "meta.generated_at")
-    if "key_insight_concept_id" in meta: _require_type(meta["key_insight_concept_id"], str, "meta.key_insight_concept_id")
     if "learner_profile" in meta:
         lp=meta["learner_profile"]; _require_type(lp, dict, "meta.learner_profile")
         _reject_unknown(lp, {"background","pace","known_concepts"}, "meta.learner_profile")
@@ -361,11 +329,10 @@ def validate_learning_graph(graph):
     _require_type(concepts, list, "concepts")
     if not concepts: raise ValueError("Learning Graph concepts[] 不能为空")
     ids=[]
-    valid_difficulties={"low","medium","high"}; valid_importance={"core","supporting","optional"}
+    valid_importance={"core","supporting","optional"}
     for i,c in enumerate(concepts):
         path=f"concepts[{i}]"; _require_type(c, dict, path)
-        allowed_concept = CONCEPT_FIELDS
-        unknown_concept = sorted(set(c) - allowed_concept)
+        unknown_concept = sorted(set(c) - CONCEPT_FIELDS)
         if unknown_concept:
             raise ValueError(f"{path} 含未知字段: {', '.join(unknown_concept)}")
         for req in ("id","name","summary"):
@@ -378,9 +345,9 @@ def validate_learning_graph(graph):
         if "confused_with" in c: _validate_string_list(c["confused_with"], f"{path}.confused_with")
         for key in ("examples","counterexamples","observable_skills"):
             if key in c: _validate_string_list(c[key], f"{path}.{key}")
-        if "difficulty" in c and c["difficulty"] not in valid_difficulties: raise ValueError(f"{path}.difficulty 非法")
         if "importance" in c and c["importance"] not in valid_importance: raise ValueError(f"{path}.importance 非法")
-        if "estimated_time" in c and (not isinstance(c["estimated_time"], int) or isinstance(c["estimated_time"], bool) or c["estimated_time"] <= 0): raise ValueError(f"{path}.estimated_time 必须为正整数")
+        if "explanation" in c and not isinstance(c["explanation"], str):
+            raise ValueError(f"{path}.explanation 必须是字符串")
         if "misconceptions" in c:
             _require_type(c["misconceptions"], list, f"{path}.misconceptions")
             for j,m in enumerate(c["misconceptions"]):
@@ -399,55 +366,39 @@ def validate_learning_graph(graph):
             if dep not in idset: raise ValueError(f"concepts[{i}].depends_on 引用不存在的 concept: {dep}")
         for other in c.get("confused_with") or []:
             if other not in idset: raise ValueError(f"concepts[{i}].confused_with 引用不存在的 concept: {other}")
-    if "key_insight_concept_id" in meta and meta["key_insight_concept_id"] not in idset: raise ValueError("meta.key_insight_concept_id 引用不存在的 concept")
     if "learner_profile" in meta and "known_concepts" in meta["learner_profile"]:
         for cid in meta["learner_profile"]["known_concepts"]:
             if cid not in idset:
                 raise ValueError(f"meta.learner_profile.known_concepts 引用不存在的 concept: {cid}")
-    milestones=graph.get("milestones")
-    if milestones is not None:
-        _require_type(milestones,list,"milestones"); mids=[]
-        for i,m in enumerate(milestones):
-            mp=f"milestones[{i}]"; _require_type(m,dict,mp)
-            allowed_milestone = MILESTONE_FIELDS
-            unknown_milestone = sorted(set(m) - allowed_milestone)
-            if unknown_milestone:
-                raise ValueError(f"{mp} 含未知字段: {', '.join(unknown_milestone)}")
-            for req in ("id","name"):
-                if not isinstance(m.get(req),str) or not m.get(req).strip(): raise ValueError(f"{mp}.{req} 必填且必须是非空字符串")
-            if not KEBAB_ID_RE.fullmatch(m["id"]):
-                raise ValueError(f"{mp}.id 必须符合 lowercase-kebab-case: {m['id']!r}")
-            if m["id"] in mids: raise ValueError(f"重复 milestone id: {m['id']}")
-            mids.append(m["id"])
-            validate_milestone_fields(m, mp)
-            _validate_string_list(m["introduces_concepts"],f"{mp}.introduces_concepts")
-            for cid in m["introduces_concepts"]:
-                if cid not in idset: raise ValueError(f"{mp}.introduces_concepts 引用不存在的 concept: {cid}")
-            if "depends_on" in m: _validate_string_list(m["depends_on"],f"{mp}.depends_on")
-            if "acceptance_criteria" in m: _validate_string_list(m["acceptance_criteria"],f"{mp}.acceptance_criteria")
-        midset=set(mids)
-        milestone_deps={}
-        for i,m in enumerate(milestones):
-            deps=m.get("depends_on") or []
-            for dep in deps:
-                if dep not in midset: raise ValueError(f"milestones[{i}].depends_on 引用不存在: {dep}")
-            milestone_deps[m["id"]]=deps
-        # 拓扑排序全仓一份实现（_script_utils.topo_sort），不再逐处拷贝 Kahn 算法。
-        topo_sort(mids, milestone_deps, "milestones.depends_on 存在循环依赖")
     return graph
 
 
-def compile_graph(path, json_input=False, focus=None):
+def downstream_subtree(ordered, focus):
+    """focus 语义：目标 concept 加所有直接或间接依赖它的后继，保持原有拓扑顺序。
+
+    不自动带上目标的上游前置——课程需要前置知识时，把前置 concept 显式写进 Graph。
+    """
+    ids={c.get('id') for c in ordered}
+    if focus not in ids: raise ValueError(f'找不到概念 {focus!r}')
+    keep={focus}; changed=True
+    while changed:
+        changed=False
+        for c in ordered:
+            if c.get('id') not in keep and any(dep in keep for dep in (c.get('depends_on') or [])):
+                keep.add(c['id']); changed=True
+    return [c for c in ordered if c.get('id') in keep]
+
+def validate_and_order(path, json_input=False, focus=None):
     graph=parse_json_graph(path) if json_input else parse_markdown_graph(path)
-    concepts=graph.get('concepts') or []
-    apply_concept_defaults(concepts)
-    normalize_misconceptions(concepts)
+    normalize_misconceptions(graph.get('concepts') or [])
     validate_learning_graph(graph)
-    return validate_lesson_ir(build_lesson_ir(graph, order_concepts(graph), focus=focus))
+    ordered=order_concepts(graph)
+    graph['concepts']=downstream_subtree(ordered, focus) if focus else ordered
+    return graph
 
 def order_concepts(graph):
-    concepts=graph.get('concepts') or []; by_id={c.get('id'):c for c in concepts if c.get('id')}
-    if len(by_id)!=len(concepts): raise ValueError('Learning Graph 含重复或空 concept id')
+    # id 非空且不重复由 validate_learning_graph 保证，这里直接按 id 建索引。
+    concepts=graph['concepts']; by_id={c['id']:c for c in concepts}
     deps={}
     for c in concepts:
         cdeps=c.get('depends_on') or []
@@ -460,14 +411,13 @@ def order_concepts(graph):
 
 def main():
     setup_stdio()
-    ap=argparse.ArgumentParser(description='从 Learning Graph 生成 canonical Lesson IR')
+    ap=argparse.ArgumentParser(description='校验 Learning Graph 并输出按依赖排序的规范化 Graph')
     ap.add_argument('graph'); ap.add_argument('-o','--output',required=True); ap.add_argument('--json-input',action='store_true'); ap.add_argument('--focus',default=None)
     a=ap.parse_args()
-    # 与 narration.py 同一个守卫：产物不得落进技能目录。文档示例命令用的是
-    # 相对路径，从技能目录照抄就会把 lesson_ir.json 建在技能目录里。
+    # 与 narration.py 同一个守卫：产物不得落进技能目录（文档示例命令用的是相对路径）。
     guard_not_in_skill_dir(("-o/--output", os.path.abspath(a.output)))
     try:
-        ir=compile_graph(a.graph,a.json_input,a.focus)
+        graph=validate_and_order(a.graph,a.json_input,a.focus)
     except UnicodeDecodeError:
         # UnicodeDecodeError 是 ValueError 子类：必须抢在前面单独报，
         # 否则非 UTF-8 文件会被误报成「Learning Graph 无效」。
@@ -490,9 +440,9 @@ def main():
         print(f'[error] -o/--output 必须是文件路径，不是目录: {a.output}',file=sys.stderr)
         sys.exit(1)
     try:
-        write_json_atomic(a.output,{'lesson_ir':ir},indent=2)
+        write_json_atomic(a.output,graph,indent=2)
     except OSError as e:
         print(f'[error] 写入输出失败: {a.output}（{e}）',file=sys.stderr)
         sys.exit(1)
-    print(f'[graph] Lesson IR -> {a.output}')
+    print(f'[graph] 校验通过，有序 Graph -> {a.output}')
 if __name__=='__main__': main()

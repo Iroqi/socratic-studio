@@ -5,7 +5,7 @@
 页面结构、配色、布局、是否播放、怎么播放都由 Agent 在自己的 HTML 里决定——
 本脚本不规定页面长什么样，也不持有任何"页面应该长这样"的假设。
 
-输入（旁白脚本，独立于 Lesson IR，不经任何上游编译）：
+输入（旁白脚本，独立于 Learning Graph，不经任何上游校验）：
 
     普通段落：
     {
@@ -40,9 +40,8 @@ from typing import Dict, List
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _audio import (apply_loudnorm, apply_speed, concat_audio,  # noqa: E402
-                    generate_silence, get_ffmpeg, measure_duration, mix_bgm,
-                    _remove_quiet)
+from _audio import (apply_speed, concat_audio,  # noqa: E402
+                    generate_silence, get_ffmpeg, measure_duration, _remove_quiet)
 from _contracts import (DEFAULT_CHARS_PER_SEC, DEFAULT_GAP, DEFAULT_SPEED,  # noqa: E402
                         estimate_sentence_seconds, list_voice_ids, validate_speed)
 from _env import get_key, resolve_model_config  # noqa: E402
@@ -68,9 +67,7 @@ class Block:
     """一个待合成段落：sentences 是它分好的句子；turns 非空表示多人对话段落。"""
     id: str
     title: str
-    tagline: str
     sentences: List[str]
-    body: str = ""
     extra: Dict = field(default_factory=dict)
     turns: List[Dict] = field(default_factory=list)
 
@@ -124,9 +121,7 @@ def _collect_blocks(source, default_speed=None):
         blocks.append(Block(
             id="opening",
             title=source.get("opening_title") or source.get("title") or "本期内容",
-            tagline=(source.get("opening_tagline") or "").strip(),
             sentences=split_sentences(opening_text),
-            body=(source.get("opening_body") or "").strip(),
             # 默认与正文同速（跟随 --speed）；稿件显式给 opening_speed 时优先。
             # default_speed 为 None 时留空，由 main 的 args.speed 兜底。
             extra={"speed": source.get("opening_speed", default_speed)},
@@ -154,9 +149,7 @@ def _collect_blocks(source, default_speed=None):
         blocks.append(Block(
             id=str(seg.get("id") or f"seg-{i}"),
             title=title,
-            tagline=seg.get("tagline", ""),
             sentences=sents,
-            body=(seg.get("body") or "").strip(),
             extra=_extra(seg, default_speed),
             turns=turns,
         ))
@@ -166,9 +159,7 @@ def _collect_blocks(source, default_speed=None):
         blocks.append(Block(
             id="closing",
             title=source.get("closing_title") or "小结",
-            tagline=(source.get("closing_tagline") or "").strip(),
             sentences=split_sentences(closing_text),
-            body=(source.get("closing_body") or "").strip(),
             # 同 opening：默认跟随 --speed，closing_speed 显式给出时优先。
             extra={"speed": source.get("closing_speed", default_speed)},
         ))
@@ -183,7 +174,7 @@ def build_parts(source, default_speed=None):
 
     Returns:
         sentences: list[str]，按段落顺序排列的全部句子
-        segments: 段落分组（id/title/tagline/body/start/end + 可选 speed/voice_*/turns）
+        segments: 段落分组（id/title/start/end + 可选 speed/voice_*/turns）
     """
     blocks = _collect_blocks(source, default_speed)
     sentences = [s for blk in blocks for s in blk.sentences]
@@ -192,8 +183,7 @@ def build_parts(source, default_speed=None):
     for blk in blocks:
         start, end = cursor, cursor + len(blk.sentences)
         cursor = end
-        seg = {"id": blk.id, "title": blk.title, "tagline": blk.tagline,
-               "body": blk.body, "start": start, "end": end}
+        seg = {"id": blk.id, "title": blk.title, "start": start, "end": end}
         seg.update(blk.extra)
         if blk.turns:
             # 段内局部区间 → 全局区间，供按句覆盖音色 + 记录说话人标签。
@@ -365,7 +355,7 @@ def _build_parser():
     parser.add_argument("--source", default=None,
                         help="旁白脚本 JSON（{title, segments:[{id,title,text}]}）。"
                              "逐段独立分句，直接产出带段落分组的时间轴。"
-                             "Agent 手写这一份脚本即可，无需任何上游编译。")
+                             "Agent 手写这一份脚本即可，不需要任何上游产物。")
     parser.add_argument("-o", "--output", default=None, help="输出目录")
     parser.add_argument("--api-key", default=None,
                         help="MiMo TTS API key（默认读 .env 的 MIMO_API_KEY）")
@@ -378,13 +368,8 @@ def _build_parser():
                         help="句间静音秒数（默认取 _contracts.DEFAULT_GAP）")
     parser.add_argument("--speed", type=float, default=DEFAULT_SPEED,
                         help="语速倍率（ffmpeg atempo，1.0=原速，1.5=快一半）")
-    parser.add_argument("--loudness", type=float, default=None,
-                        help="响度归一化目标（LUFS，如 -16）。默认不做归一化")
     parser.add_argument("--resume", action="store_true",
                         help="复用输入未变的句子音频（省时间的开关，不是需要维护的状态）")
-    parser.add_argument("--bgm", default=None, help="背景音乐文件（mp3/wav/ogg）")
-    parser.add_argument("--bgm-volume", type=float, default=0.15,
-                        help="BGM 相对人声音量（0.0-1.0，默认 0.15）")
     parser.add_argument("--model", default=None,
                         help="TTS 模型（默认 MIMO_TTS_MODEL 或 'mimo-v2.5-tts'）")
     parser.add_argument("--base-url", default=None,
@@ -408,26 +393,18 @@ def _validate_args(parser, args):
         parser.error(str(e))
     if not math.isfinite(args.gap) or args.gap < 0:
         parser.error(f"--gap 必须是非负有限数（收到 {args.gap}）；要无间隙拼接请显式传 0")
-    if args.loudness is not None and not math.isfinite(args.loudness):
-        parser.error(f"--loudness 必须是有限数值（LUFS，收到 {args.loudness}）")
-    if not math.isfinite(args.bgm_volume):
-        parser.error(f"--bgm-volume 必须是有限数值（0.0-1.0，收到 {args.bgm_volume}）")
     if args.workers < 1:
         parser.error(f"--workers 至少为 1（收到 {args.workers}）")
     if not math.isfinite(args.api_timeout) or args.api_timeout <= 0:
         parser.error(f"--api-timeout 必须是正有限数（秒，收到 {args.api_timeout}）")
-    # --bgm 指向不存在的文件时提前警告并忽略，而不是静默跳过混音
-    if args.bgm and not os.path.exists(args.bgm):
-        print(f"[warn] --bgm 文件不存在，已忽略 BGM 混音：{args.bgm}", file=sys.stderr)
-        args.bgm = None
 
 
 def _load_script_source(path):
     """读取旁白脚本 JSON，规整成内部结构。
 
     唯一格式：`{title, segments:[{id,title,text,...}]}`，可选顶层 opening/closing/
-    opening_title/closing_title/opening_body/closing_body/opening_tagline/
-    closing_tagline/speakers。不做隐式兼容——格式不对就报错，不猜。
+    opening_title/closing_title/opening_speed/closing_speed/speakers。
+    不做隐式兼容——格式不对就报错，不猜。
     """
     try:
         data = json.loads(open(path, encoding="utf-8").read())
@@ -439,7 +416,6 @@ def _load_script_source(path):
     # 承诺了"格式不对就报错，不猜"：拼错的键（opeing）若被静默忽略，
     # 对应内容就从音频里无声消失，而调用方看到的仍是"成功"。
     allowed_top = {"title", "opening", "closing", "opening_title", "closing_title",
-                   "opening_body", "closing_body", "opening_tagline", "closing_tagline",
                    "opening_speed", "closing_speed", "segments", "speakers"}
     unknown_top = sorted(set(data) - allowed_top)
     if unknown_top:
@@ -484,11 +460,11 @@ def _load_script_source(path):
         if not isinstance(seg, dict):
             raise ValueError(f"segments[{i}] 必须是对象（收到 {type(seg).__name__}）")
         allowed_seg = {"id", "title", "text", "dialogue", "voice_id", "voice_style",
-                       "speed", "body", "tagline"}
+                       "speed"}
         unknown_seg = sorted(set(seg) - allowed_seg)
         if unknown_seg:
             raise ValueError(f"segments[{i}] 含未知字段：{', '.join(unknown_seg)}")
-        for k in ("title", "text", "body", "tagline", "voice_style"):
+        for k in ("title", "text", "voice_style"):
             _check_str(seg.get(k), f"segments[{i}].{k}")
         _check_speed(seg.get("speed"), f"segments[{i}]")
         text = (seg.get("text") or "").strip()
@@ -517,7 +493,7 @@ def _load_script_source(path):
                "text": text}
         if dialogue is not None:
             out["dialogue"] = dialogue
-        for k in ("voice_id", "voice_style", "speed", "body", "tagline"):
+        for k in ("voice_id", "voice_style", "speed"):
             if seg.get(k) is not None:
                 out[k] = seg[k]
         segs.append(out)
@@ -526,13 +502,11 @@ def _load_script_source(path):
 
     result = {"title": data.get("title") or data.get("opening_title") or "",
               "segments": segs}
-    for k in ("opening", "closing", "title", "opening_title", "closing_title",
-              "opening_body", "closing_body", "opening_tagline", "closing_tagline"):
+    for k in ("opening", "closing", "title", "opening_title", "closing_title"):
         _check_str(data.get(k), k)
     for k in ("opening_speed", "closing_speed"):
         _check_speed(data.get(k), k)
     for k in ("opening", "closing", "opening_title", "closing_title",
-              "opening_body", "closing_body", "opening_tagline", "closing_tagline",
               "opening_speed", "closing_speed",
               "speakers"):
         if data.get(k) is not None:
@@ -550,7 +524,7 @@ def _audio_ref(path):
 
 def _finalize_audio(args, ffmpeg_path, sentence_data, source_data, seg_config,
                     silence_fallback_count, total_sentences, cached_count):
-    """拼接 → 可选 BGM/响度 → 写 narration_timing.json。"""
+    """拼接 → 写 narration_timing.json。"""
     print(f"\n[concat] {len(sentence_data)} clips (gap {args.gap}s)...", flush=True)
     combined_path = os.path.join(args.output, "combined.wav")
     if not concat_audio(ffmpeg_path, [s["file"] for s in sentence_data], args.gap,
@@ -573,30 +547,6 @@ def _finalize_audio(args, ffmpeg_path, sentence_data, source_data, seg_config,
         cumulative += sd["duration"]
         if i < len(sentence_data) - 1:
             cumulative += args.gap
-
-    if args.bgm and os.path.exists(args.bgm):
-        # bgm_volume 直接拼进 ffmpeg 滤镜串：clamp 越界值，防注入与削波（NaN/Inf
-        # 已在 argparse 阶段拦下，早于 TTS，不烧额度）。
-        if args.bgm_volume < 0 or args.bgm_volume > 1:
-            clamped = max(0.0, min(1.0, args.bgm_volume))
-            print(f"[warn] --bgm-volume {args.bgm_volume} 超出 [0,1]，已钳制到 {clamped}",
-                  file=sys.stderr)
-            args.bgm_volume = clamped
-        print(f"[bgm] 混入 {args.bgm}（音量 {args.bgm_volume}）...", flush=True)
-        mixed_path = os.path.join(args.output, "combined_bgm.wav")
-        if mix_bgm(ffmpeg_path, combined_path, args.bgm, args.bgm_volume, mixed_path):
-            combined_path = mixed_path
-        else:
-            print("  [warn] BGM 混音失败，使用纯人声", flush=True)
-
-    if args.loudness is not None:
-        loud_path = os.path.join(args.output, "combined_loud.wav")
-        if apply_loudnorm(ffmpeg_path, combined_path, loud_path, args.loudness):
-            combined_path = loud_path
-            total_dur = measure_duration(ffmpeg_path, combined_path)
-            print(f"  [loudness] 已归一化到 {args.loudness} LUFS", flush=True)
-        else:
-            print("  [warn] 响度归一化失败，使用未归一化音频", flush=True)
 
     # 时间轴：一句 = 一条 {start, duration, text}；一段 = 一个 scene。
     sentences_out = []
@@ -637,7 +587,7 @@ def _finalize_audio(args, ffmpeg_path, sentence_data, source_data, seg_config,
         # 同一份时间轴的运行时视图：把本文件内联进 `<script id="lesson-timeline">`
         # 时，`interactive_runtime.js` 直接读 scene.runtime.*，扁平字段它不认——
         # 缺了这块，每个场景会被解析成 duration 0，时钟永远停在最后一个场景，
-        # 而且不报错。顶层扁平字段保留（writing.md 的画面演进用法按句索引取它）。
+        # 而且不报错。顶层扁平字段保留（media.md「时间轴驱动与画面演进」按句索引取它）。
         scene["runtime"] = {
             "start": scene["start"],
             "duration": dur,
