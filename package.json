@@ -1,0 +1,21 @@
+{
+  "name": "socratic-studio-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Socratic Studio — 苏格拉底式一对一教学 Web 应用",
+  "scripts": {
+    "start": "node server/serve.mjs",
+    "test": "node test/run.mjs && node test/runtime-unit.mjs && node test/contract-consistency.mjs",
+    "test:all": "node test/all.mjs",
+    "test:http": "pwsh -File test/http-smoke.ps1",
+    "test:artifact": "pwsh -File test/artifact-evidence-smoke.ps1",
+    "test:web": "node test/web-smoke.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.99.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

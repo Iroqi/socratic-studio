@@ -1,0 +1,1242 @@
+// Socratic Studio —— Web 应用服务端。
+//
+// 只用 Node 内置 http，没有构建步骤：静态文件直接发 web/，
+// API 走 /api/*，教学回合走 SSE（/api/notebooks/:id/turn）。
+//
+// 为什么是 SSE + 服务端阻塞：教学的核心是即时反馈回路。模型调 ask_user_question
+// 时服务端必须真的停在那里等学习者作答，再把作答作为 toolResult 交回模型——
+// 这一条只能在服务端做，浏览器端做不了。
+
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { URL } from 'node:url';
+import {
+  ensureDirs,
+  isWithin,
+  PORT,
+  HOST,
+  WEB_DIR,
+  DATA_DIR,
+} from './config.mjs';
+import {
+  createRegistry,
+  loadSettings,
+  saveSettings,
+  customEndpointIndex,
+} from './providers.mjs';
+import { isCustomEndpointId } from './providers-catalog.mjs';
+import * as store from './store.mjs';
+import { runTurn } from './agent.mjs';
+import { buildSystemPrompt } from './prompt.mjs';
+import { validateGraph, describeGraphForLearner, GraphValidationError } from './graph.mjs';
+import { placeProp, removeProp } from './scene.mjs';
+import { updateNote, deleteNote } from './notes.mjs';
+import { loadRulesText } from './prompt.mjs';
+import { TaskRunner } from './tasks.mjs';
+import { generateStarters, readStarterCache, writeStarterCache, studiedFingerprint } from './starters.mjs';
+
+ensureDirs();
+const registry = await createRegistry();
+// 只调一次：它返回未能加载的订阅清单，给启动日志和 /api/bootstrap 用
+const failedProviders = await registry.ensureAllBuiltin();
+
+/**
+ * 测试/演示用：SOCRATIC_ENABLE_FAUX=1 时注册 pi-ai 的 faux provider。
+ * 它是脚本化的内存 provider，不需要任何 API key —— 让整条链路（HTTP → SSE →
+ * 提问阻塞 → 作答回传 → 落盘）在没有订阅的情况下也能被端到端验证。
+ */
+if (process.env.SOCRATIC_ENABLE_FAUX === '1') {
+  const {
+    fauxProvider,
+    fauxAssistantMessage,
+    fauxText,
+    fauxThinking,
+    fauxToolCall,
+  } = await import('@earendil-works/pi-ai');
+  const faux = fauxProvider({ provider: 'faux', tokensPerSecond: 0 });
+  registry.models.setProvider(faux.provider);
+  registry.faux = faux;
+  registry.loaded.add('faux');
+
+  /**
+   * 装载脚本化回复，便于外部测试脚本编排场景。
+   * 收的是 JSON 文本而不是文件路径：以前 readFileSync(body.file) 等于把"任意本地文件
+   * 的内容"变成错误信息回给调用方，这是本机任意文件读取。测试脚本改为一并传原文。
+   */
+  registry.loadFauxScript = (raw) => {
+    const script = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!Array.isArray(script)) throw new Error('faux 脚本必须是数组的数组');
+    const responses = script.map((blocks) =>
+      fauxAssistantMessage(
+        blocks.map((b) => {
+          if (b.type === 'text') return fauxText(b.text);
+          if (b.type === 'thinking') return fauxThinking(b.text);
+          if (b.type === 'toolCall') return fauxToolCall(b.name, b.arguments);
+          throw new Error(`未知的 faux block: ${b.type}`);
+        }),
+        { stopReason: blocks.some((b) => b.type === 'toolCall') ? 'toolUse' : 'stop' },
+      ),
+    );
+    faux.setResponses(responses);
+    return responses.length;
+  };
+
+  const originalAvailable = registry.availableModels.bind(registry);
+  registry.availableModels = async () => [
+    ...(await originalAvailable()),
+    {
+      provider: 'faux',
+      providerLabel: '测试桩（无需 key）',
+      model: faux.getModel().id,
+      name: 'Faux Model',
+      contextWindow: 128000,
+      reasoning: false,
+      vision: false,
+      source: 'configured',
+    },
+  ];
+
+  const originalSubs = registry.subscriptionList.bind(registry);
+  registry.subscriptionList = async () => [
+    ...(await originalSubs()),
+    {
+      id: 'faux',
+      label: '测试桩（无需 key）',
+      kind: 'key',
+      env: [],
+      keyHint: '',
+      docs: null,
+      available: true,
+      loadError: null,
+      auth: 'configured',
+      modelCount: 1,
+      requiresKey: false,
+    },
+  ];
+  console.log('  ⚙ 已启用 faux provider（测试桩，无需 API key）');
+}
+
+// ---------------------------------------------------------------- custom endpoints（多端点）
+
+/** 端点配置的归一化：补默认值、校验 baseUrl。 */
+function normalizeCustomEndpoint(body, index) {
+  const cfg = {
+    label: body.label || `自建端点 ${index}`,
+    baseUrl: String(body.baseUrl || '').replace(/\/+$/, ''),
+    modelId: body.modelId || 'default',
+    modelName: body.modelName || body.modelId || 'default',
+    contextWindow: Number(body.contextWindow) || 128000,
+    maxTokens: Number(body.maxTokens) || 8192,
+    reasoning: Boolean(body.reasoning),
+    supportsReasoningEffort: Boolean(body.supportsReasoningEffort),
+    supportsDeveloperRole: body.supportsDeveloperRole !== false,
+  };
+  if (!/^https?:\/\//.test(cfg.baseUrl)) {
+    const err = new Error('baseUrl 必须是 http(s) 地址');
+    err.status = 400;
+    throw err;
+  }
+  return cfg;
+}
+
+/** 端点列表落盘：settings.customEndpoints 数组；第 index 位（从 1）= 某个端点。 */
+function saveCustomEndpoints(registry, index, cfg) {
+  const s = loadSettings();
+  const list = Array.isArray(s.customEndpoints) ? [...s.customEndpoints] : [];
+  // 兼容旧版单端点：还没有多端点数据时，把 settings.custom 搬进 [1]
+  if (!list.length && s.custom) list[0] = s.custom;
+  list[index - 1] = cfg;
+  const patch = { customEndpoints: list };
+  // 删除旧版端点（index 1）时清掉 legacy 单端点字段，避免下次重启又注册回来
+  if (!cfg && index === 1) patch.custom = null;
+  saveSettings(patch);
+}
+
+// ---------------------------------------------------------------- http helpers
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.woff2': 'font/woff2',
+  '.ico': 'image/x-icon',
+};
+
+function sendJson(res, status, body) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(payload),
+    'Cache-Control': 'no-store',
+  });
+  res.end(payload);
+}
+
+function sendError(res, err) {
+  const status = err?.status || (err instanceof GraphValidationError ? 422 : 500);
+  sendJson(res, status, {
+    error: err?.message || '服务端错误',
+    issues: err?.issues ?? undefined,
+  });
+}
+
+async function readBody(req, limitBytes = 25 * 1024 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limitBytes) {
+      const err = new Error(`请求体超过 ${Math.round(limitBytes / 1024 / 1024)}MB 上限`);
+      err.status = 413;
+      throw err;
+    }
+    chunks.push(chunk);
+  }
+  if (!chunks.length) return {};
+  const raw = Buffer.concat(chunks).toString('utf8');
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const err = new Error('请求体不是合法 JSON');
+    err.status = 400;
+    throw err;
+  }
+}
+
+function serveStatic(req, res, pathname) {
+  const rel = pathname === '/' ? '/index.html' : pathname;
+  const resolved = path.resolve(WEB_DIR, '.' + rel);
+  if (!isWithin(WEB_DIR, resolved)) {
+    return sendJson(res, 403, { error: '越界访问' });
+  }
+  if (!fs.existsSync(resolved) || fs.statSync(resolved).isDirectory()) {
+    return sendJson(res, 404, { error: `找不到 ${pathname}` });
+  }
+  res.writeHead(200, {
+    'Content-Type': MIME[path.extname(resolved).toLowerCase()] || 'application/octet-stream',
+    'Cache-Control': 'no-cache',
+  });
+  fs.createReadStream(resolved).pipe(res);
+}
+
+// ---------------------------------------------------------------- SSE turn handling
+
+/** 每个 notebook 同一时刻只允许一个进行中的回合。 */
+const activeTurns = new Map(); // notebookId -> TurnHandle
+
+/**
+ * 心跳间隔。学习者答一道题可以想很久，而 `execAsk` 就是阻塞等他答——那段时间服务端
+ * 一个事件都不发。前端有一条 150 秒的空闲看门狗，没有心跳就会把"学习者在思考"判成
+ * "端点卡住"：题卡当场灰掉填不了，回合还挂在服务端，他再发消息吃 409。
+ * 心跳只证明这条流活着；上游模型真卡住仍由 `agent.mjs` 那条 120 秒看门狗负责。
+ */
+const SSE_HEARTBEAT_MS = Math.max(200, Number(process.env.SOCRATIC_SSE_HEARTBEAT_MS || 15_000));
+
+/**
+ * 后台任务 / 分身运行器。全进程一个：任务按 notebook 归属，跨 notebook 不串。
+ * 事件分两路：有进行中的回合 → 进回合流；回合开着但没有回合在进行 → 走
+ * taskStreams（前端在"后台任务"面板打开时常驻订阅的那条 SSE）。
+ */
+const taskStreams = new Map(); // notebookId -> Set<res>
+function taskStreamWrite(notebookId, payload) {
+  const clients = taskStreams.get(notebookId);
+  if (!clients?.size) return;
+  for (const res of clients) {
+    try {
+      res.write(`data: ${payload}\n\n`);
+    } catch {
+      clients.delete(res);
+    }
+  }
+}
+
+const taskRunner = new TaskRunner({
+  registry, // 上面 await createRegistry() 已经完成，这里直接给
+  rulesText: () => loadRulesText(),
+  onEvent: (event) => {
+    // 制品分身做完了：把制品推进"还在跑的回合"的 SSE，并落成一条 assistant 消息，
+    // 这样刷新页面后它照样从 chat.json 回放进当前这一场的台面上。
+    if (event.type === 'task_artifact') {
+      const nid = event.task?.notebookId;
+      const turn = activeTurns.get(nid ?? event.artifact?.notebookId);
+      // 分身不许写台面（它拿的是旧克隆），上台这一手由宿主现读最新的盘来做：
+      // 摆进学习者**当下**这一场，不是分身记忆里那一场。
+      let deskAfter = null;
+      try {
+        if (nid) {
+          const placed = store.placeOnDesk(nid, event.artifact);
+          if (placed.placed) {
+            deskAfter = placed.scene;
+            // 活回合内存里那一份也要跟上，不然它下一次 share_artifact 会往旧台面上摆
+            // （跟 /lifetime 那一条同纪律）。
+            if (turn?.session) {
+              turn.session.scene = placed.scene;
+              turn.emit({ type: 'scene', scene: placed.scene.current, log: placed.scene.log });
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`[task_artifact] 上台面失败: ${err?.message}`);
+      }
+      // 交付顺序：先记账（上面那一步把这件摆进当前这一场，并把 scene 事件发出去），
+      // 再把制品本身交给回合。前端那道 props 闸门认的就是这本账——账晚到一步，
+      // 这件大件就永远上不了台面（回放之前画面里根本没有它）。
+      // 和 agent.mjs 的 execShareArtifact 同一个顺序：scene 在 artifact 之前。
+      if (turn) turn.emit({ type: 'artifact', artifact: event.artifact });
+      try {
+        if (nid) {
+          store.upsertChatMessage(nid, {
+            role: 'assistant',
+            content: '',
+            msgId: `art-${event.taskId}-${Date.now().toString(36)}`,
+            timestamp: Date.now(),
+            artifacts: [event.artifact],
+          });
+        }
+      } catch (err) {
+        console.error(`[task_artifact] 落盘失败: ${err?.message}`);
+      }
+    }
+    const payload = JSON.stringify(event);
+    const notebookId = event?.task?.notebookId;
+    if (notebookId) {
+      taskStreamWrite(notebookId, payload);
+    } else {
+      for (const key of [...taskStreams.keys()]) taskStreamWrite(key, payload);
+    }
+  },
+});
+
+class TurnHandle {
+  constructor(notebookId) {
+    this.notebookId = notebookId;
+    this.clients = new Set();
+    this.session = null;
+    this.abort = new AbortController();
+    this.buffer = [];
+    this.done = false;
+    this.beat = null;
+  }
+
+  /** 心跳发 SSE 注释行：它带着字节过来就足以让前端知道流还活着，又不必假装是一个事件。 */
+  startBeat() {
+    if (this.beat) return;
+    this.beat = setInterval(() => {
+      if (this.done || !this.clients.size) return this.stopBeat();
+      for (const res of [...this.clients]) {
+        try {
+          res.write(': ping\n\n');
+        } catch {
+          this.clients.delete(res);
+        }
+      }
+    }, SSE_HEARTBEAT_MS);
+    this.beat.unref?.();
+  }
+
+  stopBeat() {
+    if (!this.beat) return;
+    clearInterval(this.beat);
+    this.beat = null;
+  }
+
+  emit(event) {
+    const payload = JSON.stringify(event);
+    this.buffer.push(payload);
+    if (this.buffer.length > 4000) this.buffer.splice(0, this.buffer.length - 4000);
+    for (const res of this.clients) {
+      res.write(`data: ${payload}\n\n`);
+    }
+  }
+
+  attach(res) {
+    this.clients.add(res);
+    res.write('retry: 2000\n\n');
+    // 从头部整条重放：新接上的客户端只知道盘上已落盘的部分，这一回合的完整剧情
+    // （图、正文、题卡）只在这条缓冲里。客户端负责摘掉重叠的那半截，别在这里裁。
+    for (const payload of this.buffer) res.write(`data: ${payload}\n\n`);
+    if (this.done) {
+      this.stopBeat();
+      res.write(`data: ${JSON.stringify({ type: 'closed' })}\n\n`);
+      res.end();
+      return;
+    }
+    this.startBeat();
+  }
+
+  detach(res) {
+    this.clients.delete(res);
+    if (!this.clients.size) this.stopBeat();
+  }
+
+  replay(fromIndex) {
+    return this.buffer.slice(fromIndex);
+  }
+}
+
+// ---------------------------------------------------------------- routes
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const { pathname } = url;
+  const method = req.method || 'GET';
+
+  try {
+    if (!pathname.startsWith('/api/')) {
+      return serveStatic(req, res, pathname);
+    }
+
+    // ---------- 仅测试用：装载脚本化回复（需 SOCRATIC_ENABLE_FAUX=1）
+    if (pathname === '/api/__faux' && method === 'POST') {
+      if (!registry.loadFauxScript) {
+        return sendJson(res, 404, { error: '测试桩未启用' });
+      }
+      const body = await readBody(req);
+      const n = registry.loadFauxScript(body.script);
+      return sendJson(res, 200, { ok: true, queued: n });
+    }
+
+    // ---------- 健康检查 / 引导信息
+    if (pathname === '/api/bootstrap' && method === 'GET') {
+      return sendJson(res, 200, {
+        app: 'Socratic Studio',
+        dataDir: DATA_DIR,
+        settings: loadSettings(),
+        availableModels: await registry.availableModels(),
+        failedProviders: failedProviders.map((p) => ({
+          id: p.id,
+          error: registry.loadErrors.get(p.id) ?? '未知错误',
+        })),
+      });
+    }
+
+    // ---------- 开局引导的候选主题（编不出来就 starters: null，前端留静态四条）
+    if (pathname === '/api/starters' && method === 'GET') {
+      const studied = store
+        .listNotebooks()
+        .map((n) => n.topic || n.title)
+        .filter(Boolean);
+      const fingerprint = studiedFingerprint(studied);
+      const cached = readStarterCache(fingerprint);
+      if (cached) return sendJson(res, 200, { starters: cached });
+      const settings = loadSettings();
+      const starters = await generateStarters({
+        registry,
+        modelRef: settings.activeModel,
+        studied,
+      });
+      if (!starters.length) return sendJson(res, 200, { starters: null });
+      writeStarterCache(fingerprint, starters);
+      return sendJson(res, 200, { starters });
+    }
+
+    // ---------- 模型订阅配置
+    if (pathname === '/api/providers' && method === 'GET') {
+      return sendJson(res, 200, {
+        subscriptions: await registry.subscriptionList(),
+        customEndpoints: registry.customEndpointConfigs(),
+        availableModels: await registry.availableModels(),
+      });
+    }
+
+    let m = /^\/api\/providers\/([^/]+)\/key$/.exec(pathname);
+    if (m && method === 'PUT') {
+      const providerId = decodeURIComponent(m[1]);
+      const body = await readBody(req);
+      await registry.setApiKey(providerId, body.key);
+      // key 刚配好，确保该 provider 已注册，目录才拿得到
+      if (!providerId.startsWith('custom-endpoint')) await registry.ensureBuiltin(providerId);
+      return sendJson(res, 200, {
+        ok: true,
+        subscriptions: await registry.subscriptionList(),
+        availableModels: await registry.availableModels(),
+      });
+    }
+    if (m && method === 'DELETE') {
+      const providerId = decodeURIComponent(m[1]);
+      await registry.clearApiKey(providerId);
+      return sendJson(res, 200, {
+        ok: true,
+        subscriptions: await registry.subscriptionList(),
+        availableModels: await registry.availableModels(),
+      });
+    }
+
+    // 连通性测试：真的打一次模型，确认 key 能用
+    m = /^\/api\/providers\/([^/]+)\/test$/.exec(pathname);
+    if (m && method === 'POST') {
+      const providerId = decodeURIComponent(m[1]);
+      const body = await readBody(req);
+      const modelId = body.model;
+      let authInfo;
+      try {
+        const model = registry.resolveModel({ provider: providerId, model: modelId });
+        authInfo = await registry.models.getAuth(model);
+        if (!authInfo && modelId) {
+          return sendJson(res, 200, {
+            ok: false,
+            stage: 'auth',
+            message: '这个订阅还没有可用的凭据。先保存 API key。',
+          });
+        }
+      } catch (err) {
+        return sendJson(res, 200, { ok: false, stage: 'resolve', message: err.message });
+      }
+
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 45_000);
+        const model = registry.resolveModel({ provider: providerId, model: modelId });
+        const reply = await registry.models.complete(
+          model,
+          {
+            messages: [
+              {
+                role: 'user',
+                content: '请只回复两个字：连通',
+                timestamp: Date.now(),
+              },
+            ],
+          },
+          { signal: controller.signal },
+        );
+        clearTimeout(timer);
+        const text = reply.content
+          .filter((b) => b.type === 'text')
+          .map((b) => b.text)
+          .join('')
+          .trim();
+        return sendJson(res, 200, {
+          ok: reply.stopReason !== 'error',
+          stage: 'complete',
+          reply: text.slice(0, 200),
+          stopReason: reply.stopReason,
+          errorMessage: reply.errorMessage ?? null,
+          authSource: authInfo?.source ?? null,
+          usage: reply.usage ?? null,
+        });
+      } catch (err) {
+        return sendJson(res, 200, { ok: false, stage: 'request', message: err.message });
+      }
+    }
+
+    // ---------- 自定义 OpenAI 兼容端点（可多个）
+    // GET  /api/custom-endpoints            列表
+    // PUT  /api/custom-endpoints/:id        添加（用空出来的 id）/ 修改（带现有 id）
+    // DELETE /api/custom-endpoints/:id      删除
+    // id 只认 custom-endpoint / custom-endpoint-N：槽位是从 id 里解析出来的。
+    if (pathname === '/api/custom-endpoints' && method === 'GET') {
+      return sendJson(res, 200, {
+        endpoints: registry.customEndpointConfigs(),
+      });
+    }
+    m = /^\/api\/custom-endpoints\/([^/]+)$/.exec(pathname);
+    if (m && (method === 'PUT' || method === 'DELETE') && !isCustomEndpointId(decodeURIComponent(m[1]))) {
+      // customEndpointIndex 认不出的 id 一律兜成 1 号槽，所以放行就等于把用户
+      // 存好的第一个端点覆盖掉（或被清空）。宁可报错，也不许动别的槽位。
+      return sendJson(res, 400, {
+        error: `端点 id 只能是 custom-endpoint 或 custom-endpoint-N，收到的是「${decodeURIComponent(m[1])}」`,
+      });
+    }
+    if (m && method === 'PUT') {
+      const id = decodeURIComponent(m[1]);
+      const body = await readBody(req);
+      const index = customEndpointIndex(id);
+      const cfg = normalizeCustomEndpoint(body, index);
+      registry.ensureCustom(cfg, index);
+      saveCustomEndpoints(registry, index, cfg);
+      return sendJson(res, 200, {
+        ok: true,
+        endpoint: { ...cfg, id },
+        availableModels: await registry.availableModels(),
+      });
+    }
+    if (m && method === 'DELETE') {
+      const id = decodeURIComponent(m[1]);
+      const index = customEndpointIndex(id);
+      registry.ensureCustom(null, index);
+      saveCustomEndpoints(registry, index, null);
+      // 当前模型若指向被删的端点，顺手清掉 activeModel
+      const s = loadSettings();
+      if (s.activeModel?.provider === id) saveSettings({ activeModel: null });
+      return sendJson(res, 200, { ok: true, note: '已移除该端点' });
+    }
+    // ---------- 设置（当前模型选择）
+    if (pathname === '/api/settings' && method === 'GET') {
+      return sendJson(res, 200, loadSettings());
+    }
+    if (pathname === '/api/settings' && (method === 'PUT' || method === 'POST')) {
+      const body = await readBody(req);
+      // 白名单：端点配置有专门的 /api/custom-endpoints 通道（带校验），这里只收这几个键。
+      // 直接落 body 等于把 25MB 的任意 JSON 原样写进 settings.json。
+      const patch = {};
+      for (const key of ['activeModel', 'recent']) if (key in body) patch[key] = body[key];
+      return sendJson(res, 200, saveSettings(patch));
+    }
+
+    // ---------- notebooks
+    if (pathname === '/api/notebooks' && method === 'GET') {
+      return sendJson(res, 200, { notebooks: store.listNotebooks() });
+    }
+    if (pathname === '/api/notebooks' && method === 'POST') {
+      const body = await readBody(req);
+      if (!body.topic && !body.title) {
+        return sendJson(res, 400, { error: '请给出想学的主题' });
+      }
+      const meta = store.createNotebook(body);
+      return sendJson(res, 201, { notebook: store.getNotebook(meta.id) });
+    }
+
+    m = /^\/api\/notebooks\/([^/]+)$/.exec(pathname);
+    if (m && method === 'GET') {
+      return sendJson(res, 200, { notebook: store.getNotebook(decodeURIComponent(m[1])) });
+    }
+    if (m && method === 'PATCH') {
+      const id = decodeURIComponent(m[1]);
+      const body = await readBody(req);
+      store.touchNotebook(id, body);
+      return sendJson(res, 200, { notebook: store.getNotebook(id) });
+    }
+    if (m && method === 'DELETE') {
+      return sendJson(res, 200, store.deleteNotebook(decodeURIComponent(m[1])));
+    }
+
+    // ---------- 上传素材
+    m = /^\/api\/notebooks\/([^/]+)\/uploads$/.exec(pathname);
+    if (m && method === 'POST') {
+      const id = decodeURIComponent(m[1]);
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > 20 * 1024 * 1024) {
+          return sendJson(res, 413, { error: '单个素材不超过 20MB' });
+        }
+        chunks.push(chunk);
+      }
+      const filename = decodeURIComponent(String(req.headers['x-filename'] || 'upload.txt'));
+      const record = store.saveUpload(id, filename, Buffer.concat(chunks));
+      return sendJson(res, 201, { upload: record, uploads: store.listUploads(id) });
+    }
+    m = /^\/api\/notebooks\/([^/]+)\/uploads\/(.+)$/.exec(pathname);
+    if (m && method === 'GET') {
+      const id = decodeURIComponent(m[1]);
+      const name = decodeURIComponent(m[2]);
+      const data = store.readUpload(id, name);
+      if (data.kind === 'image') {
+        const buffer = Buffer.from(data.base64, 'base64');
+        res.writeHead(200, { 'Content-Type': data.mime, 'Cache-Control': 'no-cache' });
+        return res.end(buffer);
+      }
+      return sendJson(res, 200, data);
+    }
+
+    // ---------- 制品
+    // 制品 HTML 由模型生成。直接以同源 text/html 发给浏览器，等于给它本应用的源权限
+    // （能读 localStorage、能打所有 /api）。iframe 那条路已经用 sandbox 隔离了，
+    // 这里是"新窗口打开"的出口，所以补 CSP sandbox 把它降成不透明源。
+    m = /^\/api\/notebooks\/([^/]+)\/artifacts\/([^/]+)$/.exec(pathname);
+    if (m && method === 'GET') {
+      const html = store.readArtifact(decodeURIComponent(m[1]), decodeURIComponent(m[2]));
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Security-Policy': 'sandbox allow-scripts allow-forms allow-modals allow-popups',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'SAMEORIGIN',
+        'Cache-Control': 'no-store',
+      });
+      return res.end(html);
+    }
+
+    // 道具的寿命：学习者把这一件从工作集里撤下来（或拿回去）。
+    // 只有 manifest 上的 retiredAt 会变，文件与证据一律留着——「扔掉」不是删除，路由里也不许有删。
+    m = /^\/api\/notebooks\/([^/]+)\/artifacts\/([^/]+)\/lifetime$/.exec(pathname);
+    if (m && method === 'POST') {
+      const id = decodeURIComponent(m[1]);
+      const body = await readBody(req);
+      if (typeof body?.retired !== 'boolean') {
+        return sendJson(res, 400, { error: 'retired 必须是 true 或 false' });
+      }
+      const item = store.setArtifactLifetime(id, decodeURIComponent(m[2]), body.retired);
+      const notebook = store.getNotebook(id);
+      const event = {
+        type: 'event',
+        artifactId: item.id,
+        name: body.retired ? 'artifact_retired' : 'artifact_restored',
+        payload: { title: item.title, kind: item.kind },
+        at: new Date().toISOString(),
+      };
+      // 有活回合就先交给它（本回合内 read_artifact_evidence 读得到），落盘这条无论如何都写
+      activeTurns.get(id)?.session?.recordArtifactEvidence(event);
+      const changed = mergeArtifactMessage(notebook.progress, event);
+      if (changed) store.saveProgress(id, notebook.progress);
+      // 台子跟着手势走：扔掉的道具离开工作集，放回来的回到当前这一场。
+      // 没开过场就不摆——相位与台面只能被显式推进，宿主不替他决定这场在演什么。
+      const sceneState = store.readSceneState(id);
+      let scene = sceneState;
+      if (sceneState.current) {
+        scene = store.saveSceneState(
+          id,
+          body.retired ? removeProp(sceneState, item.id) : placeProp(sceneState, item),
+        );
+        // 活回合内存里那一份也要跟上，不然它下一次 share_artifact 会往旧台面上摆
+        const live = activeTurns.get(id)?.session;
+        if (live) live.scene = scene;
+      }
+      return sendJson(res, 200, { ok: true, artifact: item, changed, scene });
+    }
+
+    // ---------- Learning Graph 直接编辑（学习者手动改）
+    m = /^\/api\/notebooks\/([^/]+)\/graph$/.exec(pathname);
+    if (m && method === 'GET') {
+      const nb = store.getNotebook(decodeURIComponent(m[1]));
+      return sendJson(res, 200, {
+        graph: nb.graph,
+        learnerView: describeGraphForLearner(nb.graph),
+        progress: nb.progress,
+      });
+    }
+    if (m && method === 'PUT') {
+      const id = decodeURIComponent(m[1]);
+      const body = await readBody(req);
+      try {
+        validateGraph(body.graph);
+      } catch (err) {
+        if (err instanceof GraphValidationError) {
+          return sendJson(res, 422, { error: err.message, issues: err.issues });
+        }
+        throw err;
+      }
+      store.saveGraph(id, body.graph);
+      return sendJson(res, 200, { ok: true, graph: body.graph });
+    }
+
+    // ---------- 结构化笔记：学生在「笔记」页上直接改
+    m = /^\/api\/notebooks\/([^/]+)\/notes\/([^/]+)$/.exec(pathname);
+    if (m && method === 'PUT') {
+      const body = await readBody(req);
+      const note = updateNote(decodeURIComponent(m[1]), decodeURIComponent(m[2]), body);
+      if (!note) return sendJson(res, 404, { error: '这条笔记已经不在了' });
+      return sendJson(res, 200, { ok: true, note });
+    }
+    if (m && method === 'DELETE') {
+      const out = deleteNote(decodeURIComponent(m[1]), decodeURIComponent(m[2]));
+      if (!out) return sendJson(res, 404, { error: '这条笔记已经不在了' });
+      return sendJson(res, 200, out);
+    }
+
+    // ---------- 待确认 PATCH
+    m = /^\/api\/notebooks\/([^/]+)\/patches\/([^/]+)$/.exec(pathname);
+    if (m && method === 'POST') {
+      const id = decodeURIComponent(m[1]);
+      const patchId = decodeURIComponent(m[2]);
+      const body = await readBody(req);
+      const nb = store.getNotebook(id);
+      const patch = (nb.patches?.patches || []).find((p) => p.id === patchId);
+      if (!patch) return sendJson(res, 404, { error: '改动记录不存在' });
+      if (body.action === 'reject') {
+        store.updatePatch(id, patchId, { applied: false, rejected: true, applied_at: null });
+        return sendJson(res, 200, { ok: true, rejected: true });
+      }
+      if (body.action === 'apply') {
+        if (patch.operation === 'SPLIT') {
+          return sendJson(res, 409, {
+            error: 'SPLIT 需要重新分解，不能就地应用。请回到对话里重新走分解。',
+          });
+        }
+        try {
+          store.applyPatchToGraph(nb.graph, patch);
+        } catch (err) {
+          return sendJson(res, 409, { error: err.message });
+        }
+        store.saveGraph(id, nb.graph);
+        store.updatePatch(id, patchId, {
+          applied: true,
+          rejected: false,
+          applied_at: new Date().toISOString(),
+        });
+        return sendJson(res, 200, { ok: true, applied: true, graph: nb.graph });
+      }
+      return sendJson(res, 400, { error: 'action 必须是 apply 或 reject' });
+    }
+
+    // ---------- 教学回合：SSE
+    // ---------- 某个学习当前是否还有回合在跑（刷新页面后才知道要不要等）
+    m = /^\/api\/notebooks\/([^/]+)\/turn-state$/.exec(pathname);
+    if (m && method === 'GET') {
+      const id = decodeURIComponent(m[1]);
+      if (!store.getNotebook(id)) return sendJson(res, 404, { error: '学习不存在' });
+      const turn = activeTurns.get(id);
+      const active = Boolean(turn) && !turn.done;
+      return sendJson(res, 200, {
+        active,
+        // 给前端一个"上次跑到哪"的粗略信号：已缓冲的事件数
+        buffered: turn ? turn.buffer.length : 0,
+      });
+    }
+
+    m = /^\/api\/notebooks\/([^/]+)\/turn$/.exec(pathname);
+    if (m && method === 'POST') {
+      const id = decodeURIComponent(m[1]);
+      const body = await readBody(req);
+      const notebook = store.getNotebook(id);
+
+      const settings = loadSettings();
+      const modelRef = body.model || settings.activeModel;
+      if (!modelRef?.provider || !modelRef?.model) {
+        return sendJson(res, 400, {
+          error: '还没有选择模型。请先在「模型配置」里接入一个订阅并选好模型。',
+          needModel: true,
+        });
+      }
+      if (activeTurns.has(id)) {
+        return sendJson(res, 409, { error: '这个学习正在处理上一条消息，请等它结束或先中断。' });
+      }
+
+      // 学习者的消息先落盘（连同素材引用），刷新页面也不丢
+      const userMessage = {
+        role: 'user',
+        content: String(body.message ?? ''),
+        timestamp: Date.now(),
+        attachments: Array.isArray(body.attachments) ? body.attachments : [],
+      };
+
+      // 素材真正送进模型：文本内联，图片转图像块
+      let modelHasVision = false;
+      try {
+        const resolved = registry.resolveModel(modelRef);
+        modelHasVision = Array.isArray(resolved.input) && resolved.input.includes('image');
+      } catch {
+        /* resolve 失败会在 runTurn 里报出来 */
+      }
+      const { blocks, notes: attachNotes } = expandAttachments(
+        id,
+        userMessage.attachments,
+        modelHasVision,
+      );
+      const historyMessage =
+        blocks.length || attachNotes.length
+          ? {
+              role: 'user',
+              content: [
+                ...(userMessage.content ? [{ type: 'text', text: userMessage.content }] : []),
+                ...(attachNotes.length
+                  ? [{ type: 'text', text: `【本次附带的素材】\n${attachNotes.map((n) => `- ${n}`).join('\n')}` }]
+                  : []),
+                ...blocks,
+              ],
+              timestamp: userMessage.timestamp,
+            }
+          : { role: 'user', content: userMessage.content, timestamp: userMessage.timestamp };
+
+      const history = [...(notebook.chat?.messages || []), historyMessage];
+      store.replaceChat(id, history);
+      if (!notebook.title || notebook.title === '新学习') {
+        store.touchNotebook(id, { title: userMessage.content.slice(0, 40) || notebook.title });
+      }
+
+      const turn = new TurnHandle(id);
+      activeTurns.set(id, turn);
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      turn.attach(res);
+      req.on('close', () => turn.detach(res));
+
+      const emit = (event) => turn.emit(event);
+
+      /**
+       * 每次工具执行后就落盘。state 只能由 observed 证据推进（Invariant 4），
+       * 但"落盘"本身不判对错——它只是把已经发生的观测结果写下来。
+       */
+      const persist = (snapshot) => {
+        if (!snapshot) return;
+        if (snapshot.graphDirty && snapshot.graph) {
+          store.saveGraph(id, snapshot.graph);
+          snapshot.graphDirty = false;
+          emit({ type: 'graph', graph: snapshot.graph });
+        }
+        if (snapshot.progressDirty && snapshot.progress) {
+          const stored = store.getNotebook(id).progress;
+          // notes 是只追加的观察记录，保留别处写入的，其余以本回合为准
+          snapshot.progress.notes = mergeNotes(stored.notes, snapshot.progress.notes);
+          store.saveProgress(id, snapshot.progress);
+          snapshot.progressDirty = false;
+          emit({ type: 'progress', progress: snapshot.progress });
+        }
+        const pending = snapshot.pendingEvents || snapshot.events;
+        if (pending?.length) {
+          const progress = store.getNotebook(id).progress;
+          progress.events = [...(progress.events || []), ...pending];
+          if (snapshot.pendingEvents) snapshot.pendingEvents = [];
+          else snapshot.events = [];
+          store.saveProgress(id, progress);
+          emit({ type: 'progress', progress });
+        }
+      };
+
+      /**
+       * 每步正文立刻落盘（幂等 upsert）。以前只在整轮结束时 appendChat 一次，
+       * 刷新 / 中断 / 异常都会丢掉已经讲出来的内容——"一刷新内容就没了"就是这个。
+       */
+      const persistMessage = (msg) => {
+        try {
+          store.upsertChatMessage(id, msg);
+        } catch (err) {
+          console.error(`[turn ${id}] 落盘消息失败: ${err?.message}`);
+        }
+      };
+
+      (async () => {
+        let terminal = null; // 'done' | 'error' | 'aborted'
+        try {
+          const result = await runTurn({
+            registry,
+            notebook: { ...notebook, chat: { messages: history }, todos: notebook.todos },
+            history,
+            modelRef,
+            emit,
+            signal: turn.abort.signal,
+            systemPrompt: buildSystemPrompt(notebook),
+            onSession: (session) => {
+              turn.session = session;
+              // 待办落盘：刷新页面后右侧页签还要能看见
+              const flushTodos = () => {
+                if (session.todosDirty) {
+                  store.saveTodos(id, session.todos);
+                  session.todosDirty = false;
+                  emit({ type: 'todo', todos: session.todos });
+                }
+              };
+              session.flushTodos = flushTodos;
+              flushTodos();
+            },
+            onPersist: persist,
+            onPersistMessage: persistMessage,
+            taskRunner,
+          });
+
+          persist(result);
+          // 增量已按 step 落过盘；这里再幂等兜一遍（异常路径下没落到的也补上）
+          for (const m of result.messages || []) persistMessage(m);
+          turn.session?.flushTodos?.();
+          // 注意：这里不单独 emit 'done'。收尾统一由 finally 里的 turn_end 负责，
+          // 保证"每条路径恰好一个终止事件"，前端只需要认一个信号。
+          terminal = 'done';
+        } catch (err) {
+          const detail = err?.stack || String(err);
+          console.error(`[turn ${id}] ${detail}`);
+          terminal = turn.abort.signal.aborted ? 'aborted' : 'error';
+          emit({
+            type: 'error',
+            message: err?.message || String(err),
+            stack: process.env.SOCRATIC_DEBUG === '1' ? detail : undefined,
+            reason: terminal,
+            fatal: true,
+          });
+        } finally {
+          // 无论走哪条路，这一轮都必须有一个终止事件，前端才可能停止等待。
+          // 之前这里漏了：模型输出正文但不调任何工具时，runTurn 正常返回，
+          // 谁也没发终止事件，浏览器就一直转圈。
+          try {
+            const fresh = store.getNotebook(id);
+            // turn_end 是权威收尾信号；done 保留为同义的终止标记（兼容既有客户端/测试）
+            if (terminal === 'done' || terminal === null) {
+              emit({ type: 'done', notebook: fresh, learnerView: fresh.learnerView });
+            }
+            emit({
+              type: 'turn_end',
+              outcome: terminal ?? 'done',
+              notebook: fresh,
+              learnerView: fresh.learnerView,
+            });
+          } catch (err) {
+            console.error(`[turn ${id}] 收尾失败: ${err?.message}`);
+          }
+          turn.done = true;
+          for (const client of turn.clients) {
+            client.write(`data: ${JSON.stringify({ type: 'closed' })}\n\n`);
+            client.end();
+          }
+          activeTurns.delete(id);
+        }
+      })();
+
+      return undefined;
+    }
+
+    // 学习者在制品（iframe）里做了什么 —— 前端 postMessage 收到后转投这里。
+    //
+    // 为什么要绕这一圈：制品是 sandbox="allow-scripts"（无 allow-same-origin）的 srcdoc，
+    // 父页读不到它的 DOM。所以回报只能由制品内的运行时 postMessage 出来，由宿主接收。
+    // 这条链路就是 artifact.md §13.1「作答状态标记由宿主页维护」的实现。
+    //
+    // type 三种：
+    //   evidence  答卷型作答（data-interaction 块）
+    //   state     项目/游戏/模拟器的状态快照（浅合并，跨轮保留）
+    //   event     离散事件（level_cleared / bug_found …，只追加 + 去重）
+    m = /^\/api\/notebooks\/([^/]+)\/artifact-message$/.exec(pathname);
+    if (m && method === 'POST') {
+      const id = decodeURIComponent(m[1]);
+      const body = await readBody(req);
+      const turn = activeTurns.get(id);
+      // 有进行中的回合就交给它（agent 本回合内就能读到）；否则落盘，下一回合再注入
+      if (turn?.session) {
+        const accepted = turn.session.recordArtifactEvidence(body);
+        // state/event 也要落盘，否则刷新页面就丢
+        if (body?.type === 'state' || body?.type === 'event') {
+          const stored = store.getNotebook(id);
+          if (stored) {
+            mergeArtifactMessage(stored.progress, body);
+            store.saveProgress(id, stored.progress);
+          }
+        }
+        return sendJson(res, 200, { ok: true, live: true, accepted });
+      }
+      const notebook = store.getNotebook(id);
+      const changed = mergeArtifactMessage(notebook.progress, body);
+      store.saveProgress(id, notebook.progress);
+      return sendJson(res, 200, { ok: true, live: false, accepted: Boolean(changed) });
+    }
+
+    // 学习者对 ask_user_question 的作答
+    m = /^\/api\/notebooks\/([^/]+)\/answer$/.exec(pathname);
+    if (m && method === 'POST') {
+      const id = decodeURIComponent(m[1]);
+      const body = await readBody(req);
+      const turn = activeTurns.get(id);
+      if (!turn?.session) {
+        return sendJson(res, 409, { error: '当前没有等待作答的问题' });
+      }
+      const ok = turn.session.answer(body.questionId, {
+        selected: body.selected ?? [],
+        text: body.text ?? '',
+        skipped: Boolean(body.skipped),
+      });
+      return sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: '问题 id 不匹配' });
+    }
+
+    // 学习者对 present_plan 的裁决（批准 / 提意见）
+    m = /^\/api\/notebooks\/([^/]+)\/plan$/.exec(pathname);
+    if (m && method === 'POST') {
+      const id = decodeURIComponent(m[1]);
+      const body = await readBody(req);
+      const turn = activeTurns.get(id);
+      if (!turn?.session) {
+        return sendJson(res, 409, { error: '当前没有等待裁决的计划' });
+      }
+      const ok = turn.session.decidePlan(body.planId, {
+        approved: Boolean(body.approved),
+        feedback: String(body.feedback ?? ''),
+      });
+      return sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: '计划 id 不匹配' });
+    }
+
+    // 后台任务列表 / 停止
+    m = /^\/api\/notebooks\/([^/]+)\/tasks$/.exec(pathname);
+    if (m && method === 'GET') {
+      const id = decodeURIComponent(m[1]);
+      return sendJson(res, 200, { tasks: taskRunner.list({ notebookId: id }) });
+    }
+    m = /^\/api\/notebooks\/([^/]+)\/tasks\/([^/]+)\/stop$/.exec(pathname);
+    if (m && method === 'POST') {
+      const id = decodeURIComponent(m[1]);
+      const taskId = decodeURIComponent(m[2]);
+      return sendJson(res, 200, taskRunner.stop(taskId));
+    }
+
+    // 中断回合
+    m = /^\/api\/notebooks\/([^/]+)\/interrupt$/.exec(pathname);
+    if (m && method === 'POST') {
+      const id = decodeURIComponent(m[1]);
+      const turn = activeTurns.get(id);
+      if (!turn) return sendJson(res, 200, { ok: true, note: '没有进行中的回合' });
+      turn.session?.cancelAll('学习者中断了本回合');
+      turn.abort.abort();
+      return sendJson(res, 200, { ok: true });
+    }
+
+    // 后台任务 / 分身的常驻事件流：右栏的「后台任务」页签开着就一直订阅，
+    // 回合结束之后到达的任务事件也走这条（所以它不能挂在 TurnHandle 上）。
+    m = /^\/api\/notebooks\/([^/]+)\/task-stream$/.exec(pathname);
+    if (m && method === 'GET') {
+      const id = decodeURIComponent(m[1]);
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.write('retry: 2000\n\n');
+      const clients = taskStreams.get(id) ?? new Set();
+      clients.add(res);
+      taskStreams.set(id, clients);
+      req.on('close', () => {
+        clients.delete(res);
+        if (!clients.size) taskStreams.delete(id);
+      });
+      return undefined;
+    }
+
+    // 重连进行中的回合事件流
+    m = /^\/api\/notebooks\/([^/]+)\/stream$/.exec(pathname);
+    if (m && method === 'GET') {
+      const id = decodeURIComponent(m[1]);
+      const turn = activeTurns.get(id);
+      if (!turn) return sendJson(res, 404, { error: '这个学习当前没有进行中的回合' });
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+      });
+      turn.attach(res);
+      req.on('close', () => turn.detach(res));
+      return undefined;
+    }
+
+    return sendJson(res, 404, { error: `没有这个接口: ${method} ${pathname}` });
+  } catch (err) {
+    if (res.headersSent) {
+      try {
+        res.end();
+      } catch {
+        /* noop */
+      }
+      return undefined;
+    }
+    return sendError(res, err);
+  }
+});
+
+/** notes 是只追加的观察记录，合并时去掉重复项。 */
+function mergeNotes(existing = [], incoming = []) {
+  const seen = new Set(existing.map((n) => `${n.at}|${n.text}`));
+  const out = [...existing];
+  for (const n of incoming) {
+    const key = `${n.at}|${n.text}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(n);
+    }
+  }
+  return out;
+}
+
+/**
+ * 把一条制品回报合并进 Progress State。返回 true 表示真的写入了新东西。
+ *
+ * 三类存放：
+ *   evidence → artifact_evidence[]：只追加，按 (题目, 尝试次数, 结果, 作答) 去重。
+ *              同一题反复答错会留下多条，这是要的——那是过程证据。
+ *   state    → artifact_state{artifactId}：浅合并的快照（保留全部历史 key）。
+ *   event    → artifact_events[]：只追加，按 (name, at) 去重。
+ * 它们都是观测记录不是状态，所以绝不参与 mastery 判定。
+ */
+function mergeArtifactMessage(progress, payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  const artifactId = String(payload.artifactId ?? payload.evidence?.artifactId ?? 'unknown');
+  const ev = payload.evidence || payload;
+  let changed = false;
+
+  if (payload.type === 'state') {
+    const state = payload.state || ev.state;
+    if (state && typeof state === 'object') {
+      progress.artifact_state = progress.artifact_state || {};
+      progress.artifact_state[artifactId] = {
+        ...(progress.artifact_state[artifactId] || {}),
+        ...state,
+      };
+      changed = true;
+    }
+  } else if (payload.type === 'event') {
+    const name = String(payload.name || ev.name || 'event').slice(0, 80);
+    const at = payload.at || new Date().toISOString();
+    const list = progress.artifact_events || (progress.artifact_events = []);
+    if (!list.some((e) => e.artifact_id === artifactId && e.name === name && e.at === at)) {
+      list.push({ artifact_id: artifactId, name, payload: payload.payload ?? null, at });
+      changed = true;
+    }
+  } else {
+    const normalized = {
+      artifact_id: artifactId,
+      concept_id: ev.concept_id ?? null,
+      question_id: ev.question_id ?? null,
+      interaction_type: ev.interaction_type ?? null,
+      response: ev.response == null ? null : String(ev.response).slice(0, 1000),
+      result: ['correct', 'incorrect', 'recorded'].includes(ev.result) ? ev.result : null,
+      attempts: Number(ev.attempts) || 0,
+      completed: Boolean(ev.completed),
+      locked: Boolean(ev.locked),
+      at: new Date().toISOString(),
+    };
+    const key = (e) => `${e.question_id}|${e.attempts}|${e.result}|${e.response}`;
+    const list = progress.artifact_evidence || (progress.artifact_evidence = []);
+    if (!list.some((e) => key(e) === key(normalized))) {
+      list.push(normalized);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * 把学习者这一条消息里引用的素材展开成模型真正能吃的内容块。
+ * 文本直接内联；图片转成 base64 图像块（需要模型支持视觉）。
+ * 读不到的素材如实说明，不假装读过。
+ */
+function expandAttachments(notebookId, attachments = [], modelHasVision) {
+  const blocks = [];
+  const notes = [];
+  for (const a of attachments) {
+    try {
+      const data = store.readUpload(notebookId, a.rel || a.name);
+      if (data.kind === 'text') {
+        blocks.push({ type: 'text', text: `【素材：${data.name}】\n\n${data.text}` });
+        notes.push(`${data.name}（文本，已内联）`);
+      } else if (data.kind === 'image') {
+        if (modelHasVision) {
+          blocks.push({ type: 'image', data: data.base64, mimeType: data.mime });
+          notes.push(`${data.name}（图片，已作为图像输入）`);
+        } else {
+          notes.push(`${data.name}（图片，但当前模型不支持视觉，未送进去）`);
+        }
+      } else {
+        notes.push(`${data.name}（二进制文件 ${data.bytes} 字节，未能解析内容）`);
+      }
+    } catch (err) {
+      notes.push(`${a.name}（读取失败：${err.message}）`);
+    }
+  }
+  return { blocks, notes };
+}
+
+server.listen(PORT, HOST, () => {
+  const url = `http://${HOST}:${PORT}`;
+  console.log(`\n  Socratic Studio 已启动`);
+  console.log(`  → ${url}`);
+  console.log(`  数据目录：${DATA_DIR}`);
+  if (failedProviders.length) {
+    console.log(
+      `  ⚠ 以下订阅未能加载（不影响其它订阅）：${failedProviders.map((p) => p.id).join(', ')}`,
+    );
+  }
+  console.log('');
+});
+
+process.on('SIGINT', () => {
+  console.log('\n正在关闭…');
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 1500).unref();
+});

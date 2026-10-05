@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Socratic Studio · 苏格拉底式一对一教学</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛️</text></svg>" />
+    <script>
+      // 主题要赶在首帧前贴上：默认深色，偏好存 localStorage。
+      // 没有 localStorage（测试桩 / 严格环境）就退回默认，绝不因此白屏。
+      try {
+        var t = localStorage.getItem('socratic-theme');
+        document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app" class="layout">
+      <!-- ─────────── 左导航栏：品牌 + 当前学习 + 会话列表 + 控制 ─────────── -->
+      <aside class="rail" id="rail">
+        <div class="rail-head">
+          <div class="brand">
+            <span class="brand-mark">🏛️</span>
+            <div class="brand-name">Socratic Studio</div>
+          </div>
+          <button class="btn btn-primary btn-block" id="newNotebookBtn">＋ 新的学习</button>
+        </div>
+        <div class="rail-list" id="notebookList"></div>
+        <div class="rail-foot">
+          <div class="rail-controls">
+            <!-- 只留一个模型入口：chip 本身就是打开配置的按钮 -->
+            <button class="model-chip" id="modelChip" title="点这里切换或配置模型">
+              <span class="dot" id="modelDot"></span>
+              <span id="modelChipLabel">未配置模型</span>
+            </button>
+            <span class="task-count" id="taskCount" title="后台任务"></span>
+            <button class="icon-btn" id="themeToggle" title="切换深色 / 浅色" aria-label="切换深色 / 浅色">◑</button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ─────────── 中栏：结构化学习区 ─────────── -->
+      <main class="main" id="main">
+
+        <!-- 讲解区顶部的状态条：思考 / 工具执行的进行时放这里，替代流里那行小字 -->
+        <div class="status-strip hidden" id="statusStrip" role="status" aria-live="polite">
+          <div class="spinner" id="statusSpinner"></div>
+          <span id="statusText">正在思考…</span>
+          <span class="status-live" id="statusLive"></span>
+        </div>
+
+        <!-- 中间舞台：一片台面，不是一条消息流。
+             分段只有两层：场（幕）与拍。台面上摆的是"第几场的第几拍"——
+             讲解、题目与作答、道具、讲义都落在它们发生的那一拍里，按到达顺序排。
+             左边那条窄轨是拍号：往回指认"第 3 拍讲了什么"靠它，不靠往上翻气泡。 -->
+        <div class="stage" id="stage">
+          <nav class="stage-bar">
+            <button class="icon-btn mobile-only" id="toggleRail" title="学习列表" aria-label="学习列表">☰</button>
+            <!-- 回看定位：点左轨上的拍号就把镜头钉在那一拍，这一行就说清钉在哪儿。
+                 平时不出现——常驻说明也是噪声；它只在镜头真的被钉住时存在。 -->
+            <span class="desk-watch hidden" id="deskWatch">
+              <span id="deskWatchText"></span>
+              <button class="btn btn-ghost btn-sm" id="deskWatchRelease" type="button">回到最新</button>
+            </span>
+            <button class="btn btn-ghost btn-sm hidden" id="exportNotesBtn" type="button">导出笔记</button>
+            <!-- 面板收起/展开：放右上角，收起后按钮本身不消失 -->
+            <button class="icon-btn" id="togglePanel" title="展开 / 收起右栏" aria-label="展开 / 收起右栏">◧</button>
+          </nav>
+
+          <div class="thread" id="deskStream">
+            <div class="thread-inner" id="deskInner">
+              <div class="empty-state" id="emptyState">
+                <h2>想学点什么？</h2>
+                <p>说一个值得系统学习的主题，我会先问透、再讲透，然后带你边做边学。</p>
+                <div class="starter-grid" id="starterGrid"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="composer-wrap" id="composerWrap">
+          <div class="attachments" id="attachments"></div>
+          <div class="composer">
+            <button class="icon-btn" id="attachBtn" title="添加素材（文本 / 图片）" aria-label="添加素材（文本 / 图片）">📎</button>
+            <input type="file" id="fileInput" multiple hidden accept=".md,.markdown,.txt,.json,.yaml,.yml,.csv,.tsv,.log,.html,.htm,.png,.jpg,.jpeg,.webp,.gif" />
+            <textarea id="input" rows="1" placeholder="说你想学的主题，或直接回答上一步的问题…"></textarea>
+            <button class="btn btn-primary" id="sendBtn">发送</button>
+            <button class="btn btn-danger hidden" id="stopBtn">中断</button>
+          </div>
+          <div class="composer-hint">Enter 发送 · Shift+Enter 换行</div>
+        </div>
+      </main>
+
+      <!-- ─────────── 右栏：这一局学习的现状 ─────────── -->
+      <aside class="panel" id="panel">
+        <div class="panel-head">
+          <div class="panel-tabs" role="tablist">
+            <button class="tab active" data-tab="learn" role="tab" aria-selected="true">学习<span class="tab-badge hidden" id="learnTabBadge" title="待你确认的结构改动"></span></button>
+            <button class="tab" data-tab="files" role="tab" aria-selected="false">素材</button>
+          </div>
+          <button class="icon-btn" id="closePanel" title="收起" aria-label="收起右栏">✕</button>
+        </div>
+        <div class="panel-body" id="panelBody" role="tabpanel"></div>
+      </aside>
+    </div>
+
+    <!-- ─────────── 模型配置弹层 ─────────── -->
+    <div class="modal-backdrop hidden" id="configModal" role="dialog" aria-modal="true" aria-label="模型配置">
+      <div class="modal">
+        <div class="modal-head">
+          <h2>模型配置</h2>
+          <button class="icon-btn" id="closeConfig" aria-label="关闭">✕</button>
+        </div>
+        <div class="modal-body" id="configBody"></div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="simpleModal" role="dialog" aria-modal="true" aria-labelledby="simpleModalTitle">
+      <div class="modal modal-sm">
+        <div class="modal-head">
+          <h2 id="simpleModalTitle">标题</h2>
+          <button class="icon-btn" id="closeSimple" aria-label="关闭">✕</button>
+        </div>
+        <div class="modal-body" id="simpleModalBody"></div>
+        <div class="modal-foot" id="simpleModalFoot"></div>
+      </div>
+    </div>
+
+    <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

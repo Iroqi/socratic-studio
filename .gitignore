@@ -1,0 +1,18 @@
+.env
+
+# Python 运行时
+__pycache__/
+*.pyc
+.venv/
+
+# npm 缓存与安装脚本
+.npm-cache/
+npm-debug.log*
+
+# 运行时数据与依赖不进仓库
+data/
+node_modules/
+package-lock.json
+
+server.out.log
+server.err.log

@@ -1,0 +1,2153 @@
+// 端到端测试：用 pi-ai 的 faux provider 驱动完整教学回合，不需要任何 API key。
+//
+// 覆盖：
+//   1. Learning Graph 严格校验（好/坏两种）
+//   2. 拓扑排序
+//   3. 状态转移守卫（一次一级 / 升级要 observed 证据 / 未验证自报降级特例）
+//   4. 完整 agentic 回合：模型调 update_learning_graph → ask_user_question（阻塞）
+//      → 学习者作答 → 模型继续 → set_progress_state
+//   5. 提问卡真的阻塞在服务端，作答真的作为 toolResult 回到模型
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'socratic-test-'));
+process.env.SOCRATIC_DATA_DIR = tmpRoot;
+
+const { createModels, fauxProvider, fauxAssistantMessage, fauxText, fauxToolCall, validateToolCall } =
+  await import('@earendil-works/pi-ai');
+const { validateGraph, topoSortConcepts, GraphValidationError } = await import('../server/graph.mjs');
+const { checkTransition, runTurn, buildTools, TOOL_NAMES, seedArtifacts, normalizeAskOptions, unwrapStructuredArgs, historyToModelMessages, carryOverConcept, TeachingSession } =
+  await import('../server/agent.mjs');
+const store = await import('../server/store.mjs');
+const { ensureDirs, NOTEBOOKS_DIR } = await import('../server/config.mjs');
+
+ensureDirs();
+
+let passed = 0;
+let failed = 0;
+function check(name, cond, detail) {
+  if (cond) {
+    passed += 1;
+    console.log(`  ✓ ${name}`);
+  } else {
+    failed += 1;
+    console.log(`  ✗ ${name}${detail ? `\n      ${detail}` : ''}`);
+  }
+}
+function section(title) {
+  console.log(`\n${title}`);
+}
+
+// ─────────────────────────────────────── 1. Graph 校验
+
+section('1. Learning Graph 严格校验');
+
+const goodGraph = {
+  meta: { topic: 'JavaScript 闭包', goal: '在项目里用对闭包', pedagogy: 'programming' },
+  concepts: [
+    {
+      id: 'variable-scope',
+      name: '作用域',
+      summary: '变量可被访问的代码区域',
+      depends_on: [],
+      misconceptions: ['混淆词法作用域与动态作用域'],
+      observable_skills: ['能解释词法作用域与动态作用域的区别'],
+      assessment_items: [{ type: 'recall', prompt: '内层函数能读到外层变量，是词法还是动态作用域？' }],
+    },
+    {
+      id: 'closures',
+      name: '闭包',
+      summary: '函数连同其词法环境的引用',
+      depends_on: ['variable-scope'],
+      misconceptions: ['闭包复制变量'],
+      confused_with: ['variable-scope'],
+    },
+  ],
+};
+
+check('合法的 Graph 通过校验', validateGraph(goodGraph) === true);
+
+const badCases = [
+  ['缺 meta.pedagogy 必须失败', { meta: { topic: 'x' }, concepts: goodGraph.concepts }],
+  ['未知字段必须失败', { ...goodGraph, extra: 1 }],
+  ['悬空依赖必须失败', { meta: goodGraph.meta, concepts: [goodGraph.concepts[1]] }],
+  [
+    'assessment_items 形状错误必须失败',
+    {
+      meta: goodGraph.meta,
+      concepts: [{ id: 'a', name: 'A', summary: 's', assessment_items: [{ type: 'quiz', prompt: 'p' }] }],
+    },
+  ],
+  [
+    '非法 importance 必须失败',
+    { meta: goodGraph.meta, concepts: [{ id: 'a', name: 'A', summary: 's', importance: 'critical' }] },
+  ],
+  [
+    '未知嵌套字段必须失败',
+    { meta: { ...goodGraph.meta, learner_profile: { nickname: 'x' } }, concepts: goodGraph.concepts },
+  ],
+  [
+    'known_concepts 引用不存在的 concept 必须失败',
+    { meta: { ...goodGraph.meta, learner_profile: { known_concepts: ['nope'] } }, concepts: goodGraph.concepts },
+  ],
+];
+for (const [name, graph] of badCases) {
+  let threw = false;
+  try {
+    validateGraph(graph);
+  } catch (e) {
+    threw = e instanceof GraphValidationError;
+  }
+  check(name, threw);
+}
+
+section('2. 拓扑排序');
+const ordered = topoSortConcepts(goodGraph).map((c) => c.id);
+check('依赖在前', ordered.indexOf('variable-scope') < ordered.indexOf('closures'), ordered.join(' → '));
+let cyclic = false;
+try {
+  topoSortConcepts({
+    meta: goodGraph.meta,
+    concepts: [
+      { id: 'a', name: 'A', summary: 's', depends_on: ['b'] },
+      { id: 'b', name: 'B', summary: 's', depends_on: ['a'] },
+    ],
+  });
+} catch {
+  cyclic = true;
+}
+check('环必须被拒绝', cyclic);
+
+// ─────────────────────────────────────── 3. 状态转移守卫
+
+section('3. 状态转移守卫（runtime.md §1.2）');
+check('unknown → seen 允许（首次接触即转换）', checkTransition('unknown', 'seen', {}).ok);
+check('seen → understood 无证据时拒绝', !checkTransition('seen', 'understood', {}).ok);
+check('seen → understood 带 observed 证据时允许', checkTransition('seen', 'understood', { evidence: '说对了' }).ok);
+check('unknown → applied 跨级必须拒绝', !checkTransition('unknown', 'applied', { evidence: 'x' }).ok);
+check('applied → mastered 带证据允许', checkTransition('applied', 'mastered', { evidence: 'x' }).ok);
+check('未验证自报 understood → seen 单次错误即降级', checkTransition('understood', 'seen', { unverified: true }).ok);
+check('applied → unknown 跨两级降级拒绝', !checkTransition('applied', 'unknown', {}).ok);
+check('mastered → applied 单级降级允许（mastery_challenge_failed）', checkTransition('mastered', 'applied', {}).ok);
+check('非法 state 值拒绝', !checkTransition('seen', 'pretty-good', {}).ok);
+
+// ─────────────────────────────────────── 4. 完整回合
+
+section('4. 完整教学回合（faux provider，无 API key）');
+
+const faux = fauxProvider({ provider: 'faux', tokensPerSecond: 0 });
+const models = createModels();
+models.setProvider(faux.provider);
+const fauxModel = faux.getModel();
+
+const registry = {
+  models,
+  resolveModel: () => fauxModel,
+};
+
+const meta = store.createNotebook({ topic: 'JavaScript 闭包', goal: '在项目里用对闭包', pace: 'normal' });
+const nb = store.getNotebook(meta.id);
+
+const events = [];
+const emit = (e) => events.push(e);
+let askedQuestion = null;
+let sessionRef = null;
+
+// 模型脚本：
+//  第 1 步：建 Graph
+//  第 2 步：提问（阻塞）
+//  第 3 步：推进状态
+faux.setResponses([
+  fauxAssistantMessage(
+    [
+      fauxText('我先把这块拆成两个概念，看看顺序对不对。\n\n1. 作用域\n2. 闭包\n\n⛔ 等待你的确认'),
+      fauxToolCall(TOOL_NAMES.SAVE_GRAPH, {
+        topic: 'JavaScript 闭包',
+        goal: '在项目里用对闭包',
+        pedagogy: 'programming',
+        concepts: goodGraph.concepts,
+      }),
+    ],
+    { stopReason: 'toolUse' },
+  ),
+  fauxAssistantMessage(
+    [
+      fauxText('先别查——你猜外层函数已经 return 之后，里层还能不能读到外层当时的变量？'),
+      fauxToolCall(TOOL_NAMES.ASK, {
+        id: 'closures:q_outer_var',
+        concept_id: 'closures',
+        header: '探针',
+        question: '外层函数已经 return 了，里层函数还能读到外层当时的变量吗？',
+        options: [
+          { label: '能读到', description: '里层还握着那个变量' },
+          { label: '读不到', description: '外层一结束变量就没了' },
+        ],
+      }),
+    ],
+    { stopReason: 'toolUse' },
+  ),
+  fauxAssistantMessage(
+    [
+      fauxText('对，它握着的是那个绑定本身。'),
+      fauxToolCall(TOOL_NAMES.SET_PROGRESS, {
+        updates: [
+          {
+            concept_id: 'closures',
+            state: 'seen',
+            next_action: '讲解最小缺口→PREDICT',
+            evidence: '学习者答出「能读到」，理由是对的',
+          },
+        ],
+        events: [{ concept_id: 'closures', kind: 'observed', summary: '答对了循环外的探针' }],
+        session_note: '冷启动探针一次答对',
+      }),
+    ],
+    { stopReason: 'toolUse' },
+  ),
+  fauxAssistantMessage([fauxText('那换个问法再确认一下。')]),
+]);
+
+// 等提问事件出现后作答——这正是即时反馈回路的验证点：
+// 服务端必须真的停在 ask_user_question 上，等外部 resolve。
+
+const stepMessages = [];
+const turnPromise = runTurn({
+  registry,
+  notebook: nb,
+  history: [{ role: 'user', content: '教我闭包', timestamp: Date.now() }],
+  modelRef: { provider: 'faux', model: fauxModel.id },
+  emit,
+  signal: new AbortController().signal,
+  systemPrompt: '（测试用）',
+  onSession: (session) => {
+    sessionRef = session;
+  },
+  // 每步正文落盘回调：刷新页面不许丢已经讲出来的内容
+  onPersistMessage: (msg) => stepMessages.push(msg),
+});
+
+const answerWhenAsked = (async () => {
+  for (let i = 0; i < 400; i += 1) {
+    const evt = events.find((e) => e.type === 'ask');
+    if (evt) {
+      askedQuestion = evt;
+      const ok = sessionRef.answer(evt.questionId, { selected: ['能读到'], text: '因为函数记住了它出生时的环境' });
+      check('作答被会话接收', ok === true);
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 15));
+  }
+  return false;
+})();
+
+const answered = await answerWhenAsked;
+const result = await turnPromise;
+
+check('提问事件到达前端', answered);
+check('提问带上了教学坐标 id', askedQuestion?.questionId === 'closures:q_outer_var', JSON.stringify(askedQuestion?.questionId));
+check('提问带上了可枚举选项', (askedQuestion?.options || []).length === 2);
+// 取景（相机）只能靠这个把手：落盘的题记录里有 conceptId，可 SSE 没带，
+// 于是刷新后知道这道题在问哪个概念、当场却不知道。
+check('提问事件把教学坐标一起推给前端', askedQuestion?.conceptId === 'closures', JSON.stringify(askedQuestion?.conceptId));
+check('Graph 已保存', result.graph?.concepts?.length === 2);
+check('Graph 保存后走校验', result.graph.concepts[1].depends_on[0] === 'variable-scope');
+check(
+  '新 concept 初始化为待学',
+  Object.values(nb.progress.concepts).length === 0 && result.progress.concepts['closures'] !== undefined,
+);
+check('状态推进为 seen', result.progress.concepts['closures'].state === 'seen', result.progress.concepts['closures'].state);
+check(
+  '状态来自 observed 证据',
+  String(result.progress.concepts['closures'].last_evidence || '').includes('能读到'),
+);
+check('事件已记录', (result.events || []).some((e) => e.kind === 'observed'));
+check(
+  '工具结果里有学习者的作答（回传成功）',
+  JSON.stringify(events.filter((e) => e.type === 'tool_end').map((e) => e.name)) !== '',
+);
+// 回归：正文按 step 增量落盘（"一刷新内容就没了"的根因是只在整轮结束时 append 一次）
+check('每一步正文都走了落盘回调', stepMessages.length === result.messages.length,
+  `落盘 ${stepMessages.length} 条 / 返回 ${result.messages.length} 条`);
+check('落盘消息带 msgId（幂等 upsert 的键）', stepMessages.every((m) => typeof m.msgId === 'string' && m.msgId.length > 0),
+  JSON.stringify(stepMessages.map((m) => m.msgId)));
+check('落盘消息的 msgId 不重复', new Set(stepMessages.map((m) => m.msgId)).size === stepMessages.length,
+  stepMessages.map((m) => m.msgId).join(','));
+check('落盘内容就是返回内容', JSON.stringify(stepMessages) === JSON.stringify(result.messages));
+
+// ─────────────────────────────────────── 5. 非法状态转移被拒
+
+section('5. 非法状态转移被引擎拒绝');
+const session = sessionRef;
+// 一个全新会话的空壳：只验证 seedArtifacts 能把落盘数据搬回来。
+// artifactEvidenceView 只依赖 this.liveArtifacts，所以够用了。
+const fresh = { liveArtifacts: new Map() };
+const viewOf = (obj, id) => session.artifactEvidenceView.call(obj, id);
+const before = session.progress.concepts['closures'].state;
+const rejected = await session.execSetProgress({
+  updates: [{ concept_id: 'closures', state: 'mastered' }],
+});
+check('seen → mastered 跨级被拒', rejected.ok === false && rejected.rejected?.length === 1, JSON.stringify(rejected));
+check('被拒后状态不变', session.progress.concepts['closures'].state === before);
+
+// ─────────────────────────────────────── 6. 制品：不判分
+
+section('6. 制品工具');
+const artEvents = events.filter((e) => e.type === 'artifact');
+await session.execShareArtifact({
+  title: '共享一个绑定',
+  html: '<html><body><p>三个背包客共用一个盒子</p></body></html>',
+  kind: 'illustration',
+});
+check('制品事件发出', events.filter((e) => e.type === 'artifact').length === artEvents.length + 1);
+
+// 道具是有寿命的东西：每一件都落盘、都寻得到址。以前 share_artifact 分两支——带 persist
+// 才写文件，否则发一个 `inline-N` 合成号、整份 HTML 只嵌在 chat.json 里（实测那件 23,135
+// 字符的「正则试错场」就是这样，artifacts/ 目录空着）。没有地址就续不了玩、也撤不下来。
+// 这三条以前一条都没钉住：删掉 persist 那一支之后三套测试全绿，本身就是发现。
+const noArgArtifact = events.filter((e) => e.type === 'artifact').at(-1).artifact;
+check('模型什么都没带（旧的那一支）也落盘了',
+  fs.existsSync(path.join(tmpRoot, 'notebooks', session.notebook.id, noArgArtifact.rel)), noArgArtifact.rel);
+check('id 就是目录名，不再是 inline-N 合成号',
+  noArgArtifact.id === noArgArtifact.rel.split('/')[1] && !noArgArtifact.id.startsWith('inline-'),
+  `${noArgArtifact.id} | ${noArgArtifact.rel}`);
+check('事件里不再带 persisted（恒真是废话，留着说明两支没合成一支）',
+  !('persisted' in noArgArtifact), JSON.stringify(Object.keys(noArgArtifact)));
+const manifestListed = store.getNotebook(session.notebook.id).artifacts;
+check('manifest 认得这件（刷新后宿主还找得到它）',
+  manifestListed.some((a) => a.id === noArgArtifact.id && a.rel === noArgArtifact.rel),
+  `${manifestListed.length} 件`);
+const noArgResult = await session.execShareArtifact({ title: '同样没有参数', html: '<p>x</p>' });
+check('工具返回值只剩一条说法（不再"要留档就带 persist"）',
+  noArgResult.note.startsWith('制品已落盘') && !noArgResult.note.includes('persist'), noArgResult.note);
+
+// ─────────────────────────────────────── 6a. 道具的寿命：软退役
+
+section('6a. 道具的寿命（扔掉 = 打上时间戳，绝不删文件）');
+
+// discardable 落到工程上只有一个形状：学习者能把道具从工作集撤下来，但撤的是"在用"，
+// 不是"存在"。文件、manifest 那一行、他在这件里做过的记录都得留着，因为找回的入口
+// 就在「素材」页——那一页靠 manifest 里的这一行活着。
+const thrown = (fn) => { try { fn(); return null; } catch (e) { return e; } };
+const nbId = session.notebook.id;
+const liveArtifact = noArgArtifact;
+const artCountBefore = store.getNotebook(nbId).artifacts.length;
+const artFileOnDisk = path.join(tmpRoot, 'notebooks', nbId, liveArtifact.rel);
+
+const retiredItem = store.setArtifactLifetime(nbId, liveArtifact.id, true);
+check('扔掉就是在 manifest 上盖一个时间戳（别的字段一个字没动）',
+  !!retiredItem.retiredAt && retiredItem.id === liveArtifact.id && retiredItem.rel === liveArtifact.rel &&
+    retiredItem.title === liveArtifact.title,
+  JSON.stringify(retiredItem));
+check('扔掉绝不删文件（软退役要能反着走，删了就回不去）', fs.existsSync(artFileOnDisk));
+check('manifest 里那一行还在（「素材」页的找回入口靠它）',
+  store.getNotebook(nbId).artifacts.some((a) => a.id === liveArtifact.id),
+  `${store.getNotebook(nbId).artifacts.length} 件`);
+
+const restoredItem = store.setArtifactLifetime(nbId, liveArtifact.id, false);
+check('放回是把那个时间戳抹掉——键整个消失，不是留一个 null',
+  !('retiredAt' in restoredItem) && !('retiredAt' in store.getNotebook(nbId).artifacts.find((a) => a.id === liveArtifact.id)),
+  JSON.stringify(restoredItem));
+check('抹掉时间戳也不碰文件', fs.existsSync(artFileOnDisk));
+
+// 两条都必须报出**状态码**：光"抛了个错"是弱钉子——去掉守门之后 path.join(null) 也抛，
+// 但那是 500（TypeError），学习者点一下就看到一堵错误页，不是一句"这件道具不存在"。
+check('非法制品 id 报 400（这条路由学习者点出来，输入不许当路径用）',
+  thrown(() => store.setArtifactLifetime(nbId, '../evil', true))?.status === 400,
+  JSON.stringify({ status: thrown(() => store.setArtifactLifetime(nbId, '../evil', true))?.status }));
+check('manifest 里没有的那件报 404，不许静默造一条',
+  thrown(() => store.setArtifactLifetime(nbId, 'no-such-artifact', true))?.status === 404,
+  thrown(() => store.setArtifactLifetime(nbId, 'no-such-artifact', true))?.message);
+check('扔掉/放回这条路不新增制品（前后同样多件）',
+  store.getNotebook(nbId).artifacts.length === artCountBefore,
+  `${store.getNotebook(nbId).artifacts.length} vs ${artCountBefore}`);
+
+// ─────────────────────────────────────── 6b. 制品证据回路（原版契约移植）
+
+section('6b. 制品证据回路（artifact.md §13.1）');
+
+// 制品里读到的证据必须能被 record → 读回 → 去重
+const evidenceBefore = session.artifactEvidenceView().artifacts.length;
+await session.execShareArtifact({
+  title: '背包客',
+  description: '看盒子',
+  kind: 'interactive',
+  html: `<div data-interaction='{"options":[]}' data-interaction-type="choice"
+        data-concept-id="closures" data-question-id="closures:q_box">
+        <button data-choice-id="a"></button></div>`,
+});
+check('share_artifact 后制品进入证据视图', session.artifactEvidenceView().artifacts.length === evidenceBefore + 1);
+check(
+  '制品里声明的题号被识别',
+  session.artifactEvidenceView().artifacts.some((a) => a.questions_declared.includes('closures:q_box')),
+);
+
+// 前端 postMessage 上来的证据
+const accepted1 = session.recordArtifactEvidence({
+  artifactId: 'inline-1',
+  evidence: {
+    concept_id: 'closures',
+    question_id: 'closures:q_box',
+    interaction_type: 'choice',
+    response: 'a',
+    result: 'incorrect',
+    attempts: 1,
+    completed: false,
+  },
+});
+check('证据被接受', accepted1 === true);
+const dup = session.recordArtifactEvidence({
+  artifactId: 'inline-1',
+  evidence: {
+    concept_id: 'closures',
+    question_id: 'closures:q_box',
+    interaction_type: 'choice',
+    response: 'a',
+    result: 'incorrect',
+    attempts: 1,
+    completed: false,
+  },
+});
+check('完全相同的证据被去重（不重复计数）', dup === false);
+
+// 同一题再答一次（attempts 变了）应当算新记录
+const accepted2 = session.recordArtifactEvidence({
+  artifactId: 'inline-1',
+  evidence: {
+    concept_id: 'closures',
+    question_id: 'closures:q_box',
+    interaction_type: 'choice',
+    response: 'b',
+    result: 'correct',
+    attempts: 2,
+    completed: true,
+    locked: true,
+  },
+});
+check('同一题再次作答算新证据（不上 closeOut）', accepted2 === true);
+
+const view = session.artifactEvidenceView('inline-1');
+check('证据读回带答题次与结果', view.artifacts[0].evidence.some((e) => e.attempts === 2 && e.result === 'correct'));
+check('证据带 concept 与 question 坐标', view.artifacts[0].evidence.every((e) => e.concept_id === 'closures' && e.question_id === 'closures:q_box'));
+check(
+  '证据读回带口径提醒（不是结论、不由缺记录反推）',
+  /不要据此推断|不是结论|不等于/.test(view.note || ''),
+  view.note,
+);
+
+// 读回视图不含数值化学习量
+const evBlob = JSON.stringify(view);
+check(
+  '证据视图不含分数/百分比字段',
+  !/score|percent|pct|progress_pct/i.test(evBlob),
+);
+
+// ─────────────────────────────────────── 6c. 制品装配：网络边界由宿主钉进文档
+
+section('6c. 制品装配：CSP 由宿主钉进文档');
+const {
+  injectArtifactCsp,
+  injectArtifactRuntime,
+  ARTIFACT_CSP,
+} = await import('../server/artifact.mjs');
+
+// 这条字符串的每一段都是在真实沙盒 srcdoc 里对照量过的（node test/preview/csp-probe.mjs）：
+// 禁 fetch 与外链图片，留内联 script / new Function / data: 图片。这里钉的是"字符串没漂"，
+// 那个脚本钉的是"浏览器真按它执行"。
+check('策略禁掉对外连接', /connect-src\s+'none'/.test(ARTIFACT_CSP), ARTIFACT_CSP);
+check('策略仍允许内联脚本（注入的运行时靠它）', /script-src[^;]*'unsafe-inline'/.test(ARTIFACT_CSP));
+check('策略仍允许 eval（"一个孔"要跑学习者写的代码）', /script-src[^;]*'unsafe-eval'/.test(ARTIFACT_CSP));
+check('策略保留 data: 图片（内嵌素材不该一起禁掉）', /img-src[^;]*data:/.test(ARTIFACT_CSP));
+
+const bare = '<!doctype html><html><head><title>T</title></head><body><p>hi</p></body></html>';
+const withRuntime = injectArtifactRuntime(bare);
+const assembled = injectArtifactCsp(withRuntime);
+check('装配后制品文档里有 CSP meta', /http-equiv="Content-Security-Policy"/.test(assembled));
+check(
+  'CSP meta 落在运行时 <script> 之前（meta 在脚本之后就不约束那个脚本）',
+  assembled.indexOf('Content-Security-Policy') < assembled.indexOf('data-socratic-runtime'),
+);
+check(
+  '装配顺序反过来就失效（先 CSP 后运行时时，meta 落在脚本之后——证明上面那条顺序是真的约束）',
+  injectArtifactRuntime(injectArtifactCsp(bare)).indexOf('Content-Security-Policy') >
+    injectArtifactRuntime(injectArtifactCsp(bare)).indexOf('data-socratic-runtime'),
+);
+check('重复注入不叠第二条策略', injectArtifactCsp(assembled) === assembled);
+check(
+  '制品自己声明了 CSP 就不覆盖（尊重显式声明，别留两条打架）',
+  injectArtifactCsp('<html><head><meta http-equiv="content-security-policy" content="default-src \'none\'">') ===
+    '<html><head><meta http-equiv="content-security-policy" content="default-src \'none\'">',
+);
+check('没有 head 的残缺文档也能钉上', /Content-Security-Policy/.test(injectArtifactCsp('<p>裸片段</p>')));
+
+// 端到端：真的走一次 share_artifact，落盘的那份 HTML 必须带策略（不是只测纯函数）
+const e2e = await session.execShareArtifact({
+  title: '一个孔探针',
+  kind: 'project',
+  html: '<!doctype html><html><head></head><body><textarea data-explore-input></textarea></body></html>',
+});
+const savedHtml = fs.readFileSync(
+  path.join(tmpRoot, 'notebooks', session.notebook.id, e2e.rel),
+  'utf8',
+);
+check('落盘的制品 HTML 带宿主注入的 CSP', /Content-Security-Policy/.test(savedHtml), e2e.rel);
+check('落盘的制品 HTML 同时带运行时', /data-socratic-runtime/.test(savedHtml));
+check(
+  '工具返回值把"一个孔"的规格随结果交给模型（规则余量已经花光，工具层是唯一载体）',
+  (e2e.contract || '').includes('一个孔') && (e2e.contract || '').includes('connect-src'),
+  (e2e.contract || '').slice(0, 60),
+);
+
+// 「一个孔」的回报通道：制品只给现象（期望值 vs 实际值 + 试了几次），判对错仍留在对话里。
+// 这里喂的是上面那份 fixture 真实会发出来的三种 payload。
+const holeId = e2e.artifactId;
+const hole1 = session.recordArtifactEvidence({
+  artifactId: holeId,
+  type: 'state',
+  state: {
+    attempts: 1,
+    filled: false,
+    cases: [
+      { name: '新增行', expected: 'add', actual: 'unknown', ok: false },
+      { name: '删除行', expected: 'del', actual: 'unknown', ok: false },
+    ],
+  },
+});
+check('孔的第一次运行被收下（state 通道）', hole1 === true);
+check('跑不过时上报的是现象：期望值与实际值并存',
+  JSON.stringify(session.liveArtifacts.get(holeId).state.cases).includes('"expected":"add"'));
+session.recordArtifactEvidence({
+  artifactId: holeId,
+  type: 'state',
+  state: { attempts: 2, filled: true, cases: [{ name: '新增行', expected: 'add', actual: 'add', ok: true }] },
+});
+const holeState = session.liveArtifacts.get(holeId).state;
+check('再次上报是浅合并（attempts 覆盖成新值，不留旧副本）', holeState.attempts === 2, JSON.stringify(holeState.attempts));
+check('孔被填上这件事以布尔值落进状态（不是分数）', holeState.filled === true);
+// 一个 20 行的孔工具最自然的写法就是"变了什么报什么"（report({output})），
+// 整替换会把 attempts / cases 全冲没——模型下一轮读回就看到一个凭空失忆的学习者。
+session.recordArtifactEvidence({
+  artifactId: holeId,
+  type: 'state',
+  state: { output: '+++ 新增行 / --- 删除行' },
+});
+const holeState2 = session.liveArtifacts.get(holeId).state;
+check('只报变化字段也不冲掉旧状态（attempts 与 output 并存）',
+  holeState2.attempts === 2 && holeState2.output === '+++ 新增行 / --- 删除行',
+  JSON.stringify(holeState2));
+check('运行失败与填上都是离散事件，模型读得到',
+  session.recordArtifactEvidence({ artifactId: holeId, type: 'event', name: 'hole_filled', at: 't1' }) === true &&
+  session.liveArtifacts.get(holeId).events.some((e) => e.name === 'hole_filled'));
+check('孔的读回视图不含数值化学习量（评分是对话里的事）',
+  !/score|percent|pct|mastery/i.test(JSON.stringify(session.artifactEvidenceView(holeId))));
+
+// ─────────────────────────────────────── 6d. 导演台：场、相位、台面
+
+section('6d. 导演台：Scene 是服务端的数据单元（相位没有时钟）');
+
+const desk = await import('../server/scene.mjs');
+
+// 纯状态机：台子的规则不依赖回合、依赖 HTTP，所以先把这几条钉在函数上。
+const deskBare = desk.emptySceneState();
+check('没开过场时快照一句都不出（空转的兜底句只会让模型去补一刀）',
+  desk.renderSceneSnapshot(deskBare) === '' && desk.renderSceneSnapshot(null) === '');
+let threw = null;
+try { desk.openScene(deskBare, { title: '   ' }); } catch (err) { threw = err.message; }
+check('开场不给场名就拒绝，不说假罪名', /场名/.test(threw || ''), threw);
+threw = null;
+try { desk.setPhase(deskBare, 'teach'); } catch (err) { threw = err.message; }
+check('没开场就换相位被拒（相位是这一场的相位，不是全局计数器）', /还没开场/.test(threw || ''), threw);
+threw = null;
+try { desk.setPhase(desk.openScene(deskBare, { title: '变量的盒子' }), 'explaining'); } catch (err) { threw = err.message; }
+check('未知相位被拒，并把可用的列出来', /未知相位/.test(threw || '') && /teach/.test(threw || ''), threw);
+
+let one = desk.openScene(deskBare, { title: '变量的盒子', phase: 'teach', conceptId: 'var-scope' });
+check('开场即第 1 场，id 稳定可寻', one.current.id === 'scene-01' && one.current.index === 1, JSON.stringify(one.current));
+check('相位与场名都在（前端要能直接说出这一拍）',
+  one.current.phase === 'teach' && one.current.title === '变量的盒子');
+one = desk.placeProp(one, { id: 'box-1', title: '变量的盒子·拖拽', rel: 'artifacts/box-1/index.html' });
+const phaseBefore = one.current.phase;
+one = desk.placeProp(one, { id: 'box-1', title: '变量的盒子·拖拽', rel: 'artifacts/box-1/index.html' });
+check('同一件道具摆两次只占一个位置（重复摆不是错误，不该长出两个台位）',
+  one.current.props.length === 1, JSON.stringify(one.current.props));
+check('摆道具不许顺带改相位（台子不会自己往下演）', one.current.phase === phaseBefore, one.current.phase);
+// 台面只认 props 这一本账。placed / removed 是 2a 早期的废账：没有读者，还会跟 props 打脸
+// （扔掉后 placed 仍说它在台上，放回后 removed 仍说它被撤下）。历史归 progress.artifact_events。
+check('摆上去也不写第二本账（placed / removed 随这一刀一起退役）',
+  !('placed' in one.current) && !('removed' in one.current), Object.keys(one.current).join(','));
+one = desk.removeProp(one, '根本不在台上的那件');
+check('撤下不在台上的道具是 no-op（不报错、也不清空台面）', one.current.props.length === 1);
+// 撤下这一步单独在派生的一份上做：下面还要拿 one 验承台，不许把 box-1 提前撤走
+const offDesk = desk.removeProp(one, 'box-1');
+check('撤下之后记录里只剩 props 空了这一件（不在台上这件事只有一处说得出）',
+  offDesk.current.props.length === 0 && !('placed' in offDesk.current) && !('removed' in offDesk.current),
+  JSON.stringify(offDesk.current));
+
+let two = desk.openScene(one, { title: '第二场：闭包' });
+check('开下一场不清台：上一场的道具还在台上（跨段场景延续在数据层成立）',
+  two.current.props.map((p) => p.id).join(',') === 'box-1', JSON.stringify(two.current.props));
+check('新场记下是从哪一场接过来的', two.current.inheritedFrom === 'scene-01' && two.current.index === 2);
+check('上一场连同它当时的台面进 log，并带上结束时刻（回看才知道接的是哪几件）',
+  two.log.length === 1 && two.log[0].id === 'scene-01' && Boolean(two.log[0].endedAt));
+
+// 照真实盘上的样子写：旧会话的 scene.json 里带着那两本废账，读进来必须被洗掉，
+// 不许跟着内存漂到下一次写盘上。
+const washed = desk.normaliseSceneState({ index: 7, current: { id: 'x', phase: '瞎写的', props: [{ title: '没有 id 的行' }, { id: 'ok' }], placed: '不是数组', removed: ['ok'] }, log: [{ id: 'old', placed: ['x'], removed: [] }] });
+check('读回来的盘按现状洗：坏相位落回 open、没有 id 的道具行丢掉、log 只认数组',
+  washed.current.phase === 'open' && washed.current.props.length === 1 && washed.log.length === 1,
+  JSON.stringify(washed));
+check('旧盘上那两本废账（placed / removed）读进来就洗掉，当前场和历史场都一样',
+  !('placed' in washed.current) && !('removed' in washed.current) &&
+    !('placed' in washed.log[0]) && !('removed' in washed.log[0]),
+  `current=${Object.keys(washed.current)} log[0]=${Object.keys(washed.log[0])}`);
+check('相位词表就是规则里那套教学动作（不自造第二套名字）',
+  desk.PHASES.join(',') === 'open,teach,practice,assess,close', desk.PHASES.join(','));
+// 无时钟是这一刀的立论本身：出现计时器就是自己打自己的脸。
+// 只扫真代码——文件头部那句「不许 setTimeout」正是给这条立论用的中文说明，
+// 拿注释当证据会把钉子钉在散文上（改一个字就红，红得毫无意义）。
+const sceneCode = fs
+  .readFileSync(new URL('../server/scene.mjs', import.meta.url), 'utf8')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^[ \t]*\/\/.*$/gm, '');
+check('scene.mjs 里没有任何计时器（相位只能被显式推进）',
+  !/setTimeout\(|setInterval\(|Date\.now\(/.test(sceneCode),
+  sceneCode.split('\n').filter((l) => /setTimeout\(|setInterval\(|Date\.now\(/.test(l)).join(' | '));
+const deskSnapshot = desk.renderSceneSnapshot(two);
+check('快照说清第几场、场名、中文相位、台上道具（不写"几件"这种数值，免撞 Invariant 4 的黑名单）',
+  deskSnapshot.includes('第 2 场') && deskSnapshot.includes('第二场：闭包') &&
+    deskSnapshot.includes('开场') && deskSnapshot.includes('「变量的盒子·拖拽」(box-1)') &&
+    !/[0-9]+\s*件/.test(deskSnapshot),
+  deskSnapshot);
+check('快照把"没有时钟"讲给模型（学习者的沉默不是换场信号）',
+  deskSnapshot.includes('相位没有时钟'));
+
+// 承台这一句是转场条在服务端那一侧的对应物：模型说"台上道具"时得知道哪几件是接过来的、
+// 它们的画面在哪才看得见。不说清去向，模型就会讲成"已经摊在你眼前"，而画面上那一场是收起来的。
+check('快照点明哪几件是接过来的、从第几场接的（承台账要模型也读得到）',
+  deskSnapshot.includes('承台：「变量的盒子·拖拽」(box-1)是从第 1 场接过来的'), deskSnapshot);
+check('并说清它的画面在哪看得见：本场只有一行转场条，点开那一场才有画面',
+  /转场条/.test(deskSnapshot) && /点开那一场/.test(deskSnapshot), deskSnapshot);
+check('不许把接过来的那件说成已经摊在眼前（快照里这句话只能以否定形式出现）',
+  deskSnapshot.includes('别说成"已经摊在你眼前"'), deskSnapshot);
+check('第一场没得接 ⇒ 不出承台那一句（没接住东西就不许演这一出）',
+  !desk.renderSceneSnapshot(one).includes('承台'), desk.renderSceneSnapshot(one));
+const ownProp = desk.placeProp(two, { id: 'own-1', title: '本场新摆的那件', rel: null });
+const ownSnapshot = desk.renderSceneSnapshot(ownProp);
+check('本场自己摆上台的那件不进承台句（判据是"和上一场同一件"，不是"台上的每一件"）',
+  /台上道具：.*本场新摆的那件/.test(ownSnapshot) && !/承台：[^。\n]*本场新摆的那件/.test(ownSnapshot), ownSnapshot);
+// 认的是"接自哪一场"，不是"log 里排第一的那场"，也不是"最老那件"：三段连开、中间那场新摆一件，
+// 两种偷懒的写法都会把第 3 场的承台报成第 1 场、并把第 2 场那件漏掉。
+const three = desk.openScene(ownProp, { title: '第三场：作用域链' });
+const threeSnapshot = desk.renderSceneSnapshot(three);
+check('三段连开：承台报的是它接自的那一场（第 2 场），不是历史里最老的那场',
+  threeSnapshot.includes('是从第 2 场接过来的') && !threeSnapshot.includes('是从第 1 场接过来'), threeSnapshot);
+check('上一场自己新摆的那件到第三场也算承台（判据是本场 ∩ 上一场，不是"从第 1 场活下来的那件"）',
+  /承台：[^。\n]*本场新摆的那件[^。\n]*是从第 2 场/.test(threeSnapshot)
+  && /承台：[^。\n]*变量的盒子·拖拽/.test(threeSnapshot), threeSnapshot);
+
+// 走真回合：台面要落盘、消息要带场 id、SSE 要推 scene——这三样少了任何一个，刷新后端面就没了。
+const nbDesk = store.getNotebook(store.createNotebook({ topic: '导演台探针', goal: '看场怎么落盘', pace: 'normal' }).id);
+// 两件盘上已有的道具：一件被学习者扔掉了（摆不回来），一件还在（能摆上台）。
+const retiredBefore = store.saveArtifact(nbDesk.id, { title: '上一场的道具', html: '<p>old</p>', kind: 'interactive' });
+store.setArtifactLifetime(nbDesk.id, retiredBefore.id, true);
+const liveBefore = store.saveArtifact(nbDesk.id, { title: '还能用的旧道具', html: '<p>keep</p>', kind: 'interactive' });
+const deskEvents = [];
+const deskMessages = [];
+let deskSessionRef = null;
+faux.setResponses([
+  fauxAssistantMessage([
+    fauxText('先开一场。'),
+    fauxToolCall(TOOL_NAMES.RUN_SCENE, { action: 'open', title: '变量的盒子', phase: 'open', concept_id: 'var-scope' }),
+  ], { stopReason: 'toolUse' }),
+  fauxAssistantMessage([
+    fauxToolCall(TOOL_NAMES.RUN_SCENE, { action: 'place', artifact_id: retiredBefore.id }),
+    fauxToolCall(TOOL_NAMES.RUN_SCENE, { action: 'place', artifact_id: 'no-such-prop' }),
+    fauxToolCall(TOOL_NAMES.RUN_SCENE, { action: 'frobnicate' }),
+  ], { stopReason: 'toolUse' }),
+  fauxAssistantMessage([
+    fauxToolCall(TOOL_NAMES.RUN_SCENE, { action: 'place', artifact_id: liveBefore.id }),
+  ], { stopReason: 'toolUse' }),
+  fauxAssistantMessage([
+    fauxToolCall(TOOL_NAMES.SHARE_ARTIFACT, { title: '盒子里的值', kind: 'illustration', html: '<p>值放进盒子</p>' }),
+  ], { stopReason: 'toolUse' }),
+  fauxAssistantMessage([
+    fauxToolCall(TOOL_NAMES.RUN_SCENE, { action: 'phase', phase: 'practice' }),
+  ], { stopReason: 'toolUse' }),
+  fauxAssistantMessage([
+    fauxToolCall(TOOL_NAMES.RUN_SCENE, { action: 'place', artifact_id: liveBefore.id }),
+    fauxToolCall(TOOL_NAMES.RUN_SCENE, { action: 'phase', phase: 'not-a-phase' }),
+  ], { stopReason: 'toolUse' }),
+  fauxAssistantMessage([
+    fauxToolCall(TOOL_NAMES.RUN_SCENE, { action: 'open', title: '第二场：闭包' }),
+  ], { stopReason: 'toolUse' }),
+  fauxAssistantMessage([fauxText('两场之间道具没下台。')]),
+]);
+const deskTurn = await runTurn({
+  registry,
+  notebook: store.getNotebook(nbDesk.id),
+  history: [{ role: 'user', content: '开一局看导演台', timestamp: Date.now() }],
+  modelRef: { provider: 'faux', model: fauxModel.id },
+  emit: (e) => deskEvents.push(e),
+  signal: new AbortController().signal,
+  systemPrompt: '（测试用）',
+  // 抓的是每一次 upsert 时的快照：宿主传过来的是同一个对象引用，不克隆就看不见"打过之后有没有被改"
+  onPersistMessage: (m) => deskMessages.push({ ...m }),
+  onSession: (s) => { deskSessionRef = s; },
+});
+const deskSceneNow = store.readSceneState(nbDesk.id);
+const deskProps = (deskSceneNow.current?.props || []).map((p) => p.title);
+const sceneEvents = deskEvents.filter((e) => e.type === 'scene');
+check('scene 事件推给前端恰好六次：开场、摆旧道具、交付自动上台、换相位、再摆一次、换场（被拒的四次不许推）',
+  sceneEvents.length === 6, `实到 ${sceneEvents.length} 次`);
+check('台面落到 scene.json（自己一个文件，跟 todos 同类）',
+  deskSceneNow.current?.title === '第二场：闭包' && deskProps.length === 2 &&
+    fs.existsSync(path.join(NOTEBOOKS_DIR, nbDesk.id, 'scene.json')),
+  JSON.stringify(deskSceneNow.current));
+check('progress.json 里没有被掺进台面字段',
+  !JSON.stringify(store.getNotebook(nbDesk.id).progress).includes('props'));
+const refused = deskEvents.filter((e) => e.type === 'tool_end' && e.ok === false);
+check('被学习者扔掉的道具摆不上台（放回是他的手势，工具拒绝得明明白白）',
+  refused.some((e) => /被学习者扔掉了/.test(JSON.stringify(e.result))), JSON.stringify(refused.map((e) => e.result)));
+check('manifest 里没有的 id 直接拒，不退化成"凭空多出一件道具"',
+  refused.some((e) => /没有这件道具/.test(JSON.stringify(e.result))));
+check('未知 action 拒绝并列出可用的四种',
+  refused.some((e) => /未知 action/.test(JSON.stringify(e.result)) && /remove/.test(JSON.stringify(e.result))));
+check('非法相位被拒，台面不许写成一句瞎话接着演',
+  refused.some((e) => /未知相位/.test(JSON.stringify(e.result))));
+// 相位只能被 run_scene 那一手推进：摆道具是摆道具，不许顺手把拍子改了（那就是藏了个时钟）。
+const phaseAfterPlace = sceneEvents.filter((e) => e.scene?.phase === 'practice').length;
+check('摆旧道具把相位定在动手（practice）之后，再摆一次也没把相位改回讲授',
+  phaseAfterPlace === 2 && sceneEvents[sceneEvents.length - 2].scene.phase === 'practice',
+  JSON.stringify(sceneEvents.map((e) => e.scene?.phase)));
+check('摆同一件第二次不长出台位（台面还是那两件，不是三件）',
+  deskProps.length === 2 && new Set(deskProps).size === 2, JSON.stringify(deskProps));
+const twoOnStage = (list) => (list || []).length === 2 &&
+  list.some((t) => t === '还能用的旧道具') && list.some((t) => t === '盒子里的值');
+check('跨场不清台：第二场一开始就带着第一场那两件（含这一场刚交付的那件）',
+  deskSceneNow.log.length === 1 && twoOnStage(deskProps) &&
+    deskSceneNow.log[0].props?.map((p) => p.id).join(',') === deskSceneNow.current.props.map((p) => p.id).join(','),
+  JSON.stringify({ 本场: deskProps, 上场: deskSceneNow.log[0]?.props?.map((p) => p.title) }));
+check('每一条落盘消息都带 sceneId，且落在它开始那一场里',
+  deskMessages.length > 0 && deskMessages.every((m) => typeof m.sceneId === 'string') &&
+    deskMessages[0].sceneId === 'scene-01' &&
+    deskMessages[deskMessages.length - 1].sceneId === 'scene-02',
+  JSON.stringify(deskMessages.map((m) => [m.msgId, m.sceneId])));
+// 同一条消息被反复 upsert（一步没正文就挂到上一条上），场 id 只许打一次：
+// 后一场把它重标，上一场的正文就从上一场的格子里消失了。
+const migrated = new Map();
+for (const m of deskMessages) {
+  if (!migrated.has(m.msgId)) migrated.set(m.msgId, new Set());
+  migrated.get(m.msgId).add(m.sceneId);
+}
+check('同一条消息不许换场（跨场的正文不能被后一场吃掉）',
+  [...migrated.values()].every((ids) => ids.size === 1),
+  JSON.stringify([...migrated].map(([k, v]) => [k, [...v]])));
+// 后面第 7b 节才正名导入 buildSystemPrompt，这里用别名（同一模块、同一份缓存）。
+const { buildSystemPrompt: buildPromptForDesk } = await import('../server/prompt.mjs');
+const deskPrompt = buildPromptForDesk(store.getNotebook(nbDesk.id));
+check('下一回合的 system prompt 里读得到当前这一场（续演不靠记忆）',
+  deskPrompt.includes('## 导演台（第 2 场）') && deskPrompt.includes('第二场：闭包'));
+check('run_scene 在注册给模型的清单里，且带 action 参数',
+  buildTools().some((t) => t.name === TOOL_NAMES.RUN_SCENE &&
+    JSON.stringify(t.parameters).includes('action')));
+
+// 每一手都要当场落盘：只在回合末尾统一写一次的话，中断就把整个台面丢了。
+// 直接调工具、紧接着读盘——中间没有第二手会替它把状态补写回去。
+const assessRet = deskSessionRef.execRunScene({ action: 'phase', phase: 'assess' });
+const sceneAfterAssess = store.readSceneState(nbDesk.id);
+check('换相位这一次调用自己就把盘写了（不靠回合末尾统一落盘）',
+  assessRet.ok === true && sceneAfterAssess.current.phase === 'assess' &&
+    sceneAfterAssess.current.title === '第二场：闭包',
+  JSON.stringify(sceneAfterAssess.current));
+check('换相位不搬道具：台上还是那两件',
+  twoOnStage(sceneAfterAssess.current.props.map((p) => p.title)),
+  JSON.stringify(sceneAfterAssess.current.props));
+deskSessionRef.execRunScene({ action: 'open', title: '第三场：回收' });
+const sceneAfterThird = store.readSceneState(nbDesk.id);
+check('第三场归档第二场：log 两条、编号连续',
+  sceneAfterThird.current.index === 3 && sceneAfterThird.log.length === 2 &&
+    sceneAfterThird.log.map((s) => s.index).join(',') === '1,2',
+  JSON.stringify({ index: sceneAfterThird.current?.index, log: sceneAfterThird.log.length }));
+
+// ─────────────────────────────────────── 6e. 台面只有一个写字的人
+//
+// 后台分身拿的是**派出那一刻**的 notebook 克隆。让它写 scene.json，就等于用一张旧台面
+// 盖掉老师在这之后的每一手——实测过：第二场和它台上的道具一起消失，盘退回第一场。
+// 所以：分身能交制品（文件、manifest 都要有），但上台这一手归宿主——由宿主读最新的盘再摆。
+
+section('6e. 台面只有一个写字的人：分身不写 scene.json，宿主负责上台');
+
+const childNotebook = store.getNotebook(nbDesk.id);
+const sceneBeforeChild = JSON.stringify(store.readSceneState(nbDesk.id));
+const childSession = new TeachingSession({
+  registry,
+  notebook: structuredClone(childNotebook),
+  emit: () => {},
+  systemPrompt: '',
+  deskWriter: false,
+});
+const childDelivered = await childSession.execShareArtifact({
+  title: '分身做完的大件',
+  kind: 'game',
+  html: '<html><head></head><body>big</body></html>',
+});
+check('分身交付的制品照样落盘（有地址、进得了 manifest）',
+  childDelivered.ok === true && Boolean(childDelivered.rel) &&
+    (store.getNotebook(nbDesk.id).artifacts || []).some((a) => a.id === childDelivered.artifactId),
+  JSON.stringify(childDelivered).slice(0, 200));
+check('分身不写父会话的台面：scene.json 一个字节都不动',
+  JSON.stringify(store.readSceneState(nbDesk.id)) === sceneBeforeChild,
+  JSON.stringify(store.readSceneState(nbDesk.id).current));
+check('分身那一份返回值说清"上台归宿主"，不谎称已经摆在台上',
+  /宿主/.test(String(childDelivered.desk)) && !/已摆上/.test(String(childDelivered.desk)),
+  String(childDelivered.desk));
+
+// 宿主这一手：读**最新**的盘再摆，所以它摆的是当下这一场，不是分身记忆里那一场。
+const hostPlaced = store.placeOnDesk(nbDesk.id, {
+  id: childDelivered.artifactId,
+  title: '分身做完的大件',
+  rel: childDelivered.rel,
+});
+const sceneAfterHost = store.readSceneState(nbDesk.id);
+check('宿主把分身做好的大件摆到当前这一场的台上（跨场延续：摆进第三场，不是第一场）',
+  hostPlaced.placed === true && sceneAfterHost.current.title === '第三场：回收' &&
+    sceneAfterHost.current.props.some((p) => p.id === childDelivered.artifactId),
+  JSON.stringify({ 场: sceneAfterHost.current.title, props: sceneAfterHost.current.props.map((p) => p.id) }));
+check('摆完的台面仍是那一本账（不多开第二本）',
+  !('placed' in sceneAfterHost.current) && !('removed' in sceneAfterHost.current));
+
+const bareDesk = store.createNotebook({ topic: '没开场的台', goal: null, pace: 'normal' }).id;
+const hostNoScene = store.placeOnDesk(bareDesk, { id: 'x-1', title: 'X', rel: 'artifacts/x-1/index.html' });
+check('还没开过场时宿主也不替他开场：placed=false，盘上一个文件都不写',
+  hostNoScene.placed === false && hostNoScene.scene.current === null &&
+    !fs.existsSync(path.join(NOTEBOOKS_DIR, bareDesk, 'scene.json')),
+  JSON.stringify(hostNoScene.scene));
+
+const serveSrcForDesk = fs.readFileSync(new URL('../server/serve.mjs', import.meta.url), 'utf8');
+check('task_artifact 分支接的是宿主上台这一手（不是让分身自己写盘）',
+  /task_artifact[\s\S]{0,1600}placeOnDesk\(/.test(serveSrcForDesk), 'serve.mjs 的 task_artifact 分支里找不到 placeOnDesk');
+check('活回合内存里那一份也跟上（跟 lifetime 那一条同纪律：不然它下一次往旧台面上摆）',
+  /placeOnDesk\([\s\S]{0,600}\.scene = /.test(serveSrcForDesk), '上台后没同步活回合的 scene');
+
+// ── 措辞：画布这一页在 2b 就删了，工具描述还承诺"做好自动出现在画布上"
+//    是幻影能力（模型会等一个不会发生的动作）。返回值那一句在第 7h 节钉（那儿才有任务运行器）。
+const shareToolDesc = JSON.stringify(buildTools().find((t) => t.name === TOOL_NAMES.PREPARE_ARTIFACT || {}));
+check('prepare_artifact 的工具描述不再写"上画布"，改说摆上台',
+  !/画布/.test(shareToolDesc), shareToolDesc.slice(0, 160));
+// 整份注册清单一起扫：任何一条描述留着"画布"，模型就等一个不会发生的动作。
+// 只扫工具描述与 adapter——rules/artifact.md 里那两处说的是 SVG 画布，是正当用法。
+check('注册给模型的每一条工具描述里都没有"画布"这一幻影页',
+  !/画布/.test(JSON.stringify(buildTools())),
+  JSON.stringify(buildTools()).split('画布').length - 1);
+const adapterSrcForDesk = fs.readFileSync(new URL('../server/prompt.mjs', import.meta.url), 'utf8');
+check('环境适配与状态快照里也不再提"画布"（道具的去处是台面）',
+  !/画布/.test(adapterSrcForDesk), adapterSrcForDesk.split('\n').filter((l) => l.includes('画布')).join(' | ').slice(0, 160));
+// 分身那一侧的写权开关只在一个地方接上：tasks.mjs 调 runTurn 时传 deskWriter:false。
+// 光测 TeachingSession 证不了生产路径接了线——这条正是"单元绿、组合根没连"那个老坑的形状。
+const tasksSrcForDesk = fs.readFileSync(new URL('../server/tasks.mjs', import.meta.url), 'utf8');
+check('分身走的那条 runTurn 调用真的关掉了台面写权（deskWriter:false 传到了）',
+  /runTurn\(\{[\s\S]{0,900}deskWriter: false/.test(tasksSrcForDesk), 'tasks.mjs 里没把 deskWriter 传给 runTurn');
+
+// ── 决策那一刻的提醒：切到动手/检验而台面是空的，工具返回值要点名（规则里的提醒太弱）
+const emptyDeskNb = store.getNotebook(bareDesk);
+const emptyDeskSession = new TeachingSession({
+  registry, notebook: emptyDeskNb, emit: () => {}, systemPrompt: '',
+});
+emptyDeskSession.execRunScene({ action: 'open', title: '只有嘴的一台戏' });
+const toPractice = emptyDeskSession.execRunScene({ action: 'phase', phase: 'practice' });
+check('台面空着切进"动手"：工具返回值点名这一拍没有可操作的东西，并给出路',
+  toPractice.ok === true && /台上.*没有|没有.*道具/.test(toPractice.note) && /share_artifact/.test(toPractice.note),
+  toPractice.note);
+check('提醒必须同时给出"这一拍可以不需要道具"的出口（不然模型会造装饰性道具凑台面）',
+  /不需要|不用为摆而摆/.test(toPractice.note), toPractice.note);
+const toAssess = emptyDeskSession.execRunScene({ action: 'phase', phase: 'assess' });
+check('空台面切进"检验"同样提醒（这一拍更该有件能操作的东西）',
+  /share_artifact/.test(toAssess.note), toAssess.note);
+const toTeach = emptyDeskSession.execRunScene({ action: 'phase', phase: 'teach' });
+check('讲授相位不唠叨（只有需要动手的拍子才提台面）',
+  !/share_artifact/.test(toTeach.note), toTeach.note);
+check('台上有东西就不许再唠叨（提醒是状态不是口头禅）',
+  !/share_artifact/.test(assessRet.note), assessRet.note);
+
+// ── 讲稿槽这条契约**只有工具层一个载体**（2026-10-05 规则余量已花光，一个字都没进 artifact.md）。
+// 所以这条说法的兑现（有带⇒落进带里，没带⇒顺排在画面下面）必须在这里验：光在源码里搜那句话不算——模型读的是这一刻的返回值，
+// 拼漏一句契约就整条丢，而页面那边照常把讲解浮在右上角（静默失效，没人报错）。
+const stagedDelivery = await emptyDeskSession.execShareArtifact({
+  title: '摊在台面上的这一件',
+  html: '<html><body><div data-narration-slot></div></body></html>',
+});
+check('开了场再交制品：返回值的台面那句点名带子（怎么摆这屏的说法真随结果到手）',
+  /data-narration-slot/.test(String(stagedDelivery.desk)), String(stagedDelivery.desk).slice(0, 120));
+check('契约提示里【讲稿槽】那一节跟着一起到（留多宽、留几条只有这一份说明书）',
+  /【讲稿槽】/.test(String(stagedDelivery.contract)), String(stagedDelivery.contract).indexOf('【讲稿槽】'));
+check('分身那一份不许冒充台面：不带讲稿槽那句（它没有 current 那一场）',
+  !/data-narration-slot/.test(String(childDelivered.desk)), String(childDelivered.desk).slice(0, 80));
+
+// ─────────────────────────────────────── 7. 工具 schema 可校验
+
+section('7. 工具 schema');
+const tools = buildTools();
+check('工具数量与设计一致', tools.length === 19, String(tools.length));
+check('每个工具都有 TypeBox schema', tools.every((t) => t.parameters && typeof t.parameters === 'object'));
+check('工具名唯一', new Set(tools.map((t) => t.name)).size === tools.length);
+check(
+  '制品证据读回工具在场（页面型制品的唯一证据通道）',
+  tools.some((t) => t.name === TOOL_NAMES.READ_ARTIFACT),
+);
+
+// ask 的选项：模型经常裸写字符串（`options: ["能读到","读不到"]`），而参数校验发生在
+// 我们的 execAsk **之前**（pi-ai 的 validateToolCall），所以只认对象时的表现是
+// "每发起一次提问组件都先红一次、第二次才对"——白烧一个来回，会话里还留一张红卡。
+// 这两种写法都必须过校验，往下游统一成 {label, description}。
+const askTool = tools.find((t) => t.name === TOOL_NAMES.ASK);
+const validateAsk = (options) => {
+  try {
+    return {
+      ok: true,
+      args: validateToolCall([askTool], {
+        name: TOOL_NAMES.ASK,
+        arguments: { id: 'closures:q_validate', concept_id: 'closures', question: '外层 return 后还能读到那个变量吗？', options },
+      }),
+    };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+};
+const stringOpts = validateAsk(['能读到', '读不到']);
+check('字符串选项也过得了参数校验', stringOpts.ok, stringOpts.error || '');
+const mixedOpts = validateAsk([{ label: '能读到', description: '握着那个变量' }, '读不到']);
+check('对象写法照旧过得了校验（混着写也算）', mixedOpts.ok, mixedOpts.error || '');
+// concept_id 是必填：必填由 provider 的参数校验保证，比在提示词里叮嘱一句可靠
+let missingConcept = true;
+try {
+  validateToolCall([askTool], { name: TOOL_NAMES.ASK, arguments: { id: 'q_no_concept', question: '这一格属于哪个概念？' } });
+} catch {
+  missingConcept = false;
+}
+check('缺 concept_id 过不了参数校验', missingConcept === false);
+check(
+  '两种写法出去的都是 {label, description}',
+  JSON.stringify(normalizeAskOptions(mixedOpts.ok ? mixedOpts.args.options : null)) ===
+    '[{"label":"能读到","description":"握着那个变量"},{"label":"读不到"}]',
+  JSON.stringify(normalizeAskOptions(mixedOpts.ok ? mixedOpts.args.options : null)),
+);
+check(
+  '空标签的选项丢掉，不给前端渲染出一条空白行',
+  JSON.stringify(normalizeAskOptions(['', '   ', { label: ' 甲 ' }, { label: '' }])) === '[{"label":"甲"}]',
+  JSON.stringify(normalizeAskOptions(['', '   ', { label: ' 甲 ' }, { label: '' }])),
+);
+check('没给选项（开放式提问）归一成空数组', JSON.stringify(normalizeAskOptions(undefined)) === '[]');
+
+// id 只是"这张卡对应哪个等待中的提问"的传输把手，答完就没用了；真正承重的是 concept_id
+// （学习者一答，应用凭它把那一格从 Unknown 记成 Seen）。以前 schema 把 id 判成必填，
+// 模型漏填一次就是一次红卡——而 execAsk 本来就会自己补号，等于校验层挡了代码能补的东西。
+let missingIdErr = '';
+let missingIdOk = true;
+try {
+  validateToolCall([askTool], {
+    name: TOOL_NAMES.ASK,
+    arguments: { concept_id: 'none', header: '学习范围', question: '学习范围确认：按这个顺序推进吗？', options: ['就按这个顺序来'] },
+  });
+} catch (e) {
+  missingIdOk = false;
+  missingIdErr = String(e.message || e);
+}
+check('缺 id 也过得了参数校验（不许再为它烧一张红卡）', missingIdOk === true, missingIdErr);
+
+// 缺 id 时补出来的号必须真能用。两问同步连着发（真回合里同一毫秒连发两次完全可能）：
+// 把手一旦撞车，第一张卡就永远等不到作答。
+const twinA = session.execAsk({ concept_id: 'none', question: '同毫秒第一发', options: [{ label: '甲' }] });
+const idA = session.askedQuestions.at(-1);
+const twinB = session.execAsk({ concept_id: 'none', question: '同毫秒第二发', options: [{ label: '乙' }] });
+const idB = session.askedQuestions.at(-1);
+check('同一毫秒连发两问都不给 id，补出来的两个把手不撞车', idA !== idB, `${idA} / ${idB}`);
+session.answer(idB, { selected: ['乙'], text: '' });
+session.answer(idA, { selected: ['甲'], text: '' });
+const bothSettled = await Promise.race([
+  Promise.all([twinA, twinB]).then(() => 'ok'),
+  new Promise((r) => setTimeout(() => r('一张卡永远等不到作答'), 1000)),
+]);
+check('两张卡各自收各自的作答（答错把手就卡住）', bothSettled === 'ok', bothSettled);
+const held = session.execAsk({ id: 'gate1:confirm_order', concept_id: 'none', question: '给了 id 就用我给的？', options: [{ label: '用' }] });
+check('模型给了稳定 id 就照用，不覆盖成自动补的号', session.askedQuestions.at(-1) === 'gate1:confirm_order', session.askedQuestions.at(-1));
+session.answer('gate1:confirm_order', { selected: ['用'], text: '' });
+await held;
+
+// ─────────────────────────────────────── 7b. 证据进入 system prompt
+
+section('7b. 制品证据进入 system prompt');
+const { buildSystemPrompt, renderStateSnapshot } = await import('../server/prompt.mjs');
+const promptWithEvidence = buildSystemPrompt({
+  id: meta.id,
+  title: 'JS 闭包',
+  graph: result.graph,
+  progress: {
+    ...result.progress,
+    artifact_evidence: [
+      {
+        artifact_id: 'inline-1-abc',
+        concept_id: 'closures',
+        question_id: 'closures:q_box_count',
+        interaction_type: 'choice',
+        response: 'three',
+        result: 'correct',
+        attempts: 2,
+        completed: true,
+        locked: true,
+        at: new Date().toISOString(),
+      },
+    ],
+  },
+  patches: { patches: [] },
+});
+check('证据区块出现在 system prompt', promptWithEvidence.includes('学习者在制品（页面型交互物件）里做过的操作'));
+check('题号出现在 prompt', promptWithEvidence.includes('closures:q_box_count'));
+check('作答内容出现在 prompt', promptWithEvidence.includes('three'));
+check('制品契约出现在 prompt', promptWithEvidence.includes('data-interaction') && promptWithEvidence.includes('SocraticStudio.report'));
+check('下行契约出现在 prompt', promptWithEvidence.includes('push_artifact_command'));
+check('证据口径提醒到位', promptWithEvidence.includes('不是结论') && promptWithEvidence.includes('没有记录'));
+
+// ── 回马枪：最后一次判错、之后没判对的题要变成下一回合的重测候选 ──
+const ev = (qid, result_, extra = {}) => ({
+  artifact_id: 'inline-1',
+  concept_id: 'closures',
+  question_id: qid,
+  interaction_type: 'choice',
+  response: 'three',
+  result: result_,
+  attempts: 2,
+  completed: result_ === 'correct',
+  locked: false,
+  ...extra,
+});
+const retestSnapshot = renderStateSnapshot({
+  id: meta.id,
+  graph: result.graph,
+  progress: {
+    ...result.progress,
+    notes: [],
+    artifact_evidence: [
+      ev('closures:q_a', 'incorrect'),
+      ev('closures:q_b', 'incorrect'),
+      ev('closures:q_c', 'incorrect'),
+      ev('closures:q_d', 'incorrect'),
+      ev('closures:q_recovered', 'incorrect'),
+      ev('closures:q_recovered', 'correct'),
+      ev('closures:q_still_wrong', 'incorrect'),
+      ev('closures:q_still_wrong', 'incorrect', { attempts: 3, response: 'two' }),
+    ],
+  },
+  patches: { patches: [] },
+});
+const retestBlock = retestSnapshot.slice(retestSnapshot.indexOf('回马枪候选'));
+check('回马枪候选区块出现', retestSnapshot.includes('回马枪候选'));
+check('仍判错的题进候选', retestBlock.includes('closures:q_still_wrong'));
+check(
+  '候选写明错过几次与最后一次作答',
+  /错过 3 次[^\n]*「two」/.test(retestBlock),
+  retestBlock.split('\n').find((l) => l.includes('still_wrong')),
+);
+check('后来判对的题不在候选里', !retestBlock.includes('q_recovered'));
+const retestListed = (retestBlock.match(/^- closures:/gm) || []).length;
+check('候选最多 3 条', retestListed === 3, `${retestListed} 条`);
+check(
+  '最近判错的那条排在最前',
+  retestBlock.indexOf('q_still_wrong') < retestBlock.indexOf('closures:q_d'),
+);
+check('重测指令要求换说法并限时', retestBlock.includes('换一种说法') && retestBlock.includes('30 秒'));
+check(
+  '候选区块不产出掌握式结论',
+  !/已掌握|掌握度|mastery|百分比|[0-9]+\s*%/i.test(retestBlock),
+);
+
+// 新增能力的宿主映射与快照都要进 prompt
+check('prompt 有点名 present_plan', promptWithEvidence.includes('present_plan'));
+check('prompt 有点名 update_todo_list', promptWithEvidence.includes('update_todo_list'));
+check('prompt 有点名 spawn_subagent', promptWithEvidence.includes('spawn_subagent'));
+check('prompt 有点名 run_background_task', promptWithEvidence.includes('run_background_task'));
+const promptWithTodos = buildSystemPrompt({
+  id: meta.id,
+  title: 'JS 闭包',
+  graph: result.graph,
+  progress: { ...result.progress, artifact_evidence: [] },
+  patches: { patches: [] },
+  todos: [
+    { id: 'a', content: '建概念结构', status: 'completed' },
+    { id: 'b', content: '出探针', status: 'in_progress' },
+  ],
+});
+check('待办快照进 prompt', promptWithTodos.includes('本轮待办（学习者右侧可见，1/2 已完成）'));
+check('待办条目进 prompt', promptWithTodos.includes('[>] 出探针'));
+
+// 注意：不改用整份 prompt 匹配——规则原文里本来就写着这些禁令词（Invariant 4 的违规指纹）。
+// 要断言的是**我们自己生成的状态快照**不产出数值化学习量。
+const snapshot = renderStateSnapshot({
+  id: meta.id,
+  graph: result.graph,
+  progress: { ...result.progress, artifact_evidence: [], notes: [] },
+  patches: { patches: [] },
+});
+check(
+  '状态快照里没有数值化学习量',
+  !/(百分比|进度条|[0-9]+\s*%|score|百分制|等级认证|星星)/i.test(snapshot),
+);
+
+const promptNoEvidence = buildSystemPrompt({
+  id: meta.id,
+  graph: result.graph,
+  progress: { ...result.progress, artifact_evidence: [], artifact_state: {}, artifact_events: [] },
+  patches: { patches: [] },
+});
+check(
+  '无证据时也明确"没有记录不等于没做"',
+  promptNoEvidence.includes('没有记录不等于学习者没做'),
+  'prompt 里应有三类都为空时的兜底句',
+);
+check(
+  '没有判错证据时不出回马枪候选区块',
+  !snapshot.includes('回马枪候选') && !promptNoEvidence.includes('回马枪候选'),
+);
+
+// 学习者扔掉一件道具，模型读到的应该是"工作集变了"，不是"他对这个概念撒手了"。
+// 这一句只在他真撤过的快照里出现——常驻的免责声明也是噪声（同取景条那条账）。
+const retiredEvents = [
+  { name: 'submitted', payload: { text: '我试了三次' }, at: '2026-10-04T10:00:00.000Z' },
+  { name: 'artifact_retired', payload: { title: '正则试错场', kind: 'interactive' }, at: '2026-10-04T10:05:00.000Z' },
+];
+const snapshotRetired = renderStateSnapshot({
+  id: meta.id,
+  graph: result.graph,
+  progress: { ...result.progress, artifact_evidence: [], artifact_state: {}, notes: [], artifact_events: retiredEvents },
+  patches: { patches: [] },
+});
+check('撤下道具这件事本身照旧进快照（事实不许被解释吞掉）',
+  snapshotRetired.includes('- artifact_retired') && snapshotRetired.includes('正则试错场'),
+  snapshotRetired.split('artifact_retired')[1]?.slice(0, 60));
+check('真撤过时才解释一句：这是工作集的动作，不是去留',
+  snapshotRetired.includes('不说明他对这个概念的去留') && snapshotRetired.includes('别拿去劝'));
+const snapshotNoRetire = renderStateSnapshot({
+  id: meta.id,
+  graph: result.graph,
+  progress: { ...result.progress, artifact_evidence: [], artifact_state: {}, notes: [], artifact_events: [retiredEvents[0]] },
+  patches: { patches: [] },
+});
+check('没撤过时不许摆那句解释（没说错对象的提示比不提示更糟）',
+  !snapshotNoRetire.includes('别拿去劝'), '常驻说明也是噪声');
+
+// ─────────────────────────────────────── 7d. 教学规则本体在 server/rules/
+
+section('7d. 教学规则在 server/rules/，运行时注入');
+const { loadRulesText } = await import('../server/prompt.mjs');
+const { RULES_DIR } = await import('../server/config.mjs');
+check('RULES_DIR 指向 server/rules', RULES_DIR.endsWith(path.join('server', 'rules')), RULES_DIR);
+const rulesBlob = loadRulesText({ force: true });
+// 规则不是可独立加载的 skill：正文里不该再有宿主加载器用的 frontmatter 清单
+check('注入的规则不带 frontmatter 清单',
+  !rulesBlob.includes('name: socratic-studio') && !rulesBlob.includes('生成课件'),
+  'frontmatter 属于 skill 包装，吸收进应用后应整体删除');
+check('main.md 正文标题在场', rulesBlob.includes('# Socratic Studio'));
+check(
+  '回马枪的门写进规则（不是只靠快照里那句话）',
+  rulesBlob.includes('回马枪') && rulesBlob.includes('一条答对不等于掌握'),
+);
+check('main.md 被注入（总则）', rulesBlob.includes('===== main.md —'));
+for (const [rel, label] of [
+  ['protocols.md', '协议 / 不变量'],
+  ['runtime.md', 'Runtime'],
+  ['pedagogy.md', '学科变体'],
+  ['artifact.md', '制品'],
+]) {
+  check(`${rel} 被注入（${label}）`, rulesBlob.includes(`===== ${rel} —`));
+}
+// 规则本体真的在场，不是空文件
+check('状态机规则在场', rulesBlob.includes('Unknown') && rulesBlob.includes('Applied'));
+check('observed 证据口径在场', rulesBlob.includes('observed') && rulesBlob.includes('inferred'));
+check('Invariant 1/4 在场', rulesBlob.includes('Invariant 1') && rulesBlob.includes('Invariant 4'));
+check('制品回传契约在场', rulesBlob.includes('SocraticStudio.report'));
+
+// 注入体积是**每一回合都要重付**的硬成本，不是能靠缓存省掉的东西。钉一个上限：谁把规则写胖了谁红。
+// 上限按实测留一点余量；要放宽必须连同理由一起改这里，不许悄悄调数字。
+// 已经无损去过重述（规则里复述 APP_ADAPTER 工具映射的段落改成指向映射表），实测 64.7k——
+// 剩下的密度是教学内容本身，不是水分：再压就得删规则，那不再是"无损"。
+const RULES_CHAR_BUDGET = 65000;
+check(`规则注入不超过 ${RULES_CHAR_BUDGET} 字符`, rulesBlob.length <= RULES_CHAR_BUDGET,
+  `实测 ${rulesBlob.length} 字符`);
+
+// 吸收完整性：注册给模型的工具必须在 system prompt 里有映射，否则模型只能按原宿主的说法瞎猜。
+// 这条就是"规则已被应用吸收"这句话的可执行版本。
+const probePrompt = buildSystemPrompt({
+  title: '探针', graph: { concepts: [], meta: {} }, progress: { concepts: {} },
+  notes: { items: [] }, todos: { items: [] }, uploads: [],
+});
+for (const name of Object.values(TOOL_NAMES)) {
+  check(`${name} 在 system prompt 里有映射`, probePrompt.includes(name));
+}
+
+// 幻影能力黑名单：原 skill 宿主有、本应用**没有**的东西，措辞里不许再出现。
+// 出现一次就意味着模型会以为自己能执行命令 / 改文件 / 解析 PDF / 转写语音。
+for (const ghost of ['命令执行工具', 'str_replace', 'pdf 技能', '语音转写', '`Skill` 工具', 'workspace 下的真实文件']) {
+  check(`prompt 里不再宣称有「${ghost}」`, !rulesBlob.includes(ghost));
+}
+
+// ─────────────────────────────────────── 7c. 项目/游戏的通用回报通道
+
+section('7c. 制品通用通道：state / event / 下行指令 / 跨轮续玩');
+
+check('下行指令工具在场', buildTools().some((t) => t.name === 'push_artifact_command'));
+check('工具数变为 19', buildTools().length === 19, String(buildTools().length));
+check('异步制备制品工具在场', buildTools().some((t) => t.name === 'prepare_artifact'));
+check('结构化笔记工具在场', buildTools().some((t) => t.name === 'compile_notes'));
+check('present_plan 在场', buildTools().some((t) => t.name === 'present_plan'));
+check('update_todo_list 在场', buildTools().some((t) => t.name === 'update_todo_list'));
+check('spawn_subagent 在场', buildTools().some((t) => t.name === 'spawn_subagent'));
+check('run_background_task 在场', buildTools().some((t) => t.name === 'run_background_task'));
+// 少一个开关就少一次选择：落盘不再是模型要表明的意图，而是道具的默认寿命。
+check('share_artifact 的 schema 里没有 persist 参数',
+  !JSON.stringify(buildTools().find((t) => t.name === 'share_artifact').parameters).includes('persist'));
+
+// state：浅合并 + 落盘后能被种子回来
+await session.execShareArtifact({ title: '打地鼠', kind: 'game', html: '<p>game</p>' });
+const gameId = session.liveArtifacts.keys().next().value;
+check('state 上报被接受', session.recordArtifactEvidence({
+  artifactId: gameId,
+  type: 'state',
+  state: { level: 1, attempts: 3, currentParam: 'a=0.5' },
+}) === true);
+check('state 浅合并保留全部 key', (() => {
+  session.recordArtifactEvidence({ artifactId: gameId, type: 'state', state: { level: 2 } });
+  const s = session.artifactEvidenceView(gameId).artifacts[0].state;
+  return s.level === 2 && s.attempts === 3 && s.currentParam === 'a=0.5';
+})());
+
+// event：只追加 + 同 (name, at) 去重
+check('event 上报被接受', session.recordArtifactEvidence({
+  artifactId: gameId, type: 'event', name: 'level_cleared', payload: { level: 1 }, at: 'T1',
+}) === true);
+check('同一 event 重复上报被去重', session.recordArtifactEvidence({
+  artifactId: gameId, type: 'event', name: 'level_cleared', payload: { level: 1 }, at: 'T1',
+}) === false);
+session.recordArtifactEvidence({ artifactId: gameId, type: 'event', name: 'miss', payload: { n: 2 }, at: 'T2' });
+const evView = session.artifactEvidenceView(gameId).artifacts[0];
+check('events 按顺序保留两条', evView.events.length === 2 && evView.events[1].name === 'miss');
+check('event payload 完整保留', evView.events[0].payload.level === 1);
+
+// 读回视图含 state + events（evidence 属于另一个制品桶，另测）
+const gameView = session.artifactEvidenceView(gameId).artifacts[0];
+check('读回视图含 state', gameView.state.level === 2);
+check('读回视图含 events', gameView.events.length === 2);
+check('制品桶之间互不串味', gameView.evidence.length === 0, String(gameView.evidence.length));
+check('observed_count = events 数', gameView.observed_count === 2, String(gameView.observed_count));
+
+// 落盘 → 新会话种子回来（跨轮续学的关键）
+seedArtifacts(fresh, {
+  artifact_state: { [gameId]: { level: 2, attempts: 3, currentParam: 'a=0.5' } },
+  artifact_events: [{ artifact_id: gameId, name: 'level_cleared', payload: { level: 1 }, at: 'T1' }],
+  artifact_evidence: [],
+});
+const seeded = viewOf(fresh, gameId).artifacts[0];
+check('跨轮续玩：state 被种子回来', seeded.state.level === 2 && seeded.state.currentParam === 'a=0.5');
+check('跨轮续玩：events 被种子回来', seeded.events.length === 1 && seeded.events[0].name === 'level_cleared');
+
+// 下行指令
+const cmd = session.pushArtifactCommand(gameId, 'inject_bug', { where: 'line 12' });
+check('下行指令返回 ok', cmd.ok === true);
+check('下行指令发出 artifact_command 事件', events.some((e) => e.type === 'artifact_command' && e.name === 'inject_bug'));
+
+// 学习者那一颗「扔掉」：路由把同一件事同时交给两条轨——落盘（下一轮读得到）和
+// 活回合（本回合内读得到）。HTTP 那套跑到 4c 时没有活回合，第二条轨永远走不到，
+// 所以用会话本体在这里钉住。放在 7c 末尾：前面每一条都是精确条数，别拿事件去污染它们。
+const retireEvent = {
+  type: 'event', artifactId: liveArtifact.id, name: 'artifact_retired',
+  payload: { title: liveArtifact.title, kind: liveArtifact.kind }, at: '2026-10-04T10:20:00.000Z',
+};
+const railBefore = session.liveArtifacts.get(liveArtifact.id)?.events?.length || 0;
+check('活回合收得下扔掉事件（本回合内 read_artifact_evidence 就读得到）',
+  session.recordArtifactEvidence(retireEvent) === true &&
+    session.liveArtifacts.get(liveArtifact.id).events.length === railBefore + 1,
+  `events ${railBefore} → ${session.liveArtifacts.get(liveArtifact.id)?.events?.length}`);
+check('它作为 artifact_event 广播出去（画布那一行提示与右栏靠这条）',
+  events.filter((e) => e.type === 'artifact_event' && e.name === 'artifact_retired').length === 1);
+check('同一个动作重播两次只算一条（name+at 去重，别把一次点击说成两次）',
+  session.recordArtifactEvidence(retireEvent) === false);
+
+// ─────────────────────────────────────── 7d. 待办清单
+
+section('7d. 待办清单');
+check('update_todo_list 回报完成度', (() => {
+  const r = session.execUpdateTodo({
+    todos: [
+      { id: 'a', content: '建概念结构', status: 'completed' },
+      { id: 'b', content: '出探针', status: 'in_progress' },
+      { id: 'c', content: '复盘', status: 'pending' },
+    ],
+  });
+  return r.ok === true && r.note.includes('1/3');
+})());
+check('todo 事件发给前端', events.some((e) => e.type === 'todo' && e.todos.length === 3));
+check('非法 status 归一到 pending', (() => {
+  session.execUpdateTodo({ todos: [{ id: 'x', content: 'y', status: 'weird' }] });
+  return session.todos[0].status === 'pending';
+})());
+check('空内容被丢掉', (() => {
+  session.execUpdateTodo({ todos: [{ id: 'x', content: '   ', status: 'pending' }] });
+  return session.todos.length === 0;
+})());
+check('id 冲突自动去重', (() => {
+  session.execUpdateTodo({ todos: [
+    { id: 'dup', content: '一', status: 'pending' },
+    { id: 'dup', content: '二', status: 'pending' },
+  ] });
+  return session.todos.length === 2 && session.todos[0].id !== session.todos[1].id;
+})());
+check('整体替换不是追加', (() => {
+  session.execUpdateTodo({ todos: [{ id: 'a', content: '只剩这条', status: 'pending' }] });
+  return session.todos.length === 1;
+})());
+
+// ─────────────────────────────────────── 7e. 计划模式（阻塞到学习者裁决）
+
+section('7e. 计划模式：present_plan 阻塞 + 批准/退回');
+const planOutcomes = [];
+{
+  const p = session.execPresentPlan({ plan: '先建两个概念，再出探针' });
+  const planEvt = events.filter((e) => e.type === 'plan').pop();
+  check('present_plan 发出 plan 事件', Boolean(planEvt));
+  check('plan 带 id', typeof planEvt?.planId === 'string' && planEvt.planId.length > 0);
+  const decided = session.decidePlan(planEvt.planId, { approved: true });
+  check('审批被会话接收', decided === true);
+  const r = await p;
+  check('批准后返回 approved', r.decision === 'approved');
+  check('批准后发出 plan_decided', events.some((e) => e.type === 'plan_decided' && e.approved === true));
+  check('没补意见时不塞一个空 feedback 给模型（它会被引导去找一句不存在的话）', !('feedback' in r), JSON.stringify(r));
+
+  // 批准时顺手在同一框里补的那一句也要一起走：活数据里它被两层各丢一次（前端只发 approved、
+  // 服务端这一支只读 approved），结果是模型重开一道题把方言问了回来。
+  const p1b = session.execPresentPlan({ plan: '按依赖顺序讲五个概念' });
+  const planEvt1b = events.filter((e) => e.type === 'plan').pop();
+  session.decidePlan(planEvt1b.planId, { approved: true, feedback: '主要用 JS' });
+  const r1b = await p1b;
+  check('批准时带的那句意见原样交回模型',
+    r1b.decision === 'approved' && r1b.feedback === '主要用 JS' && r1b.note.includes('主要用 JS'),
+    JSON.stringify(r1b));
+
+  const p2 = session.execPresentPlan({ plan: '改成先讲再问' });
+  const planEvt2 = events.filter((e) => e.type === 'plan').pop();
+  session.decidePlan(planEvt2.planId, { approved: false, feedback: '顺序反过来' });
+  const r2 = await p2;
+  check('退回时把意见带回给模型', r2.decision === 'changes_requested' && r2.feedback === '顺序反过来');
+  planOutcomes.push(r.decision, r2.decision);
+}
+check('两种裁决都走通了', planOutcomes.join(',') === 'approved,changes_requested');
+// 空 plan 直接拒，别让模型用一个空壳卡住学习者
+check('空 plan 被拒绝', (await session.execPresentPlan({ plan: '   ' })).ok === false);
+
+// ─────────────────────────────────────── 7f. 子 agent / 后台任务
+
+section('7f. 子 agent 与后台任务');
+const { TaskRunner } = await import('../server/tasks.mjs');
+const runnerEvents = [];
+const runner = new TaskRunner({
+  registry,
+  rulesText: '（测试用规则）',
+  onEvent: (e) => runnerEvents.push(e),
+});
+const nbWithRunner = {
+  ...session.notebook,
+  todos: [],
+};
+session.taskRunner = runner;
+session.modelRef = { provider: 'faux', model: fauxModel.id };
+
+// 没有 taskRunner 时优雅失败，不抛
+const noRunnerResponse = await (() => {
+  const backup = session.taskRunner;
+  session.taskRunner = null;
+  return session.execSpawnSubagent({ instructions: '查一下' }).finally(() => {
+    session.taskRunner = backup;
+  });
+})();
+check('没配 runner 时 spawn 返回错误不抛', noRunnerResponse.ok === false);
+
+// 派一个真分身：faux 脚本会回一段"结论"
+faux.setResponses([fauxAssistantMessage([fauxText('分身结论：闭包握的是绑定。')])]);
+const sub = await session.execSpawnSubagent({ title: '查闭包语义', instructions: '用一句话说清闭包捕获什么' });
+check('子 agent 返回 done', sub.status === 'done', JSON.stringify(sub).slice(0, 200));
+check('分身结论交回给主会话', (sub.conclusion || '').includes('绑定'));
+check('分身事件推给前端', runnerEvents.some((e) => e.type === 'task_start' && e.task.kind === 'subagent'));
+check('分身只被记成 subagent 一种', runner.list({ kind: 'subagent' }).length === 1);
+
+// 后台任务：非阻塞，立刻拿到 id
+faux.setResponses([fauxAssistantMessage([fauxText('后台结论：三道题草稿。')])]);
+const bg = session.execRunBackground({ title: '预生成三道题', instructions: '出三道 closures 练习题' });
+check('后台任务立刻返回 id', typeof bg.task_id === 'string' && bg.status === 'running');
+check('后台任务一开始就是 running', runner.get(bg.task_id).status === 'running');
+const waited = await new Promise((r) => {
+  const tick = setInterval(() => {
+    const t = runner.get(bg.task_id);
+    if (t && t.status !== 'running') { clearInterval(tick); r(t); }
+  }, 50);
+  setTimeout(() => { clearInterval(tick); r(runner.get(bg.task_id)); }, 8000);
+});
+check('后台任务能跑完', waited.status === 'done', `status=${waited.status} err=${waited.error || ''}`);
+check('后台结论可读回', (waited.output || '').includes('三道题'));
+const read = session.execReadBackground({ task_id: bg.task_id });
+check('read_background_task 拿到结论', read.status === 'done' && read.conclusion.includes('三道题'));
+check('list_background_tasks 列出两种任务', (() => {
+  const l = session.execListBackground();
+  return l.ok && l.count === 2 && l.tasks.some((t) => t.kind === 'background');
+})());
+check('读不存在的任务报错不抛', session.execReadBackground({ task_id: 'nope' }).ok === false);
+check('停一个不存在的任务报错不抛', session.execStopBackground({ task_id: 'nope' }).ok === false);
+// 停掉一个真在跑的任务：让分身去问一个没人答的问题，它就永远卡在 running，
+// 这样才能确定"停"发生在它完成之前。
+faux.setResponses([
+  fauxAssistantMessage(
+    [fauxToolCall('ask_user_question', { id: 'q-hang', concept_id: 'none', question: '卡住了吗？', options: [{ label: '是' }, { label: '否' }] })],
+    { stopReason: 'toolUse' },
+  ),
+]);
+const hanging = session.execRunBackground({ title: '会卡住的任务', instructions: '问一个问题然后等' });
+await new Promise((r) => setTimeout(r, 200));
+check('卡住的任务确实还在 running', runner.get(hanging.task_id).status === 'running', runner.get(hanging.task_id).status);
+check('停任务返回 ok', session.execStopBackground({ task_id: hanging.task_id }).ok === true);
+await new Promise((r) => setTimeout(r, 500));
+check('停掉后状态是 stopped', runner.get(hanging.task_id).status === 'stopped', runner.get(hanging.task_id).status);
+check('停掉的任务再停一次会说明原因', session.execStopBackground({ task_id: hanging.task_id }).ok === false);
+// 分身改动不到学习状态（隔离性）
+check('分身没碰主会话的 learning 状态', session.progress.concepts['closures'].state === 'seen');
+
+// ─────────────────────────────────────── 7g. 结构化笔记（compile_notes）
+
+section('7g. 结构化笔记：compile_notes 落 notes.json');
+
+const { readNotes, exportMarkdown } = await import('../server/notes.mjs');
+const beforeNotes = readNotes(meta.id).length;
+
+const noteSaved = session.execCompileNotes({
+  title: '闭包：函数带着词法环境跑',
+  summary: '闭包不是复制变量，函数记住的是出生时的那个绑定本身。',
+  key_points: ['inner() 捕获的是绑定，不是当时的值', 'outer 返回后绑定依然活着'],
+  example: 'function outer(){ const box="…"; return ()=>box; }',
+  concepts: ['closures'],
+});
+check('compile_notes 成功', noteSaved.ok === true, JSON.stringify(noteSaved));
+check('返回 note_id', typeof noteSaved.note_id === 'string' && noteSaved.note_id.startsWith('note-'));
+
+const saved = readNotes(meta.id);
+check('笔记落盘（notes.json）', saved.length === beforeNotes + 1, `${beforeNotes} → ${saved.length}`);
+const latest = saved[saved.length - 1];
+check('笔记带标题与要点', latest.title.startsWith('闭包') && latest.key_points.length === 2, JSON.stringify(latest.key_points));
+check('笔记带概念坐标', latest.concepts.includes('closures'));
+check('笔记有时间戳', Boolean(latest.createdAt));
+
+// 笔记进 notebook 快照（前端 renderThread 从这里回放）
+check('getNotebook 带 notes', Array.isArray(store.getNotebook(meta.id).notes));
+
+// 缺字段要拒绝，不许存半条
+check('缺 summary 被拒绝', session.execCompileNotes({ title: '只给标题' }).ok === false);
+
+// 导出：notes.json → Markdown
+const md = exportMarkdown('JS 闭包', saved);
+check('导出含标题与要点', md.includes('# JS 闭包') && md.includes('闭包：函数带着词法环境跑') && md.includes('- inner()'));
+check('导出含例子代码块', md.includes('function outer()'));
+
+// ─────────────────────────────────────── 7g-1b. 笔记的时机挂在状态机上
+
+section('7g-1b. 升到 understood/applied 那一刻，工具返回值点名催收笔记');
+
+// 时机不写进规则语料（余量只剩 80 字符），也不留给模型自觉：挂在 set_progress 的返回值上，
+// 因为**工具返回值是它当场读到的最后一句话**，压过规则原文和工具描述。
+const closureName = session.graph?.concepts?.find((c) => c.id === 'closures')?.name || 'closures';
+const closuresBefore = structuredClone(session.progress.concepts['closures']);
+
+const promoted = await session.execSetProgress({
+  updates: [{ concept_id: 'closures', state: 'understood', evidence: '学习者说出了捕获的是绑定不是值' }],
+});
+check('seen → understood 写进去了', promoted.ok === true && promoted.applied.length === 1, JSON.stringify(promoted));
+check('讲透一个点的那一刻催收笔记', promoted.note.includes('compile_notes'), promoted.note);
+check('催的是刚升上去的那个概念（不是泛泛一句）', promoted.note.includes(closureName), promoted.note);
+check('措辞是"讲透了"，让模型知道凭什么是现在', promoted.note.includes('讲透了'), promoted.note);
+
+// 探针那一跳（unknown → seen）是"接触"，不是"讲透"：答一题就被催一次笔记，催就废了
+const firstTouch = Object.entries(session.progress.concepts).find(
+  ([id, e]) => id !== 'closures' && e.state === 'unknown',
+);
+if (firstTouch) {
+  const touchBefore = structuredClone(firstTouch[1]);
+  const touched = await session.execSetProgress({ updates: [{ concept_id: firstTouch[0], state: 'seen' }] });
+  check('unknown → seen 不催笔记', touched.note === '状态已更新。', touched.note);
+  // 这一格留给后面那节「探针一答由应用自己写 seen」——它要求的正是"开局还待学"
+  session.progress.concepts[firstTouch[0]] = touchBefore;
+} else {
+  check('unknown → seen 不催笔记（这一局没有第二个待学概念，测不到）', false, 'skipped');
+}
+
+// 被拒绝的转移维持原样，不许顺手变成催办
+const denied = await session.execSetProgress({ updates: [{ concept_id: 'closures', state: 'mastered' }] });
+check('跨级被拒时不催笔记', !String(denied.note).includes('compile_notes'), denied.note);
+
+// 工具描述不许再承诺"派分身异步做"：代码是同步落盘的，两层措辞打架时模型先读到哪句信哪句
+const notesTool = buildTools().find((t) => t.name === 'compile_notes');
+check('笔记工具描述不再谎称派分身', !/分身|不阻塞/.test(notesTool.description), notesTool.description.slice(0, 80));
+check('笔记工具描述写明同步落盘', notesTool.description.includes('当场同步落盘'), notesTool.description.slice(0, 80));
+check('笔记工具描述把时机指给 set_progress_state 的返回值', notesTool.description.includes('set_progress_state'), notesTool.description);
+
+session.progress.concepts['closures'] = closuresBefore;
+
+// ─────────────────────────────────────── 7g-2. 笔记人机共同编辑
+
+section('7g-2. 学生在笔记页直接改：白名单写回 + 出处 + 删除');
+
+const { updateNote, deleteNote, saveNote } = await import('../server/notes.mjs');
+const mine = saveNote(meta.id, {
+  title: '原始标题',
+  summary: '原始摘要',
+  key_points: ['要点一', '要点二'],
+  example: '例子',
+  concepts: ['closures'],
+});
+const sibling = saveNote(meta.id, { title: '隔壁那条', summary: '别碰我', key_points: [], example: '', concepts: [] });
+
+const edited = updateNote(meta.id, mine.id, {
+  title: '我自己改过的标题',
+  key_points: ['要点一', '', '   ', '要点二改过了'],
+  // 下面这三个都是越界的：白名单之外的字段必须一个字都写不进去
+  concepts: ['HACKED'],
+  id: 'note-evil',
+  createdAt: '1999-01-01T00:00:00.000Z',
+});
+check('学生改标题写回', edited.title === '我自己改过的标题', edited.title);
+check('要点里空白条目被丢掉、顺序保留', edited.key_points.join('|') === '要点一|要点二改过了', edited.key_points.join('|'));
+check('白名单外的字段一概不认（id/createdAt/concepts 原样）',
+  edited.id === mine.id && edited.createdAt === mine.createdAt && edited.concepts.join() === 'closures', JSON.stringify(edited));
+check('没给的字段还是原来的', edited.summary === '原始摘要' && edited.example === '例子');
+check('出处由服务端盖章，不接受客户端自报', edited.edited_by === 'user' && Boolean(edited.edited_at));
+check('改一条不碰别条', JSON.stringify(readNotes(meta.id).find((x) => x.id === sibling.id)) === JSON.stringify(sibling));
+
+const stamp = edited.edited_at;
+const noop = updateNote(meta.id, mine.id, { concepts: ['HACKED'], id: 'note-evil' });
+check('只塞非法字段等于什么都没改（出处时间不刷新）', noop.edited_at === stamp && noop.concepts.join() === 'closures', JSON.stringify(noop));
+check('超长照样截：手动编辑不是绕过上限的后门', updateNote(meta.id, mine.id, { title: '很'.repeat(500) }).title.length === 120);
+check('标题清空了兜一个名字，别让卡片没头', updateNote(meta.id, mine.id, { title: '   ' }).title === '未命名笔记');
+check('改一条不存在的笔记返回 null（路由去给 404）', updateNote(meta.id, 'note-nope', { title: 'x' }) === null);
+check('学习不存在也不炸盘', updateNote('nb-nope', 'note-nope', { title: 'x' }) === null);
+
+const notesBeforeDelete = readNotes(meta.id).length;
+const removed = deleteNote(meta.id, mine.id);
+check('删除生效', removed?.ok === true && !readNotes(meta.id).some((x) => x.id === mine.id), JSON.stringify(removed));
+check('删一条正好少一条，别条都在',
+  readNotes(meta.id).length === notesBeforeDelete - 1 && readNotes(meta.id).some((x) => x.id === sibling.id),
+  `${notesBeforeDelete} → ${readNotes(meta.id).length}`);
+check('删一条不存在的返回 null', deleteNote(meta.id, 'note-nope') === null);
+
+// 学生改过的版本必须进得了下一回合的上下文，否则老师会按自己记忆里的旧版再讲一遍
+const handout = Array.from({ length: 12 }, (_, i) => ({
+  title: `n-${String(i + 1).padStart(2, '0')}`,
+  summary: `第 ${i + 1} 条`,
+  edited_by: i === 11 ? 'user' : undefined,
+}));
+const handoutSnapshot = renderStateSnapshot({ graph: null, progress: { notes: [] }, notes: handout });
+check('讲义进了状态快照', handoutSnapshot.includes('n-12') && handoutSnapshot.includes('第 12 条'));
+check('学生改过的那条标出来，并写明以他的版本为准',
+  handoutSnapshot.includes('〔学生改过〕') && handoutSnapshot.includes('以学生的版本为准'));
+check('只带最近十条（别把整本讲义塞进每一回合）', !handoutSnapshot.includes('n-01') && handoutSnapshot.includes('n-03'));
+check('没有讲义时快照里不多这一段',
+  !renderStateSnapshot({ graph: null, progress: { notes: [] } }).includes('学生「笔记」页上已有的讲义'));
+
+// 清掉测试笔记，别污染后续断言
+{
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { DATA_DIR } = await import('../server/config.mjs');
+  fs.rmSync(path.join(DATA_DIR, 'notebooks', meta.id, 'notes.json'), { force: true });
+}
+
+// ─────────────────────────────────────── 7h. 异步制品（prepare_artifact）
+
+section('7h. 异步制备大件制品：prepare_artifact 立刻返回');
+
+const pending = session.execPrepareArtifact({
+  title: '躲障碍',
+  kind: 'game',
+  description: '一个 canvas 小游戏',
+  spec: '学生控制方块上下移动躲开红色柱子，撞到重来；记录尝试次数并 SocraticStudio.emit("miss")。',
+});
+check('prepare_artifact 立刻返回', pending.ok === true && pending.status === 'preparing', JSON.stringify(pending));
+check('返回 job_id', typeof pending.job_id === 'string' && pending.job_id.length > 0);
+check('说明写明做好由宿主摆进当前这一场的台上（画布那一页在 2b 就删了，不许再承诺它）',
+  /台上|台面/.test(pending.note || '') && !/画布/.test(pending.note || ''), pending.note);
+check('不阻塞：返回即结束，没有 await 到任务完成', pending.status === 'preparing');
+
+// 制品类分身的占位事件已经推给前端了
+check('发出 artifact_pending 事件', events.some((e) => e.type === 'artifact_pending' && e.artifact?.title === '躲障碍'));
+// 分身会以 purpose=artifact 派出，helper 规则要禁止它提问/改状态
+const pendingTask = runner.get(pending.job_id);
+check('任务已创建', Boolean(pendingTask), JSON.stringify(pendingTask).slice(0, 160));
+check('任务标题可读', String(pendingTask.title || '').includes('躲障碍'), pendingTask.title);
+runner.stop(pending.job_id);
+
+// spec 为空要拒绝——分身看不到主会话的思路，必须写施工单
+check('空 spec 被拒绝', session.execPrepareArtifact({ title: 'x', spec: '   ' }).ok === false);
+
+// ─────────────────────────────────────── 7i. 探针作答 → 应用自己写 Unknown→Seen
+
+section('7i. 探针一答，应用自己写 Unknown→Seen（不等老师记得调工具）');
+
+// 现场：variable-scope 仍是 unknown（第 4 节只让老师推进了 closures）。
+// 这一节全程不调 set_progress_state——状态还动不动，就是这条改动的全部。
+const askOnce = async ({ conceptId, answer, question = '作用域链往上找的是哪一层？' }) => {
+  const qid = `q-auto-${Math.random().toString(36).slice(2, 8)}`;
+  const p = session.execAsk({ id: qid, concept_id: conceptId, question, options: [{ label: '最近的同名绑定' }] });
+  await new Promise((r) => setTimeout(r, 10));
+  session.answer(qid, answer);
+  return p;
+};
+
+check('开局 variable-scope 还是待学', session.progress.concepts['variable-scope'].state === 'unknown');
+const eventsBefore = session.pendingEvents.length;
+const autoResult = await askOnce({ conceptId: 'variable-scope', answer: { selected: ['最近的同名绑定'], text: '' } });
+check(
+  '答完探针，应用自己把它写成 seen',
+  session.progress.concepts['variable-scope'].state === 'seen',
+  session.progress.concepts['variable-scope'].state,
+);
+check('自动那一步也记了 observed 事件', session.pendingEvents.length === eventsBefore + 1, `${session.pendingEvents.length - eventsBefore} 条`);
+check('事件挂在正确的 concept 上', session.pendingEvents.at(-1).concept_id === 'variable-scope' && session.pendingEvents.at(-1).kind === 'observed');
+check('证据就是学习者的作答', String(session.progress.concepts['variable-scope'].last_evidence || '').includes('最近的同名绑定'));
+check('交回老师的结果里说清了这一步是谁写的', autoResult.includes('由应用记为 Seen'), autoResult.slice(-90));
+
+// 已经 seen 的概念再答，不该重复写、更不该自己往上跳一级
+session.progress.concepts['variable-scope'].last_evidence = null;
+const dupEvents = session.pendingEvents.length;
+const dupResult = await askOnce({ conceptId: 'variable-scope', answer: { selected: ['最近的同名绑定'], text: '' } });
+check('已接触的概念不会被重复记账', session.pendingEvents.length === dupEvents && !dupResult.includes('由应用记为 Seen'));
+check('应用绝不越级：seen 不会自己升成 understood', session.progress.concepts['variable-scope'].state === 'seen');
+
+// 三种"不该写"的情况：不属于任何概念 / 跳过 / concept id 根本不存在
+session.progress.concepts['variable-scope'].state = 'unknown';
+session.progress.concepts['variable-scope'].last_evidence = null;
+const noneEvents = session.pendingEvents.length;
+await askOnce({ conceptId: 'none', answer: { selected: ['最近的同名绑定'], text: '' } });
+check('事务性提问（none）不动任何状态', session.progress.concepts['variable-scope'].state === 'unknown' && session.pendingEvents.length === noneEvents);
+await askOnce({ conceptId: 'variable-scope', answer: { selected: [], text: '', skipped: true } });
+check('跳过不算首次接触', session.progress.concepts['variable-scope'].state === 'unknown' && session.pendingEvents.length === noneEvents);
+const bogus = await askOnce({ conceptId: 'no-such-concept', answer: { selected: ['最近的同名绑定'], text: '' } });
+check('乱填的 concept id 写不动状态，也不抛', session.progress.concepts['variable-scope'].state === 'unknown' && !bogus.includes('由应用记为 Seen'));
+
+// schema 层面为什么可靠：concept_id 是必填字段，缺它连参数校验都过不去（见第 7 节）
+
+// ─────────────────────────────────────── 7j. 跨轮历史：题卡要还原成工具调用
+
+section('7j. 下一轮看历史：题卡必须还原成 toolCall，作答必须在上下文里');
+
+// 现场照 data/notebooks/*/chat.json 的真实形状抄：题卡挂在 assistant 消息的
+// questions 上，作答在 questions[i].answer。以前重建历史只抄 content，于是
+// 历史里每一条 assistant 都是"纯文本、没用过工具"——模型讲十几轮就学着它的样子
+// 把问题写进正文（题面以冒号收尾、卡片再也不出现），学习者的答语更是彻底消失。
+const histFixture = [
+  { role: 'user', content: '教我闭包', timestamp: 1_700_000_000_001 },
+  {
+    role: 'assistant',
+    content: '先探一下——外层 return 之后还能读到那个变量吗？',
+    timestamp: 1_700_000_000_002,
+    usage: { input: 10, output: 20 },
+    questions: [
+      {
+        questionId: 'closures:q_outer_var',
+        header: '探针',
+        question: '外层 return 后还能读到那个变量吗？',
+        conceptId: 'closures',
+        options: [
+          { label: '能读到', description: '握着那个变量' },
+          { label: '读不到' },
+        ],
+        multiSelect: false,
+        allowText: true,
+        askedAt: 1_700_000_000_002,
+        answer: {
+          selected: ['能读到'],
+          text: '函数记住了它出生时的环境',
+          skipped: false,
+          answeredAt: 1_700_000_000_003,
+        },
+      },
+    ],
+  },
+  {
+    role: 'assistant',
+    content: '这一回合被打断了，题还开着。',
+    timestamp: 1_700_000_000_004,
+    questions: [{ questionId: 'q-orphan', question: '跳过这题会怎样？', options: [], answer: null }],
+  },
+  { role: 'assistant', content: '', timestamp: 1_700_000_000_005 },
+];
+const rebuilt = historyToModelMessages(histFixture, { provider: 'custom-endpoint', id: 'agnes-3.0-flash' });
+const kinds = rebuilt.map((m) => `${m.role}:${Array.isArray(m.content) ? (m.content[0]?.type ?? 'empty') : 'text'}`);
+check(
+  '顺序是 user → assistant → toolResult → assistant → toolResult',
+  JSON.stringify(kinds) ===
+    '["user:text","assistant:text","toolResult:text","assistant:text","toolResult:text"]',
+  JSON.stringify(kinds),
+);
+check('空壳 assistant（没正文没题）不进上下文', !rebuilt.some((m) => m.timestamp === 1_700_000_000_005));
+const asked = rebuilt[1];
+check('出过题的那条 assistant 记成 toolUse，不是 stop', asked.stopReason === 'toolUse', asked.stopReason);
+const askedCall = asked.content.find((b) => b.type === 'toolCall');
+check('题卡还原成了 ask_user_question 调用', Boolean(askedCall) && askedCall.name === TOOL_NAMES.ASK);
+check('调用带回题面、选项与 concept_id', askedCall?.arguments?.question === '外层 return 后还能读到那个变量吗？' &&
+  JSON.stringify(askedCall?.arguments?.options) === '["能读到","读不到"]' && askedCall?.arguments?.concept_id === 'closures',
+  JSON.stringify(askedCall?.arguments));
+const answerMsg = rebuilt[2];
+check('toolResult 挂在正确的调用上', answerMsg.role === 'toolResult' && answerMsg.toolCallId === askedCall?.id && answerMsg.toolName === TOOL_NAMES.ASK);
+const answerTextOut = answerMsg?.content?.[0]?.text || '';
+check(
+  '学习者的作答回到了上下文里',
+  answerTextOut.includes('能读到') && answerTextOut.includes('函数记住了它出生时的环境'),
+  answerTextOut,
+);
+// 上游对"有 tool_calls 却没有对应 tool 响应"是直接 400 的，所以每条都要配对。
+const allCalls = rebuilt.flatMap((m) => (Array.isArray(m.content) ? m.content : []).filter((b) => b?.type === 'toolCall'))
+  .map((c) => c.id);
+const allResults = rebuilt.filter((m) => m.role === 'toolResult').map((m) => m.toolCallId);
+check('每个 toolCall 都有配对的 toolResult', allCalls.length === 2 && allCalls.every((id) => allResults.includes(id)),
+  `${allCalls.length} 调用 / ${allResults.length} 结果`);
+check('没答的题按"未作答"补全，不留断头调用',
+  rebuilt[4]?.content?.[0]?.text === '（学习者未作答）', rebuilt[4]?.content?.[0]?.text);
+check('没用过工具的回合照旧是纯文本 stop', (() => {
+  const plain = historyToModelMessages([{ role: 'assistant', content: '纯讲解', timestamp: 1 }], { provider: 'p', id: 'm' });
+  return plain.length === 1 && plain[0].stopReason === 'stop' && plain[0].content[0].type === 'text';
+})());
+
+// ─────────────────────────────────────── 7k. 整张图重存：漏写的字段沿用上一版
+
+section('7k. 重存 Graph：漏字段不该白烧一个来回（红卡 + 第二次才对）');
+
+const prevGraph = {
+  concepts: [
+    {
+      id: 'chest-compressions',
+      name: '胸外按压核心参数',
+      summary: '位置、深度、频率、回弹四件事',
+      examples: ['两乳头连线中点'],
+      depends_on: ['call-for-help'],
+    },
+  ],
+};
+check(
+  '同一 id 没写的字段沿用上一版',
+  (() => {
+    const c = carryOverConcept(prevGraph, { id: 'chest-compressions', depends_on: ['call-for-help'] });
+    return c.name === '胸外按压核心参数' && c.summary === '位置、深度、频率、回弹四件事';
+  })(),
+);
+check(
+  '显式写成空数组算"就是要清空"，不会被上一版盖回来',
+  JSON.stringify(carryOverConcept(prevGraph, { id: 'chest-compressions', examples: [] }).examples) === '[]',
+);
+check(
+  'null / 空串当没写，照旧沿用',
+  carryOverConcept(prevGraph, { id: 'chest-compressions', name: null, summary: '   ' }).name === '胸外按压核心参数',
+);
+check(
+  '没写过的字段不会凭空造出来：宁可让校验器点名，也不留 null',
+  (() => {
+    const c = carryOverConcept(null, { id: 'brand-new', explanation: '第一句就是定义。\n第二句是补充' });
+    return c.summary === '第一句就是定义' && !('name' in c) && !('misconceptions' in c);
+  })(),
+  JSON.stringify(carryOverConcept(null, { id: 'brand-new', explanation: '第一句就是定义。\n第二句是补充' })),
+);
+check('陌生 id 不会串到别的概念上', carryOverConcept(prevGraph, { id: 'other' }).summary === undefined);
+
+// 参数校验层：漏写 summary/name 必须过得了（真正的严格性留在 validateGraph，它一次报全）
+const graphTool = buildTools().find((t) => t.name === TOOL_NAMES.SAVE_GRAPH);
+const saveArgs = (concepts) => ({
+  topic: '基础心肺复苏',
+  pedagogy: 'general',
+  concepts,
+});
+let graphValidation = null;
+try {
+  validateToolCall([graphTool], { name: TOOL_NAMES.SAVE_GRAPH, arguments: saveArgs([{ id: 'a', depends_on: [] }]) });
+  graphValidation = { ok: true };
+} catch (e) {
+  graphValidation = { ok: false, error: String(e.message || e) };
+}
+check('只写 id 的概念也过得了参数校验', graphValidation.ok, graphValidation.error || '');
+check(
+  '但 Graph 校验照旧拦得住，并且一次把缺的都点名',
+  (() => {
+    try {
+      validateGraph({
+        meta: { topic: 't', pedagogy: 'general' },
+        concepts: [{ id: 'a', depends_on: [] }],
+      });
+      return false;
+    } catch (err) {
+      return err.issues.some((s) => s.includes('concepts[0].name')) && err.issues.some((s) => s.includes('concepts[0].summary'));
+    }
+  })(),
+);
+
+// 端到端：拿活数据里那种"只补依赖、漏了 summary"的重存，一次就该存成
+{
+  const snapshot = JSON.parse(JSON.stringify(session.graph));
+  const partial = session.execTool(TOOL_NAMES.SAVE_GRAPH, saveArgs([
+    { id: 'closures', depends_on: ['variable-scope'] },
+    { id: 'variable-scope', depends_on: [] },
+  ]));
+  const saved = await partial;
+  check('漏写 summary/name 的重存一次就过（不再要两回）', saved.ok === true, JSON.stringify(saved).slice(0, 200));
+  check(
+    '沿用下来的正是它上一版自己写的内容',
+    session.graph.concepts.find((c) => c.id === 'closures')?.name === snapshot.concepts.find((c) => c.id === 'closures')?.name,
+    session.graph.concepts.find((c) => c.id === 'closures')?.name,
+  );
+  session.graph = snapshot;
+}
+
+
+// ─────────────────────────────────────── 7l. 门禁确认必须走题卡，不是正文里的一句话
+
+section('7l. GATE-1：确认要触发 ask_user_question，不能让学习者自己打字');
+
+// 活数据（data/notebooks/topic-i3b-dd36be）里三连击：模型连着三轮把同一份概念清单
+// +「⛔ 等待你的确认」当正文发出去，学习者每次都得手打「可以」。根因不是模型偷懒——
+// 是存图成功那一刻它读到的最后一条指令（工具结果）就叫它"以正文收束"。
+{
+  const snapshot = JSON.parse(JSON.stringify(session.graph));
+  const res = await session.execTool(TOOL_NAMES.SAVE_GRAPH, saveArgs([
+    { id: 'variable-scope', name: '变量作用域', summary: '名字在哪儿可见', depends_on: [] },
+    { id: 'closures', name: '闭包', summary: '函数带着环境走', depends_on: ['variable-scope'] },
+  ]));
+  check('存图确实成功（下面几条才有意义）', res.ok === true, JSON.stringify(res).slice(0, 160));
+  check(
+    '成功的 note 点名要调 ask_user_question 收确认',
+    String(res.note).includes('ask_user_question'),
+    res.note,
+  );
+  check(
+    'note 里把"正文等待确认"明确否掉，并说清代价（不阻塞 / 下一轮无痕迹）',
+    String(res.note).includes('等待你的确认') && /不阻塞/.test(String(res.note)),
+    res.note,
+  );
+  check(
+    '门禁确认算事务性提问：不许把 Seen 记到某个概念头上',
+    /concept_id 填 none/.test(String(res.note)),
+    res.note,
+  );
+  session.graph = snapshot;
+}
+
+// 规则与适配器措辞：同一个降级指令不能在三处里只改一处
+const gateRow = rulesBlob.split('\n').find((l) => l.includes('GATE-1 Graph 确认')) || '';
+check('GATE-1 那行要求用 ask_user_question 收口', gateRow.includes('ask_user_question'), gateRow);
+check(
+  'GATE-1 不再把「末尾追加 ⛔」当首选动作',
+  !gateRow.includes('末尾追加') && gateRow.includes('无组件才降级'),
+  gateRow,
+);
+check(
+  '适配器措辞：任何"停下来等回答"都指向题卡，正文提问只是降级',
+  /要停下来等学习者回答[\s\S]{0,400}ask_user_question/.test(probePrompt),
+);
+check(
+  '适配器不再单独教 GATE-1 的正文标记格式',
+  !probePrompt.includes('GATE-1 的确认标记单独成行'),
+);
+
+
+// ─────────────────────────────────────── 7m. PATCH：提议要么合得上，要么根本不打扰学习者
+
+// 活数据（topic-i3b-dd36be）里那条真实记录：模型记下学习者反复踩的误解，动作选了
+// MODIFY，value 还是 Python 式的单引号列表字面量。旧实现在这里抛
+// 「字段 misconceptions 不可修改（immutable）」——一个假罪名（该字段本就 mutable-append），
+// 而卡片已经落在右栏，学习者点两次「接受」只拿到两条一模一样的红字。
+const LIVE_MISCONCEPTION =
+  "['把「先固定颈椎/先查四肢骨折/先摸脉搏」当成心肺骤停的第一动作——诊断(无反应+无正常呼吸)已下，下一步就该直接 CPR，评估之前不再插其他工序']";
+const patchGraph = () =>
+  structuredClone({
+    meta: { topic: '基础心肺复苏', pedagogy: 'general' },
+    concepts: [
+      {
+        id: 'special-cases',
+        name: '特殊情况',
+        summary: '创伤、孕妇、溺水等例外',
+        depends_on: ['cpr-sequence'],
+        misconceptions: ['旧的一条'],
+      },
+      { id: 'cpr-sequence', name: '按压通气顺序', summary: '先按压', depends_on: [] },
+    ],
+  });
+
+{
+  const g = patchGraph();
+  let thrown = null;
+  try {
+    store.applyPatchToGraph(g, {
+      operation: 'MODIFY',
+      target: 'concepts.special-cases.misconceptions',
+      value: LIVE_MISCONCEPTION,
+    });
+  } catch (err) {
+    thrown = err.message;
+  }
+  const list = g.concepts.find((c) => c.id === 'special-cases').misconceptions;
+  check('活数据里那条 MODIFY 现在合得上（不再要模型换动词）', thrown === null, thrown || list.join(' | '));
+  const added = list[1] || '';
+  check(
+    '单引号列表字面量被拆成干净的一条，不带方括号和引号',
+    added.startsWith('把「先固定颈椎') && !/[\[\]']/.test(added),
+    added,
+  );
+  check('原有的那条误解还在（追加不是替换）', list[0] === '旧的一条', list[0]);
+}
+{
+  const g = patchGraph();
+  store.applyPatchToGraph(g, {
+    operation: 'ADD',
+    target: 'concepts.special-cases.examples',
+    value: '["孕妇左倾体位", "溺水先给氧"]',
+  });
+  check('JSON 数组字符串能一次追加两条', (g.concepts.find((c) => c.id === 'special-cases').examples || []).length === 2,
+    JSON.stringify(g.concepts.find((c) => c.id === 'special-cases').examples));
+  const dup = store.patchError(g, { operation: 'ADD', target: 'concepts.special-cases.examples', value: '["孕妇左倾体位"]' });
+  check('重复追加不报错也不产生第二条一样的', dup === null && g.concepts.find((c) => c.id === 'special-cases').examples.length === 2);
+}
+{
+  const g = patchGraph();
+  const err = store.patchError(g, { operation: 'MODIFY', target: 'concepts.special-cases.depends_on', value: '[]' });
+  check('真·结构字段仍然拒绝', Boolean(err), err);
+  check('罪名说的是实话，并给出出路（重走分解）', /结构定义/.test(err) && err.includes('update_learning_graph'), err);
+  check('不再谎称追加字段 immutable（那句假话会把模型引到死路上）', !/不可修改（immutable）/.test(err), err);
+  const err2 = store.patchError(g, { operation: 'ADD', target: 'concepts.special-cases.name', value: 'x' });
+  check('ADD 到非追加字段也说清允许哪些', /mutable-append/.test(err2 || ''), err2);
+}
+
+// 关键的那道闸：合不上的提议不该落到学习者面前。
+{
+  const beforePatches = (store.getNotebook(session.notebook.id).patches?.patches || []).length;
+  const bad = await session.execTool(TOOL_NAMES.PROPOSE_PATCH, {
+    patch: { operation: 'MODIFY', target: 'concepts.nope-does-not-exist.misconceptions', value: '一条', confidence: 'medium' },
+  });
+  check('目标 concept 不存在时，提议当场退回给模型', bad.ok === false, JSON.stringify(bad).slice(0, 160));
+  check('退回来的就是那句实话（模型据此换字段/换动词，不用猜）', /concept 不存在/.test(String(bad.error)), bad.error);
+  check('不合用的提议不落改动记录，右栏因而不会长出一张点不动的卡',
+    (store.getNotebook(session.notebook.id).patches?.patches || []).length === beforePatches);
+
+  const okRes = await session.execTool(TOOL_NAMES.PROPOSE_PATCH, {
+    patch: { operation: 'MODIFY', target: 'concepts.closures.misconceptions', value: LIVE_MISCONCEPTION, reason: '反复踩', confidence: 'medium' },
+  });
+  check('活数据那种提议现在能通过空跑，落成待确认卡', okRes.ok === true && okRes.applied === false, JSON.stringify(okRes).slice(0, 160));
+  const rec = store.getNotebook(session.notebook.id).patches.patches.slice(-1)[0];
+  const applyErr = store.patchError(structuredClone(session.graph), { ...rec });
+  check('学习者点「接受」走的就是这条：存下来的记录合得上', applyErr === null, applyErr);
+  const split = await session.execTool(TOOL_NAMES.PROPOSE_PATCH, {
+    patch: { operation: 'SPLIT', target: 'concepts.closures.misconceptions', value: 'x', reason: '太大', confidence: 'high' },
+  });
+  check('SPLIT 不被空跑误伤（它本来就要走重新分解，不该被拒之门外）', split.ok === true && split.applied === false,
+    JSON.stringify(split).slice(0, 160));
+}
+
+{
+  const desc = buildTools().find((t) => t.name === TOOL_NAMES.PROPOSE_PATCH).description;
+  check('工具说明不再承诺"学习者确认后才写入"（high 是当场合并的）', desc.includes('high 当场合并'), desc);
+  check('工具说明把空跑闸门的后果讲在前面', desc.includes('不留待确认卡'), desc);
+  check('规则与代码同一套说法（MODIFY 落到追加字段按 ADD 合并）', rulesBlob.includes('按 `ADD` 合并'), '');
+}
+
+
+// ─────────────────────────────────────── 7n. 整份清单被写成 JSON 字符串：不算教学错误，不该烧来回
+
+section('7n. 清单被塞成字符串也走得通');
+
+// 活数据里「整理概念结构」那一次：十来个概念挤进一串四千字里的字符串，
+// 校验层回的是 concepts.0: must be object，模型读完以为自己缺字段。
+{
+  const beforeGraph = JSON.parse(JSON.stringify(session.graph));
+  const beforeProgress = JSON.parse(JSON.stringify(session.progress));
+  const stringified = {
+    topic: 'Git 排错与补救',
+    pedagogy: 'programming',
+    concepts: JSON.stringify([
+      { id: 'git-object-model', name: 'Git 的底层对象模型', summary: 'Git 存的是快照', depends_on: [] },
+      { id: 'git-reflog', name: 'reflog：找回被"删掉"的东西', summary: 'HEAD 的移动日记', depends_on: ['git-object-model'] },
+    ]),
+  };
+  const tools = buildTools();
+  let before = null;
+  try {
+    validateToolCall(tools, { id: 'c1', name: TOOL_NAMES.SAVE_GRAPH, arguments: stringified });
+  } catch (err) {
+    before = String(err.message || err);
+  }
+  check('不拆的话，校验层确实只看得见"must be object"（所以旧代码必红一次）', /must be object/.test(before || ''), before);
+  const unwrapped = unwrapStructuredArgs(TOOL_NAMES.SAVE_GRAPH, stringified);
+  check('拆开的是数组，不是把整份清单改了', Array.isArray(unwrapped.concepts) && unwrapped.concepts.length === 2,
+    typeof unwrapped.concepts);
+  check('其余字段原样还在（topic 没被顺手解析掉）', unwrapped.topic === 'Git 排错与补救');
+  let after = null;
+  try {
+    after = validateToolCall(tools, { id: 'c2', name: TOOL_NAMES.SAVE_GRAPH, arguments: unwrapped });
+  } catch (err) {
+    after = `THREW: ${err.message}`;
+  }
+  check('拆完过得了参数校验（这一次不用先红）', after && Array.isArray(after.concepts), JSON.stringify(after).slice(0, 120));
+  const saved = await session.execTool(TOOL_NAMES.SAVE_GRAPH, after);
+  check('拆完真的存得进去，不是过了校验就烂在下游', saved.ok === true, JSON.stringify(saved).slice(0, 160));
+  check('概念按拆出来的内容进图', session.graph.concepts.some((c) => c.id === 'git-reflog'),
+    session.graph.concepts.map((c) => c.id).join(','));
+  session.graph = beforeGraph;
+  session.progress = beforeProgress;
+}
+{
+  // 不是合法 JSON 的（Python 式单引号）不许半解析：宁可是原样报错，也不偷偷造内容
+  const py = { concepts: "[{'id': 'a', 'name': '甲', 'summary': '乙'}]" };
+  const out = unwrapStructuredArgs(TOOL_NAMES.SAVE_GRAPH, py);
+  check('单引号那种不猜、原样交给校验层说实话', out.concepts === py.concepts, typeof out.concepts);
+}
+{
+  // 正文类字段合法地可能以 [ 或 { 开头，动它们就是把内容改了
+  const plan = { plan: '[先接地] 再出探针' };
+  check('present_plan 的正文不碰', unwrapStructuredArgs(TOOL_NAMES.PRESENT_PLAN, plan) === plan);
+  const html = { html: '[不是 JSON 的一段正文]', title: 't' };
+  check('share_artifact 的 html 不碰', unwrapStructuredArgs(TOOL_NAMES.SHARE_ARTIFACT, html) === html);
+  const patchArgs = { patch: { operation: 'ADD', target: 'concepts.closures.misconceptions', value: "['一条']", reason: '反复踩' } };
+  check('PATCH 的 value 不预解析（留给 store.toList 按字段语义拆）',
+    unwrapStructuredArgs(TOOL_NAMES.PROPOSE_PATCH, patchArgs).patch.value === "['一条']");
+  const askOpts = { id: 'q', concept_id: 'closures', question: '读得到吗？', options: '[{"label":"能"},{"label":"不能"}]' };
+  const asked = unwrapStructuredArgs(TOOL_NAMES.ASK, askOpts);
+  check('提问的选项被塞成字符串也拆得开', Array.isArray(asked.options) && asked.options.length === 2, typeof asked.options);
+  check('拆开之后 normalizeAskOptions 拿得到标签', normalizeAskOptions(asked.options).map((o) => o.label).join('/') === '能/不能');
+  const agentSrc = fs.readFileSync(new URL('../server/agent.mjs', import.meta.url), 'utf8');
+  check('校验失败时补的那行把两种因都说清（缺字段 / 整份写成了字符串）',
+    agentSrc.includes('若是把清单写成了字符串，改成数组本身再发'), '');
+}
+
+
+// ─────────────────────────────────────── 8. 不变量：可见面上没有数值化学习量
+
+section('8. 不变量（Invariant 4）');
+section('8. 不变量（Invariant 4）');
+const lv = store.summariseLearnerView(session.progress);
+const blob = JSON.stringify(lv);
+const forbidden = ['percent', 'score', 'pct', 'star', 'grade', 'level'];
+check(
+  '学习者视图不含数值化字段',
+  !forbidden.some((f) => blob.toLowerCase().includes(f)),
+  blob.slice(0, 200),
+);
+check(
+  '学习者视图只给文字词',
+  Object.keys(lv.counts).every((k) => ['待学', '正在学习', '已学懂', '正在练习', '已掌握'].includes(k)),
+  JSON.stringify(lv.counts),
+);
+
+// 五个状态五个词。以前 Seen 和 Understood 共用「正在学习」，一局里四五个概念挂同一个词，
+// 学习者看不出上一步到底过没过（活会话截图报的）。这里钉的是"不许再合并"。
+const STATE_LADDER = ['unknown', 'seen', 'understood', 'applied', 'mastered'];
+const WORDS = STATE_LADDER.map((s) => store.stateWord(s));
+check('五个状态五个词，谁也不跟谁重合', new Set(WORDS).size === 5, WORDS.join(' / '));
+check(
+  'Understood 有独立对外词（讲通了 ≠ 还在学，也 ≠ 练过了）',
+  store.stateWord('understood') === '已学懂',
+  store.stateWord('understood'),
+);
+// 词表一共抄在四处（后端 / 前端 / 规则表 / 给模型的适配器），漏一处就是又一轮"措辞三层"漂移
+const appSrc = fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+check('前端词表与后端同一批', WORDS.every((w) => appSrc.includes(w)), WORDS.join(' / '));
+check(
+  'runtime.md §1.5 的译写表跟代码同一批',
+  rulesBlob.includes('| Seen | 正在学习 |') && rulesBlob.includes('| Understood | 已学懂 |'),
+);
+check('适配器报给模型的对外词是同一批', WORDS.every((w) => probePrompt.includes(w)));
+
+// ─────────────────────────────────────── 9. 落盘往返
+
+section('9. 落盘与恢复');
+store.saveGraph(meta.id, result.graph);
+store.saveProgress(meta.id, result.progress);
+store.appendChat(meta.id, result.messages);
+const reloaded = store.getNotebook(meta.id);
+check('Graph 落盘后可读回', reloaded.graph.concepts.length === 2);
+check('Progress 落盘后可读回', reloaded.progress.concepts['closures'].state === 'seen');
+check('对话落盘后可读回', reloaded.chat.messages.length === result.messages.length);
+check('列表页能看到这个学习', store.listNotebooks().some((n) => n.id === meta.id));
+
+section('10. 列表摘要不泄漏数值');
+const summary = store.listNotebooks()[0];
+check('摘要含文字视图', Boolean(summary.learnerView?.counts));
+
+section('11. 开局引导：现编的候选、缓存与兜底');
+const { parseStarters, readStarterCache, writeStarterCache, studiedFingerprint, generateStarters } =
+  await import('../server/starters.mjs');
+
+const fourJson = JSON.stringify([
+  { title: '为什么闰年这么麻烦', sub: '从一张日历开始' },
+  { title: '怎样让一段代码自己变快', sub: '先量再改' },
+  { title: '一首歌为什么抓耳', sub: '拆开听结构' },
+  { title: '合同里哪几句最贵', sub: '非法律岗' },
+]);
+const parsedStarters = parseStarters(`好的，这是候选：\n\`\`\`json\n${fourJson}\n\`\`\``);
+check(
+  '裹了代码块和寒暄也照样解析',
+  parsedStarters.length === 4 && parsedStarters[0].title === '为什么闰年这么麻烦',
+  JSON.stringify(parsedStarters),
+);
+check(
+  '条数封顶 4（超出会把"开局"撑成列表）',
+  parseStarters(JSON.stringify(Array.from({ length: 9 }, (_, i) => ({ title: `主题${i}`, sub: 'x' }))))
+    .length === 4,
+);
+check('同标题去重', parseStarters(JSON.stringify([{ title: 'A', sub: 'x' }, { title: 'A', sub: 'y' }])).length === 1);
+check('title 超长被裁到 24', parseStarters(JSON.stringify([{ title: '很'.repeat(40), sub: 'x' }]))[0].title.length === 24);
+check('模型胡答就交白卷', parseStarters('抱歉，我想不到好主题').length === 0);
+check('坏 JSON 也交白卷', parseStarters('[{title: 缺引号}]').length === 0);
+
+const fp = studiedFingerprint(['闭包', '财务报表']);
+check('已学清单顺序不同算同一指纹', fp === studiedFingerprint(['财务报表', '闭包']));
+writeStarterCache(fp, parsedStarters);
+check('同指纹命中缓存', readStarterCache(fp)?.length === 4);
+check('学了新主题（指纹变了）就重编', readStarterCache(studiedFingerprint(['闭包'])) === null);
+
+const okRegistry = (text) => ({
+  resolveModel: () => ({}),
+  models: { complete: async () => ({ content: [{ type: 'text', text }] }) },
+});
+check(
+  '配了模型就现编得出候选',
+  (await generateStarters({ registry: okRegistry(fourJson), modelRef: { provider: 'p', model: 'm' } })).length === 4,
+);
+check('没配模型就交白卷（前端留静态四条）', (await generateStarters({ registry: okRegistry(fourJson), modelRef: null })).length === 0);
+const brokenRegistry = {
+  resolveModel: () => {
+    throw new Error('没这个模型');
+  },
+  models: { complete: async () => { throw new Error('端点炸了'); } },
+};
+check(
+  '端点炸了也交白卷，引导不该有故障路径',
+  (await generateStarters({ registry: brokenRegistry, modelRef: { provider: 'p', model: 'm' } })).length === 0,
+);
+let askedPrompt = '';
+await generateStarters({
+  registry: {
+    resolveModel: () => ({}),
+    models: {
+      complete: async (_m, req) => {
+        askedPrompt = req.messages[0].content;
+        return { content: [{ type: 'text', text: fourJson }] };
+      },
+    },
+  },
+  modelRef: { provider: 'p', model: 'm' },
+  studied: ['闭包', 'React Hooks'],
+});
+check('提示词里点名已学主题（这才叫不重复出现）', askedPrompt.includes('闭包') && askedPrompt.includes('React Hooks'));
+
+// ─────────────────────────────────────── 收尾
+
+console.log(`\n${'─'.repeat(52)}`);
+console.log(`通过 ${passed} 项，失败 ${failed} 项`);
+fs.rmSync(tmpRoot, { recursive: true, force: true });
+process.exit(failed === 0 ? 0 : 1);
