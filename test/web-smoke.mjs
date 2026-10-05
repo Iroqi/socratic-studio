@@ -333,6 +333,7 @@ globalThis.Blob = class Blob {
   }
 };
 globalThis.URL.createObjectURL = () => 'blob:stub';
+globalThis.URL.revokeObjectURL = () => {};
 const esInstances = [];
 globalThis.EventSource = class EventSource {
   constructor(url) {
@@ -691,6 +692,22 @@ early.state.notebook.patches.patches = [];
 early.renderPanel();
 check('确认完角标就灭', patchBadge.textContent === '' && patchBadge.classList.contains('hidden'), patchBadge.textContent);
 check('右栏这一节无异常', errors.length === 0, errors.join(' | '));
+
+// 整本备份：学习记录能离开这台机器（入口在「学习」页签底部，导出走真实接口）
+const backupRow = deepAll(doc.getElementById('panelBody'), 'backup-row')[0];
+const backupBtns = backupRow ? Array.from(backupRow.children).map((b) => b.textContent) : [];
+check('「学习」页签底部有整本备份两个入口', backupBtns.includes('导出整本') && backupBtns.includes('导入整本'), backupBtns.join('/'));
+const backupHint = deepAll(doc.getElementById('panelBody'), 'backup-hint')[0];
+check('备份入口带一句说明（不裸放两个键）', Boolean(backupHint) && backupHint.textContent.includes('JSON'), backupHint?.textContent);
+responses.set('GET /api/notebooks/nb-test/export', () =>
+  json({ format: 'socratic-studio-notebook', version: 1, exportedAt: 't', files: {}, uploads: [], artifacts: [] }));
+const reqBeforeExport = requests.length;
+const exportBtn = Array.from(backupRow.children).find((b) => b.textContent === '导出整本');
+exportBtn.onclick();
+await new Promise((r) => setTimeout(r, 20));
+check('点「导出整本」真的打了导出接口', requests.slice(reqBeforeExport).some((k) => k === 'GET /api/notebooks/nb-test/export'), requests.slice(reqBeforeExport).join(','));
+check('导出成功有提示（整本备份）', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出整本备份')));
+check('右栏备份这一节无异常', errors.length === 0, errors.join(' | '));
 
 console.log('\n3. 走一轮对话（SSE 回放）');
 const input = doc.getElementById('input');

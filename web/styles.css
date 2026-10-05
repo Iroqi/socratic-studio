@@ -882,6 +882,10 @@ html, body {
 .panel-section-title:first-child { margin-top: 0; }
 .state-note { font-size: 12.5px; color: var(--ink-2); }
 
+/* 整本备份：一行两键 + 一句说明，不抢面板里的视觉层级 */
+.backup-row { display: flex; gap: 8px; align-items: center; }
+.backup-hint { font-size: 12px; color: var(--ink-3); margin-top: 7px; line-height: 1.5; }
+
 .patch-card {
   border: 1px solid var(--border); border-left: 3px solid var(--warning);
   border-radius: var(--radius-sm); padding: 11px 13px; margin-bottom: 9px; background: var(--surface);

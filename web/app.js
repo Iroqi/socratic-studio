@@ -2879,6 +2879,7 @@ function renderLearnPanel(body) {
   renderEventsPanel(body);
   renderNotesPanel(body);
   renderTasksPanel(body);
+  renderBackupPanel(body);
 }
 
 function pendingPatches() {
@@ -3033,6 +3034,72 @@ function renderNotesPanel(body) {
   const list = el('div', 'state-note');
   for (const n of notes.slice(-10).reverse()) list.append(el('div', null, `· ${n.text}`));
   body.append(list);
+}
+
+/**
+ * 整本备份：学习记录在这台机器的 data/ 里，导出让它可以离开这台机器（备份 / 迁移 / 分享）。
+ * 导出 = 把整本（对话、概念、进度、笔记、制品、素材）打包成一个 JSON 下载；
+ * 导入 = 选一份备份 JSON，校验后还原成一本**新的**学习（不动现有任何一本）。
+ */
+function renderBackupPanel(body) {
+  if (!state.notebook) return;
+  body.append(el('div', 'panel-section-title', '整本备份'));
+  const row = el('div', 'backup-row');
+  const exportBtn = el('button', 'btn btn-ghost btn-sm', '导出整本');
+  const importBtn = el('button', 'btn btn-ghost btn-sm', '导入整本');
+  row.append(exportBtn, importBtn);
+  body.append(row);
+  body.append(
+    el('div', 'backup-hint', '导出把这一整本打包成一个 JSON 文件；导入把备份还原成一本新学习，原来的学习不动。'),
+  );
+
+  exportBtn.onclick = async () => {
+    try {
+      exportBtn.disabled = true;
+      const bundle = await api('GET', `/api/notebooks/${state.notebook.id}/export`);
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = el('a');
+      a.href = url;
+      const slug = String(state.notebook.title || '学习').replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'notebook';
+      a.download = `socratic-${slug}-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.append(a);
+      if (typeof a.click === 'function') a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast('已导出整本备份');
+    } catch (err) {
+      toast(`导出失败：${err.message}`, true);
+    } finally {
+      exportBtn.disabled = false;
+    }
+  };
+
+  importBtn.onclick = () => {
+    const input = el('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = async () => {
+      const f = input.files && input.files[0];
+      if (!f) return;
+      importBtn.disabled = true;
+      try {
+        const text = typeof f.text === 'function' ? await f.text() : String(f);
+        const bundle = JSON.parse(text);
+        toast('正在导入…');
+        const { notebook } = await api('POST', '/api/notebooks/import', bundle);
+        state.notebooks = (await api('GET', '/api/notebooks')).notebooks;
+        await openNotebook(notebook.id);
+        renderNotebookList();
+        toast(`已导入「${notebook.title || '新学习'}」`);
+      } catch (err) {
+        toast(`导入失败：${err.message}`, true);
+      } finally {
+        importBtn.disabled = false;
+      }
+    };
+    input.click();
+  };
 }
 
 function renderPatchCard(p) {
@@ -4016,6 +4083,7 @@ export const __hooks = {
   drainTurnStream,
   renderPanel,
   renderPlanCard,
+  renderBackupPanel,
   markPlanDecided,
   updateMentionPopup,
   applyMention,

@@ -4,6 +4,9 @@
 // 这条脚本把总数变成跑出来的：每个套件自己打印"通过 N 项"，这里加起来。
 // 任一套件非零退出，本脚本非零退出。
 //
+// 命令缺失的套件（如 Linux 上没有 pwsh 时的 PS1 套件）如实报 SKIP + 原因——
+// 以前它们报「FAIL 0 项」，像真的跑了 0 项一样，汇总口径是骗人的。
+//
 //   npm run test:all
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -20,6 +23,13 @@ const SUITES = [
   { name: 'artifact-evidence-smoke.ps1（制品证据端到端）', cmd: 'pwsh', args: ['-NoProfile', '-File', 'test/artifact-evidence-smoke.ps1'] },
 ];
 
+/** 命令是否可用：找不到命令时 spawnSync 返回 status === null 且 error.code === 'ENOENT'。 */
+function commandAvailable(cmd) {
+  const args = cmd === 'pwsh' ? ['-NoProfile', '-Command', '$true'] : ['--version'];
+  const probe = spawnSync(cmd, args, { encoding: 'utf8' });
+  return !(probe.status === null && probe.error?.code === 'ENOENT');
+}
+
 // PowerShell 的输出按控制台代码页写出来，utf8 解出来是乱码，"通过 N 项"就匹配不上——
 // 匹配不到就退回 GBK 再解一次。
 function decode(buf) {
@@ -34,8 +44,14 @@ function decode(buf) {
 
 let total = 0;
 let failed = 0;
+let skipped = 0;
 
 for (const suite of SUITES) {
+  if (!commandAvailable(suite.cmd)) {
+    skipped += 1;
+    console.log(`SKIP  ${suite.name}  — 本机没有 ${suite.cmd}，该套件未运行`);
+    continue;
+  }
   const r = spawnSync(suite.cmd, suite.args, { cwd: APP, encoding: 'buffer', maxBuffer: 32 * 1024 * 1024 });
   const out = decode(r.stdout || Buffer.from(''));
   const counts = [...out.matchAll(/通过 (\d+) 项[，,]失败 (\d+) 项/g)];
@@ -51,5 +67,8 @@ for (const suite of SUITES) {
   }
 }
 
-console.log(`\n合计 ${total} 项断言，${SUITES.length - failed}/${SUITES.length} 个套件通过`);
+console.log(
+  `\n合计 ${total} 项断言，${SUITES.length - failed - skipped}/${SUITES.length} 个套件通过` +
+    (skipped ? `，${skipped} 个跳过（缺运行环境）` : ''),
+);
 process.exit(failed ? 1 : 0);

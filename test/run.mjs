@@ -2145,6 +2145,165 @@ await generateStarters({
 });
 check('提示词里点名已学主题（这才叫不重复出现）', askedPrompt.includes('闭包') && askedPrompt.includes('React Hooks'));
 
+// ─────────────────────────────────────── 12. 整本导出 / 导入（备份与迁移）+ 数据抗摔
+
+section('12. 整本导出 / 导入：学习记录是可带走的资产');
+
+// 专用一本，不碰前面各节用过的 meta.id / nbDesk
+const srcId = store.createNotebook({ topic: '导出往返', goal: '验证备份格式', pace: 'normal' }).id;
+
+// 造内容：Graph、进度、对话、笔记、待办、场、道具、素材、制品（含退役一件）
+const srcGraph = {
+  meta: { topic: '导出往返', goal: '验证备份格式', pedagogy: 'general' },
+  concepts: [
+    {
+      id: 'first',
+      name: '第一个概念',
+      summary: '一句话定义',
+      depends_on: [],
+      misconceptions: ['容易踩的坑'],
+    },
+    {
+      id: 'second',
+      name: '第二个概念',
+      summary: '依赖第一个',
+      depends_on: ['first'],
+    },
+  ],
+};
+store.saveGraph(srcId, srcGraph);
+store.saveProgress(srcId, {
+  version: 1,
+  session_open: true,
+  concepts: { first: { concept_id: 'first', state: 'understood', next_action: null }, second: { concept_id: 'second', state: 'seen', next_action: null } },
+  notes: [{ at: new Date().toISOString(), text: '第一次接触闭包' }],
+  updated_at: new Date().toISOString(),
+});
+store.appendChat(srcId, [
+  { role: 'user', content: '我想学导出', timestamp: Date.now() },
+  { role: 'assistant', content: '好的，先拆结构。', timestamp: Date.now() },
+]);
+store.saveTodos(srcId, [{ id: 't1', content: '拆结构', status: 'completed' }]);
+store.saveSceneState(srcId, {
+  version: 1,
+  index: 1,
+  current: {
+    id: 'scene-01',
+    index: 1,
+    title: '第一场：结构',
+    phase: 'open',
+    conceptId: 'first',
+    props: [{ id: 'src-art-1', title: '对照卡', rel: 'artifacts/src-art-1/index.html' }],
+    inheritedFrom: null,
+    openedAt: new Date().toISOString(),
+  },
+  log: [],
+});
+store.appendPatch(srcId, { operation: 'ADD', target: 'concepts.first.misconceptions', value: '新误解', confidence: 'high' });
+const uploadRec = store.saveUpload(srcId, '素材说明.md', Buffer.from('# 素材说明\n\n要点一二三。', 'utf8'));
+const imgRec = store.saveUpload(srcId, '示意.png', Buffer.from('fake-png-bytes', 'utf8'));
+const artRec = store.saveArtifact(srcId, { title: '对照卡', html: '<h1>现象</h1>', kind: 'interactive' });
+store.setArtifactLifetime(srcId, artRec.id, true);
+saveNote(srcId, { title: '备份笔记', summary: '要点', key_points: ['一条'], example: '例子' });
+
+const bundle = store.exportNotebook(srcId);
+check('导出包带格式标记与版本', bundle.format === 'socratic-studio-notebook' && bundle.version === 1);
+check('导出包带着七份 JSON（files 键齐全）', ['notebook.json', 'learning-graph.json', 'progress.json', 'patches.json', 'chat.json', 'todos.json', 'scene.json', 'notes.json'].every((k) => k in bundle.files));
+check('Graph 原样在包里', bundle.files['learning-graph.json'].concepts.length === 2);
+check('素材带 rel / 字节数 / 内容', bundle.uploads.some((u) => u.rel === uploadRec.rel && u.bytes > 0 && u.data.includes('要点')));
+check('二进制素材走 base64', bundle.uploads.find((u) => u.kind === 'image').encoding === 'base64');
+check('制品带 HTML 与寿命标记', bundle.artifacts.some((a) => a.id === artRec.id && a.html.includes('现象') && a.retiredAt));
+check('导出不改源（只读盘）', store.getNotebook(srcId).graph.concepts.length === 2);
+
+const imported = store.importNotebook(bundle);
+// 中文主题的 id 走短哈希（topic-xxx），不含原词——这里验的是"新 id、不撞源"两件事
+check('导入生成新的学习（id 不冲突）', imported.id !== srcId && /^topic-[0-9a-z]{3}-[0-9a-z]{6}$/.test(imported.id), imported.id);
+check('导入后 Graph 内容等价', imported.graph.concepts.length === 2 && imported.graph.concepts[1].depends_on[0] === 'first');
+check('导入后进度等价', imported.progress.concepts.first.state === 'understood');
+check('导入后对话等价', imported.chat.messages.length === 2);
+check('导入后笔记等价', imported.notes.length === 1 && imported.notes[0].title === '备份笔记');
+check('导入后备注也在（progress.notes）', imported.progress.notes.length === 1);
+check('导入后待办等价', imported.todos.length === 1 && imported.todos[0].id === 't1');
+check('导入后场与台上道具原样（道具 id 是交叉引用的承重墙）', imported.scene.current.props[0].id === 'src-art-1');
+check('导入后 PATCH 记录等价', imported.patches.patches.length === 1 && imported.patches.patches[0].confidence === 'high');
+check('导入后制品 id 原样保留', imported.artifacts.some((a) => a.id === artRec.id));
+check('导入后制品寿命标记原样保留', imported.artifacts.find((a) => a.id === artRec.id).retiredAt);
+check('导入后素材按原 rel 可读（文本）', store.readUpload(imported.id, uploadRec.rel).text.includes('要点'));
+check('导入后素材按原 rel 可读（图片）', store.readUpload(imported.id, imgRec.rel).kind === 'image');
+check('导入后列表能看到新学习', store.listNotebooks().some((n) => n.id === imported.id));
+
+// 导入校验：白名单 / Graph 严格校验 / 空图放行 / 大小与路径上限
+const evil = structuredClone(bundle);
+evil.files['evil.json'] = { x: 1 };
+let evilMsg = '';
+try {
+  store.importNotebook(evil);
+} catch (e) {
+  evilMsg = e.message;
+}
+check('包里的未知文件键被拒绝（白名单）', evilMsg.includes('evil.json') && evilMsg.includes('白名单'), evilMsg);
+
+const badGraph = structuredClone(bundle);
+badGraph.files['learning-graph.json'] = {
+  meta: { topic: '坏图', pedagogy: 'general' },
+  concepts: [{ id: 'orphan' }], // 缺 name / summary
+};
+let badGraphMsg = '';
+try {
+  store.importNotebook(badGraph);
+} catch (e) {
+  badGraphMsg = e.message;
+}
+check('非法 Graph 被严格校验拒绝', badGraphMsg.includes('校验失败') && badGraphMsg.includes('name'), badGraphMsg);
+
+const emptyGraph = structuredClone(bundle);
+emptyGraph.files['learning-graph.json'] = { meta: { topic: '还没拆', pedagogy: 'general' }, concepts: [] };
+check('空图（还没 DECOMPOSE）是合法状态，放行', store.importNotebook(emptyGraph).graph.concepts.length === 0);
+
+const bigArtifact = structuredClone(bundle);
+bigArtifact.artifacts = [{ id: 'huge-art', title: '巨大', html: 'x'.repeat(8 * 1024 * 1024 + 1) }];
+let bigMsg = '';
+try {
+  store.importNotebook(bigArtifact);
+} catch (e) {
+  bigMsg = e.message;
+}
+check('超大制品 HTML 被拒绝', bigMsg.includes('8MB'), bigMsg);
+
+const evilRel = structuredClone(bundle);
+evilRel.uploads = [{ rel: 'uploads/../../etc/passwd', name: 'p', bytes: 0, data: '' }];
+let evilRelMsg = '';
+try {
+  store.importNotebook(evilRel);
+} catch (e) {
+  evilRelMsg = e.message;
+}
+check('越界素材路径被拒绝（只认 uploads/<文件名>）', evilRelMsg.includes('路径形状非法'), evilRelMsg);
+
+const notBundle = { hello: 'world' };
+let notBundleMsg = '';
+try {
+  store.importNotebook(notBundle);
+} catch (e) {
+  notBundleMsg = e.message;
+}
+check('不认识的包被拒绝', notBundleMsg.includes('不认识的导出格式'), notBundleMsg);
+
+// 数据抗摔：notes.json 损坏时保留副本 + 以默认值继续（跟 store.mjs 同一条纪律）
+section('12b. 数据抗摔：notes.json 损坏不静默丢');
+const crashId = store.createNotebook({ topic: '抗摔测试', goal: null, pace: 'normal' }).id;
+saveNote(crashId, { title: '会救回来', summary: '这条不该丢', key_points: [] });
+const notesFile = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', crashId, 'notes.json');
+fs.writeFileSync(notesFile, '{ 半截 JSON');
+const readBack = readNotes(crashId);
+check('损坏的 notes.json 读回空默认（不抛）', Array.isArray(readBack) && readBack.length === 0);
+const backups = fs.readdirSync(path.dirname(notesFile)).filter((f) => f.startsWith('notes.json.corrupt-'));
+check('损坏文件留了副本（不静默覆盖可抢救数据）', backups.length === 1, backups.join(','));
+const afterCrash = saveNote(crashId, { title: '恢复后新增', summary: '写入正常', key_points: [] });
+check('损坏后写入正常（原子写）', afterCrash.title === '恢复后新增');
+const tmpLeft = fs.readdirSync(path.dirname(notesFile)).filter((f) => f.endsWith('.tmp'));
+check('原子写不留半截 .tmp 文件', tmpLeft.length === 0, tmpLeft.join(','));
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

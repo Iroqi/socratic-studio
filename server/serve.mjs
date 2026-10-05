@@ -595,6 +595,18 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 201, { notebook: store.getNotebook(meta.id) });
     }
 
+    // 整本导入：把一份导出包还原成一本新的学习。包可能带制品/素材，放宽请求体上限。
+    // 校验错误统一走 sendError：Graph 非法会抛 GraphValidationError → 422，带 issues。
+    if (pathname === '/api/notebooks/import' && method === 'POST') {
+      const body = await readBody(req, 100 * 1024 * 1024);
+      try {
+        const notebook = store.importNotebook(body);
+        return sendJson(res, 201, { notebook });
+      } catch (err) {
+        return sendError(res, err);
+      }
+    }
+
     m = /^\/api\/notebooks\/([^/]+)$/.exec(pathname);
     if (m && method === 'GET') {
       return sendJson(res, 200, { notebook: store.getNotebook(decodeURIComponent(m[1])) });
@@ -607,6 +619,25 @@ const server = http.createServer(async (req, res) => {
     }
     if (m && method === 'DELETE') {
       return sendJson(res, 200, store.deleteNotebook(decodeURIComponent(m[1])));
+    }
+
+    // 整本导出：打包下载。只读盘，不动任何状态；前端把它当文件存下来。
+    m = /^\/api\/notebooks\/([^/]+)\/export$/.exec(pathname);
+    if (m && method === 'GET') {
+      const id = decodeURIComponent(m[1]);
+      const bundle = store.exportNotebook(id);
+      const slug = String(bundle.source.title || id).replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'notebook';
+      const filename = `socratic-${slug}-${new Date().toISOString().slice(0, 10)}.json`;
+      const payload = JSON.stringify(bundle, null, 2);
+      // filename* 必须是百分号编码（RFC 5987）：文件名可能带中文，原始字节进不了响应头
+      const encoded = encodeURIComponent(filename).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition': `attachment; filename="socratic-notebook.json"; filename*=UTF-8''${encoded}`,
+        'Content-Length': Buffer.byteLength(payload),
+        'Cache-Control': 'no-store',
+      });
+      return res.end(payload);
     }
 
     // ---------- 上传素材

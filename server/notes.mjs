@@ -12,7 +12,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from './config.mjs';
+import { DATA_DIR, writeJsonAtomic, readJsonSafe } from './config.mjs';
 
 const NOTES_FILE = 'notes.json';
 
@@ -28,21 +28,21 @@ function empty() {
   return { version: 1, notes: [], updated_at: new Date().toISOString() };
 }
 
+/**
+ * 读盘。和 store.mjs 同一条纪律：JSON 坏了就保留损坏副本并喊出来，再以默认值继续，
+ * 绝不静默返回空——否则下一次写入会用空默认值覆盖掉本可抢救的笔记。
+ * readJsonSafe 只保证"是合法 JSON"，这里的形状校验（notes 必须是数组）仍归自己。
+ */
 function read(id) {
-  try {
-    const raw = fs.readFileSync(file(id), 'utf8');
-    const parsed = JSON.parse(raw);
-    if (!parsed || !Array.isArray(parsed.notes)) return empty();
-    return parsed;
-  } catch {
-    return empty();
-  }
+  const parsed = readJsonSafe(file(id), null);
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.notes)) return empty();
+  return parsed;
 }
 
 function write(id, data) {
   fs.mkdirSync(dir(id), { recursive: true });
   data.updated_at = new Date().toISOString();
-  fs.writeFileSync(file(id), `${JSON.stringify(data, null, 2)}\n`);
+  writeJsonAtomic(file(id), data);
   return data;
 }
 

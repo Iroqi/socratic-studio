@@ -155,7 +155,7 @@ auth 解析顺序：显式 `apiKey` → 已存的 credential → 环境变量。
 │  ├─ providers-catalog.mjs 哪些 provider 可选、各自的环境变量与 key 提示
 │  ├─ providers.mjs        CredentialStore、Models 集合、订阅列表、模型解析
 │  ├─ graph.mjs            Learning Graph 严格校验 + 拓扑排序
-│  ├─ store.mjs            每个 notebook 的落盘（graph / progress / patches / chat / uploads / artifacts / todos / jobs）
+│  ├─ store.mjs            每个 notebook 的落盘（graph / progress / patches / chat / uploads / artifacts / todos / jobs）+ 整本导出 / 导入
 │  ├─ tasks.mjs            后台任务与子 agent：任务记录、隔离执行、落盘、事件外发
 │  ├─ agent.mjs            18 个工具、状态转移守卫、agentic 循环（SSE 事件源）
 │  ├─ prompt.mjs           读 rules/ 编译 system prompt + 宿主能力映射 + 状态快照
@@ -183,6 +183,9 @@ auth 解析顺序：显式 `apiKey` → 已存的 credential → 环境变量。
 ```bash
 npm run test:all   # 一条命令跑完 6 个套件：各自打「通过 N 项」，末行打合计
 ```
+
+> 缺运行环境的套件如实报 `SKIP`（原因写清楚），不冒充「FAIL 0 项」：比如 Linux 上没有
+> PowerShell 时，两个 `*.ps1` 套件会跳过，其余照跑，退出码仍然 0——没跑就是没跑，汇总口径不骗人。
 
 单个套件（`npm test` 只含前三个，`test:http` / `test:artifact` / `test:web` 各自单跑）：
 
@@ -918,6 +921,19 @@ agent 调 `read_artifact_evidence` 就能拿到。反过来 agent 下发的指�
 `allow-same-origin`（这是安全取舍：制品 HTML 由模型生成，给同源权限它就能触达父页），
 所以父页原本读不到 `contentDocument`——高度只能靠估算，长页面会被裁掉一半。
 现在由制品内 `ResizeObserver` + `postMessage` 上报真实高度。
+
+## 整本导出 / 导入（备份与迁移）
+
+学习记录是这台机器上唯一带不走的资产——对话、概念结构、进度、笔记、制品、素材全在 `data/`。
+「学习」页签底部的**整本备份**让它可以离开这台机器：
+
+- **导出整本**：`GET /api/notebooks/<id>/export` 把整本打包成一个 JSON 下载
+  （格式 `socratic-studio-notebook@1`：七份 JSON + 素材 base64 + 制品 HTML 原文）。
+  只读盘，不改任何状态。
+- **导入整本**：`POST /api/notebooks/import` 把备份还原成一本**新的**学习（新 id，不碰现有任何一本）。
+  校验是白名单式的：只认七份已知 JSON 键、Graph 非空必须过严格校验（还没 DECOMPOSE 的空图放行）、
+  素材路径只认 `uploads/<文件名>`、单素材 ≤ 20MB、单制品 HTML ≤ 8MB、整包 ≤ 100MB。
+  **制品 id 与素材 rel 原样保留**——对话、进度、场上道具里到处引用着它们，换掉 id 等于打断整本的交叉引用。
 
 ## 已知边界
 

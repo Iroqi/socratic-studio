@@ -4,7 +4,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from './config.mjs';
+import { DATA_DIR, writeJsonAtomic } from './config.mjs';
 
 const CACHE_FILE = path.join(DATA_DIR, 'starters.json');
 const TTL_MS = 12 * 3600 * 1000;
@@ -29,7 +29,9 @@ export function readStarterCache(fingerprint) {
 export function writeStarterCache(fingerprint, starters) {
   try {
     fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
-    fs.writeFileSync(CACHE_FILE, JSON.stringify({ at: Date.now(), fingerprint, starters }));
+    // 原子写：缓存损坏只是重编一次，但半截文件会让下一次读取静默落空——那也一样重编。
+    // 用同一套纪律，避免"写了一半的 JSON"在下次读取时被当成合法空结果。
+    writeJsonAtomic(CACHE_FILE, { at: Date.now(), fingerprint, starters });
   } catch {
     /* 缓存写不进去只是下次多编一次，不影响引导能用 */
   }

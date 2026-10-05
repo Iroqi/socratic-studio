@@ -17,7 +17,8 @@ import {
   isWithin,
 } from './config.mjs';
 import { readNotes } from './notes.mjs';
-import { normaliseSceneState, placeProp } from './scene.mjs';
+import { validateGraph } from './graph.mjs';
+import { normaliseSceneState, placeProp, emptySceneState } from './scene.mjs';
 
 const NOTEBOOK_FILE = 'notebook.json';
 const GRAPH_FILE = 'learning-graph.json';
@@ -26,6 +27,8 @@ const PATCH_FILE = 'patches.json';
 const ARTIFACTS_DIR = 'artifacts';
 const UPLOADS_DIR = 'uploads';
 const CHAT_FILE = 'chat.json';
+// notes.json 归 notes.mjs 管，这里只认它的文件名（导出/导入要把它一并打包）
+const NOTES_FILE = 'notes.json';
 
 class NotFoundError extends Error {
   constructor(message) {
@@ -606,4 +609,230 @@ export function placeOnDesk(id, artifact) {
   const current = readSceneState(id);
   if (!current.current) return { scene: current, placed: false };
   return { scene: saveSceneState(id, placeProp(current, artifact)), placed: true };
+}
+
+// ---------------------------------------------------------------- 整本导出 / 导入
+//
+// 学习记录是学习者唯一带不走的资产：Graph、进度、笔记、对话、制品、素材全在这台机器的
+// data/ 里。导出 = 把整本打包成一个 JSON（备份 / 换机器 / 分享学习记录）；导入 = 校验后
+// 重建一本（新 id，内容原样）。两份 JSON 互相是对方的格式契约：
+//
+//   { format: 'socratic-studio-notebook', version: 1, exportedAt, source, files, uploads, artifacts }
+//
+// 关键决策：**制品 id 与素材 rel 原样保留**——chat / progress / scene 里到处引用着它们
+// （道具、证据、附件），换掉 id 就等于把整本的交叉引用打断。导入到新 notebook 目录
+// （新 id 不冲突），所以同名不撞。
+
+const EXPORT_FORMAT = 'socratic-studio-notebook';
+const EXPORT_VERSION = 1;
+
+/** 导入安全上限：本地工具，防的是手滑/坏包撑爆磁盘，不是防恶意攻击。 */
+const IMPORT_MAX_BUNDLE_BYTES = 100 * 1024 * 1024;
+const IMPORT_MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+const IMPORT_MAX_ARTIFACT_HTML_BYTES = 8 * 1024 * 1024;
+const IMPORT_MAX_MESSAGES = 20000;
+const IMPORT_MAX_NOTES = 2000;
+
+/** 只认这七份已知 JSON 文件；包里的其它键一律拒绝（路径穿越 / 未知文件混进包都不接）。 */
+const IMPORT_FILE_KEYS = new Set([
+  NOTEBOOK_FILE,
+  GRAPH_FILE,
+  PROGRESS_FILE,
+  PATCH_FILE,
+  CHAT_FILE,
+  TODOS_FILE,
+  SCENE_FILE,
+  NOTES_FILE,
+]);
+
+function exportFileIfAny(dir, name) {
+  const file = path.join(dir, name);
+  if (!fs.existsSync(file)) return null;
+  const data = readJsonSafe(file, null);
+  return data === null ? null : data;
+}
+
+/**
+ * 把一本学习完整打包成可带走 / 可还原的 JSON。
+ * 只读盘、不改任何状态；素材二进制转 base64，制品带 HTML 原文。
+ */
+export function exportNotebook(id) {
+  const dir = assertExists(id);
+  const meta = readJsonSafe(path.join(dir, NOTEBOOK_FILE), {});
+  const files = {};
+  for (const name of [NOTEBOOK_FILE, GRAPH_FILE, PROGRESS_FILE, PATCH_FILE, CHAT_FILE, TODOS_FILE, SCENE_FILE]) {
+    const data = exportFileIfAny(dir, name);
+    if (data !== null) files[name] = data;
+  }
+  files[NOTES_FILE] = { version: 1, notes: readNotes(id) };
+
+  const uploads = listUploads(id).map((u) => {
+    const full = path.join(dir, u.rel);
+    const buffer = fs.existsSync(full) ? fs.readFileSync(full) : Buffer.alloc(0);
+    return {
+      rel: u.rel,
+      name: u.name,
+      kind: u.kind,
+      bytes: buffer.length,
+      data: u.kind === 'image' ? buffer.toString('base64') : buffer.toString('utf8'),
+      // base64 与否由 kind 决定：image 走 base64，文本走 utf8（可读、可审、体积小）
+      encoding: u.kind === 'image' ? 'base64' : 'utf8',
+    };
+  });
+
+  const artifacts = listArtifacts(id).map((a) => ({
+    id: a.id,
+    title: a.title,
+    kind: a.kind,
+    rel: a.rel,
+    createdAt: a.createdAt,
+    retiredAt: a.retiredAt ?? null,
+    html: fs.existsSync(path.join(dir, 'artifacts', a.id, 'index.html'))
+      ? fs.readFileSync(path.join(dir, 'artifacts', a.id, 'index.html'), 'utf8')
+      : '',
+  }));
+
+  return {
+    format: EXPORT_FORMAT,
+    version: EXPORT_VERSION,
+    exportedAt: new Date().toISOString(),
+    source: { id: meta.id || id, title: meta.title || null, topic: meta.topic || null },
+    files,
+    uploads,
+    artifacts,
+  };
+}
+
+/**
+ * 把一份导出包还原成一本新的学习。校验不过抛错（Graph 走 GraphValidationError → 422）。
+ * 返回新建的 notebook（getNotebook 形状），调用方直接推给前端。
+ */
+export function importNotebook(bundle) {
+  if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)) {
+    throw new BadRequestError('导入包必须是对象');
+  }
+  if (bundle.format !== EXPORT_FORMAT || bundle.version !== EXPORT_VERSION) {
+    throw new BadRequestError(
+      `不认识的导出格式：${bundle.format}@${bundle.version}（本应用只认 ${EXPORT_FORMAT}@${EXPORT_VERSION}）`,
+    );
+  }
+  const files = bundle.files;
+  if (!files || typeof files !== 'object' || Array.isArray(files)) {
+    throw new BadRequestError('导入包缺少 files（整本数据）');
+  }
+  for (const key of Object.keys(files)) {
+    if (!IMPORT_FILE_KEYS.has(key)) {
+      throw new BadRequestError(`导入包里有不认识的文件：${key}（只收白名单内的七份 JSON）`);
+    }
+  }
+
+  // ---- Graph：非空必须通过严格校验；空图（还没 DECOMPOSE）是合法状态，不拦
+  const graph = files[GRAPH_FILE] || structuredClone(EMPTY_GRAPH);
+  if (Array.isArray(graph?.concepts) && graph.concepts.length > 0) {
+    validateGraph(graph);
+  }
+
+  // ---- 各 JSON 的形状下限：只要"能安全落盘、能被现有读取路径接受"，不重写内容
+  const meta = files[NOTEBOOK_FILE];
+  if (!meta || typeof meta !== 'object') throw new BadRequestError('导入包缺少 notebook.json');
+  const progress = files[PROGRESS_FILE];
+  if (!progress || typeof progress !== 'object') throw new BadRequestError('导入包缺少 progress.json');
+  const patches = files[PATCH_FILE];
+  if (!patches || typeof patches !== 'object') throw new BadRequestError('导入包缺少 patches.json');
+  const chat = files[CHAT_FILE];
+  if (!chat || typeof chat !== 'object' || !Array.isArray(chat.messages)) {
+    throw new BadRequestError('导入包的 chat.json 必须是 { messages: [...] }');
+  }
+  if (chat.messages.length > IMPORT_MAX_MESSAGES) {
+    throw new BadRequestError(`对话消息数超上限（${IMPORT_MAX_MESSAGES} 条）`);
+  }
+  const notes = files[NOTES_FILE];
+  if (!notes || typeof notes !== 'object' || !Array.isArray(notes.notes) || notes.notes.length > IMPORT_MAX_NOTES) {
+    throw new BadRequestError('导入包的 notes.json 必须是 { notes: [...] }（且条数不超上限）');
+  }
+
+  // ---- 素材：只认原本的相对路径（uploads/<sanitized>），重新落盘前逐项校验
+  const uploads = Array.isArray(bundle.uploads) ? bundle.uploads : [];
+  for (const u of uploads) {
+    if (!u || typeof u !== 'object') throw new BadRequestError('素材记录必须是对象');
+    if (u.bytes > IMPORT_MAX_UPLOAD_BYTES) {
+      throw new BadRequestError(`素材「${u.name || u.rel || ''}」超过 ${Math.round(IMPORT_MAX_UPLOAD_BYTES / 1024 / 1024)}MB 上限`);
+    }
+    const rel = String(u.rel || '');
+    if (!/^uploads\/[^/\\]+$/.test(rel)) {
+      throw new BadRequestError(`素材路径形状非法：${rel}（只认 uploads/<文件名>）`);
+    }
+    if (String(u.bytes || 0) > 0) {
+      const buf = u.encoding === 'base64' ? Buffer.from(String(u.data || ''), 'base64') : Buffer.from(String(u.data ?? ''), 'utf8');
+      if (buf.length !== Number(u.bytes)) {
+        throw new BadRequestError(`素材「${u.name || rel}」数据与声明的字节数不符`);
+      }
+    }
+  }
+
+  // ---- 制品：保留原 id（交叉引用全靠它），HTML 大小设上限
+  const artifacts = Array.isArray(bundle.artifacts) ? bundle.artifacts : [];
+  for (const a of artifacts) {
+    if (!a || typeof a !== 'object') throw new BadRequestError('制品记录必须是对象');
+    if (!safeId(String(a.id || ''))) throw new BadRequestError(`制品 id 非法：${a.id}`);
+    if (Buffer.byteLength(String(a.html || ''), 'utf8') > IMPORT_MAX_ARTIFACT_HTML_BYTES) {
+      throw new BadRequestError(`制品「${a.title || a.id}」HTML 超过 ${Math.round(IMPORT_MAX_ARTIFACT_HTML_BYTES / 1024 / 1024)}MB 上限`);
+    }
+  }
+
+  // ---- 落盘：新建一本（新 id，避免与既有目录冲突）
+  const topic = String(meta.topic || meta.title || '导入的学习').slice(0, 60);
+  const id = `${slugifyTopic(topic)}-${randomUUID().slice(0, 6)}`;
+  const dir = notebookDir(id);
+  fs.mkdirSync(path.join(dir, UPLOADS_DIR), { recursive: true });
+  fs.mkdirSync(path.join(dir, ARTIFACTS_DIR), { recursive: true });
+
+  // meta：保留原时间戳与标题，id 换成新的（这本是"还原"，不是"复制粘贴一份身份"）
+  const restoredMeta = {
+    ...meta,
+    id,
+    title: String(meta.title || topic || '导入的学习').slice(0, 120),
+    updatedAt: new Date().toISOString(),
+  };
+  writeJsonAtomic(path.join(dir, NOTEBOOK_FILE), restoredMeta);
+
+  for (const name of [GRAPH_FILE, PROGRESS_FILE, PATCH_FILE, CHAT_FILE, TODOS_FILE, SCENE_FILE]) {
+    if (files[name] !== undefined) writeJsonAtomic(path.join(dir, name), files[name]);
+  }
+  writeJsonAtomic(path.join(dir, NOTES_FILE), { version: 1, notes: notes.notes });
+
+  for (const u of uploads) {
+    const rel = String(u.rel);
+    const buffer =
+      u.encoding === 'base64' ? Buffer.from(String(u.data || ''), 'base64') : Buffer.from(String(u.data ?? ''), 'utf8');
+    if (buffer.length) fs.writeFileSync(path.join(dir, rel), buffer);
+  }
+
+  if (artifacts.length) {
+    const manifest = { version: 1, items: [] };
+    for (const a of artifacts) {
+      const folder = path.join(dir, ARTIFACTS_DIR, String(a.id));
+      fs.mkdirSync(folder, { recursive: true });
+      fs.writeFileSync(path.join(folder, 'index.html'), String(a.html || ''), 'utf8');
+      const item = {
+        id: String(a.id),
+        title: String(a.title || '未命名制品').slice(0, 120),
+        kind: a.kind || 'artifact',
+        rel: `artifacts/${a.id}/index.html`,
+        createdAt: a.createdAt || new Date().toISOString(),
+      };
+      if (a.retiredAt) item.retiredAt = a.retiredAt;
+      manifest.items.push(item);
+    }
+    writeJsonAtomic(path.join(dir, ARTIFACTS_DIR, 'manifest.json'), manifest);
+  }
+
+  // 缺的默认文件补齐（空学习也要五件套，跟 createNotebook 对齐）
+  if (!files[PROGRESS_FILE]) writeJsonAtomic(path.join(dir, PROGRESS_FILE), emptyProgress());
+  if (!files[PATCH_FILE]) writeJsonAtomic(path.join(dir, PATCH_FILE), { version: 1, patches: [] });
+  if (!files[CHAT_FILE]) writeJsonAtomic(path.join(dir, CHAT_FILE), emptyChat());
+  if (!files[TODOS_FILE]) writeJsonAtomic(path.join(dir, TODOS_FILE), { version: 1, todos: [] });
+  if (!files[SCENE_FILE]) writeJsonAtomic(path.join(dir, SCENE_FILE), emptySceneState());
+
+  return getNotebook(id);
 }
