@@ -31,6 +31,11 @@ const CHAT_FILE = 'chat.json';
 // notes.json 归 notes.mjs 管，这里只认它的文件名（导出/导入要把它一并打包）
 const NOTES_FILE = 'notes.json';
 
+// 处置台：体检只报告，动手要稳、可逆、看得见——孤儿制品送进隔离区（只是搬走，绝不删除），
+// 随时可放回原位。index.json 是动作的账本：每件搬进/放回都记一笔，数据是资产，动过就要留痕。
+const QUARANTINE_DIR = path.join(DATA_DIR, 'quarantine');
+const QUARANTINE_INDEX = path.join(QUARANTINE_DIR, 'index.json');
+
 class NotFoundError extends Error {
   constructor(message) {
     super(message);
@@ -904,6 +909,17 @@ export function healthCheck() {
       }
     }
   }
+  let quarantined = 0;
+  if (fs.existsSync(QUARANTINE_DIR)) {
+    for (const entry of fs.readdirSync(QUARANTINE_DIR)) {
+      if (entry === 'index.json') continue;
+      try {
+        if (fs.statSync(path.join(QUARANTINE_DIR, entry)).isDirectory()) quarantined += 1;
+      } catch {
+        // 边扫边删（外部动作）就别再数了，计数只是给人看的
+      }
+    }
+  }
   return {
     ok: corruptFiles.length === 0 && orphanArtifacts.length === 0 && missingHtml.length === 0,
     dataDir: DATA_DIR,
@@ -911,5 +927,82 @@ export function healthCheck() {
     corruptFiles,
     orphanArtifacts,
     missingHtml,
+    quarantined,
   };
+}
+
+// ---------------------------------------------------------------- 处置台（隔离区）
+
+/**
+ * 把孤儿制品搬进隔离区。孤儿 = manifest 之外、没有任何记录指向它的目录——
+ * 没有记录，就没有"正在用"的可能，搬走是安全的。只做 move，绝不删除；
+ * 每件都记进 index.json（from/to 都是相对 DATA_DIR 的路径，账本能跟着数据目录走）。
+ */
+export function quarantineOrphans() {
+  const moved = [];
+  fs.mkdirSync(QUARANTINE_DIR, { recursive: true });
+  const report = healthCheck();
+  for (const { notebook, id } of report.orphanArtifacts) {
+    const src = path.join(NOTEBOOKS_DIR, notebook, ARTIFACTS_DIR, id);
+    if (!fs.existsSync(src)) continue;
+    const dest = path.join(QUARANTINE_DIR, `${Date.now()}-${notebook}-${id}`);
+    try {
+      fs.renameSync(src, dest);
+    } catch (err) {
+      // 占用 / 跨设备等：逐个如实报告，不假装搬成了
+      moved.push({ kind: 'orphan', notebook, id, error: err.message });
+      continue;
+    }
+    moved.push({
+      kind: 'orphan',
+      notebook,
+      id,
+      from: path.relative(DATA_DIR, src),
+      to: path.relative(DATA_DIR, dest),
+    });
+  }
+  if (moved.some((m) => !m.error)) {
+    const index = readJsonSafe(QUARANTINE_INDEX, []);
+    writeJsonAtomic(QUARANTINE_INDEX, [...index, ...moved.filter((m) => !m.error)]);
+  }
+  return { moved };
+}
+
+/**
+ * 把隔离区里的东西放回原位（按账本）。原位已被新文件占用时**让路**——
+ * 新文件不动，这件留在隔离区并说明原因。放回后账本只留没放成的条目。
+ */
+export function restoreQuarantined() {
+  const restored = [];
+  const kept = [];
+  const index = readJsonSafe(QUARANTINE_INDEX, []);
+  const remaining = [];
+  for (const entry of index) {
+    const fromAbs = path.join(DATA_DIR, String(entry.from || ''));
+    const toAbs = path.join(DATA_DIR, String(entry.to || ''));
+    // 账本可能被人手改过：路径必须还在数据目录里，越界的一律不执行
+    if (!isWithin(DATA_DIR, fromAbs) || !isWithin(DATA_DIR, toAbs)) {
+      kept.push({ ...entry, reason: '账本路径越界（不执行）' });
+      continue;
+    }
+    if (!fs.existsSync(toAbs)) {
+      kept.push({ ...entry, reason: '隔离区文件已不在（可能被外部动过）' });
+      continue;
+    }
+    if (fs.existsSync(fromAbs)) {
+      kept.push({ ...entry, reason: '原位已有新文件（放回让路，不覆盖）' });
+      remaining.push(entry);
+      continue;
+    }
+    try {
+      fs.mkdirSync(path.dirname(fromAbs), { recursive: true });
+      fs.renameSync(toAbs, fromAbs);
+      restored.push(entry);
+    } catch (err) {
+      kept.push({ ...entry, reason: err.message });
+      remaining.push(entry);
+    }
+  }
+  writeJsonAtomic(QUARANTINE_INDEX, remaining);
+  return { restored, kept };
 }

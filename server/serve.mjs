@@ -586,6 +586,13 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/health' && method === 'GET') {
       return sendJson(res, 200, store.healthCheck());
     }
+    // ---------- 处置台：体检报告之后能动手，但只搬走、不删除，随时可放回
+    if (pathname === '/api/health/quarantine' && method === 'POST') {
+      return sendJson(res, 200, store.quarantineOrphans());
+    }
+    if (pathname === '/api/health/restore' && method === 'POST') {
+      return sendJson(res, 200, store.restoreQuarantined());
+    }
 
     // ---------- notebooks
     if (pathname === '/api/notebooks' && method === 'GET') {

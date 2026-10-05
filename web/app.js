@@ -243,6 +243,7 @@ function renderNotebookList() {
     const del = el('button', 'nb-item-del', '✕');
     del.type = 'button';
     del.title = '丢掉这份草稿';
+    del.setAttribute('aria-label', '丢掉这份草稿');
     del.onclick = (e) => {
       e?.stopPropagation?.();
       discardDraft();
@@ -272,6 +273,7 @@ function renderNotebookList() {
     const del = el('button', 'nb-item-del', '✕');
     del.type = 'button';
     del.title = `删除「${nb.title || '未命名'}」`;
+    del.setAttribute('aria-label', `删除学习「${nb.title || '未命名'}」`);
     del.onclick = (e) => {
       // 阻止冒泡：别让点击"删除"顺带触发行上的"打开这个学习"
       e?.stopPropagation?.();
@@ -281,6 +283,7 @@ function renderNotebookList() {
     const ren = el('button', 'nb-item-rename', '✎');
     ren.type = 'button';
     ren.title = `重命名「${nb.title || '未命名'}」`;
+    ren.setAttribute('aria-label', `重命名学习「${nb.title || '未命名'}」`);
     ren.onclick = (e) => {
       e?.stopPropagation?.();
       renameNotebook(nb);
@@ -3273,20 +3276,61 @@ function renderBackupPanel(body) {
     input.click();
   };
 
-  // 体检只读：扫一遍 data/，报告损坏的 JSON、孤儿制品、缺 HTML 的空壳。
+  // 体检只读 + 处置台：先扫一遍 data/ 报告损坏的 JSON、孤儿制品、缺 HTML 的空壳；
+  // 报告之后能动手，但只搬走、不删除——孤儿制品送进隔离区，随时可放回原位。
   // 这是文件/目录的事实报告，不是学习进度——报告里没有任何掌握度/理解度数字。
+  const renderHealth = async () => {
+    const report = await api('GET', '/api/health');
+    const issues = [];
+    if (report.corruptFiles.length) issues.push(`损坏文件 ${report.corruptFiles.length} 处：${report.corruptFiles.slice(0, 3).join('、')}${report.corruptFiles.length > 3 ? '…' : ''}`);
+    if (report.orphanArtifacts.length) issues.push(`孤儿制品 ${report.orphanArtifacts.length} 件（manifest 外）`);
+    if (report.missingHtml.length) issues.push(`缺 HTML 的制品 ${report.missingHtml.length} 件`);
+    healthResult.classList.remove('hidden');
+    healthResult.textContent = '';
+    healthResult.append(
+      el('div', null, issues.length
+        ? `数据体检：共 ${report.notebooks} 本学习，${issues.join('；')}。建议先导出备份再处理。`
+        : `数据体检：共 ${report.notebooks} 本学习，没有损坏、没有孤儿、没有空壳，一切正常。`),
+    );
+    if (report.orphanArtifacts.length) {
+      const names = report.orphanArtifacts.slice(0, 3).map((a) => `${a.notebook}/${a.id}`).join('、');
+      healthResult.append(el('div', 'health-list', `孤儿制品：${names}${report.orphanArtifacts.length > 3 ? '…' : ''}`));
+      const q = el('button', 'btn btn-ghost btn-sm', `把 ${report.orphanArtifacts.length} 件孤儿制品送进隔离区（不删除）`);
+      q.onclick = async () => {
+        try {
+          q.disabled = true;
+          const r = await api('POST', '/api/health/quarantine');
+          toast(`已送进隔离区 ${r.moved.filter((m) => !m.error).length} 件（随时可放回）`);
+          await renderHealth();
+        } catch (err) {
+          toast(`送进隔离区失败：${err.message}`, true);
+        } finally {
+          q.disabled = false;
+        }
+      };
+      healthResult.append(q);
+    }
+    if (report.quarantined > 0) {
+      const r = el('button', 'btn btn-ghost btn-sm', `从隔离区放回 ${report.quarantined} 件`);
+      r.onclick = async () => {
+        try {
+          r.disabled = true;
+          const res = await api('POST', '/api/health/restore');
+          toast(res.restored.length ? `已放回 ${res.restored.length} 件` : '隔离区没有可放回的东西');
+          await renderHealth();
+        } catch (err) {
+          toast(`放回失败：${err.message}`, true);
+        } finally {
+          r.disabled = false;
+        }
+      };
+      healthResult.append(r);
+    }
+  };
   healthBtn.onclick = async () => {
     try {
       healthBtn.disabled = true;
-      const report = await api('GET', '/api/health');
-      const issues = [];
-      if (report.corruptFiles.length) issues.push(`损坏文件 ${report.corruptFiles.length} 处：${report.corruptFiles.slice(0, 3).join('、')}${report.corruptFiles.length > 3 ? '…' : ''}`);
-      if (report.orphanArtifacts.length) issues.push(`孤儿制品 ${report.orphanArtifacts.length} 件（manifest 外）`);
-      if (report.missingHtml.length) issues.push(`缺 HTML 的制品 ${report.missingHtml.length} 件`);
-      healthResult.classList.remove('hidden');
-      healthResult.textContent = issues.length
-        ? `数据体检：共 ${report.notebooks} 本学习，${issues.join('；')}。建议先导出备份再处理。`
-        : `数据体检：共 ${report.notebooks} 本学习，没有损坏、没有孤儿、没有空壳，一切正常。`;
+      await renderHealth();
     } catch (err) {
       toast(`体检失败：${err.message}`, true);
     } finally {

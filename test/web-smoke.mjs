@@ -615,6 +615,9 @@ check('模型 chip 已显示', doc.getElementById('modelChipLabel').textContent.
 // 在这里 state.notebook 还是 null（只渲染了列表），保存后不会误触发 openNotebook。
 const renameBtn = doc.getElementById('notebookList').findByClass('nb-item-rename')[0];
 check('列表条目有重命名入口', Boolean(renameBtn) && renameBtn.title.includes('重命名'), renameBtn?.title);
+check('重命名键带可读名字（读屏不念一个符号）', (renameBtn.getAttribute('aria-label') || '').includes('重命名'), renameBtn.getAttribute('aria-label'));
+const nbDelBtn = doc.getElementById('notebookList').findByClass('nb-item-del')[0];
+check('删除键也带可读名字', Boolean(nbDelBtn) && (nbDelBtn.getAttribute('aria-label') || '').includes('删除'), nbDelBtn?.getAttribute('aria-label'));
 const reqBeforeRename = requests.length;
 renameBtn.onclick();
 const renameInput = doc.getElementById('simpleModalBody').children[0];
@@ -741,6 +744,27 @@ responses.set('GET /api/health', () =>
 healthBtn.onclick();
 await new Promise((r) => setTimeout(r, 20));
 check('体检发现问题会点名（损坏文件 + 孤儿制品）', healthResult.textContent.includes('损坏文件 1 处') && healthResult.textContent.includes('孤儿制品 1 件'), healthResult.textContent);
+
+// 处置台：体检只报告、动手要稳可逆——孤儿制品送进隔离区（只搬走不删除），随时可放回
+responses.set('POST /api/health/quarantine', () => json({ moved: [{ kind: 'orphan', notebook: 'nb-b', id: 'art-1', from: 'notebooks/nb-b/artifacts/art-1', to: 'quarantine/1-nb-b-art-1' }] }));
+const quarBtn = deepAll(healthResult, 'btn').find((b) => b.textContent.includes('送进隔离区'));
+check('体检点名孤儿后给出处置键（送进隔离区，不删除）', Boolean(quarBtn), quarBtn?.textContent);
+const reqBeforeQuar = requests.length;
+quarBtn.onclick();
+await new Promise((r) => setTimeout(r, 20));
+check('点处置键真的打了隔离接口', requests.slice(reqBeforeQuar).includes('POST /api/health/quarantine'), requests.slice(reqBeforeQuar).join(','));
+check('处置成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('送进隔离区')));
+responses.set('GET /api/health', () =>
+  json({ ok: true, dataDir: '/tmp/x', notebooks: 2, corruptFiles: [], orphanArtifacts: [], missingHtml: [], quarantined: 1 }));
+healthBtn.onclick();
+await new Promise((r) => setTimeout(r, 20));
+const restoreBtn = deepAll(healthResult, 'btn').find((b) => b.textContent.includes('从隔离区放回'));
+check('隔离区里有东西时给出放回键', Boolean(restoreBtn), restoreBtn?.textContent);
+responses.set('POST /api/health/restore', () => json({ restored: [{ kind: 'orphan', notebook: 'nb-b', id: 'art-1' }], kept: [] }));
+const reqBeforeRestore = requests.length;
+restoreBtn.onclick();
+await new Promise((r) => setTimeout(r, 20));
+check('点放回真的打了放回接口', requests.slice(reqBeforeRestore).includes('POST /api/health/restore'), requests.slice(reqBeforeRestore).join(','));
 check('右栏备份这一节无异常', errors.length === 0, errors.join(' | '));
 
 // 回看与全部制品的渲染检查在面板这一节做（不点按钮、不改 chat）；按钮的点击验证放到

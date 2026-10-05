@@ -2329,6 +2329,28 @@ check('manifest 外的制品目录被点名（孤儿）', orphanCheck.orphanArti
 check('有记录但缺 HTML 的制品被点名（空壳）', orphanCheck.missingHtml.some((a) => a.notebook === crashId && a.id === 'ghost-art'), JSON.stringify(orphanCheck.missingHtml));
 check('体检有问题时 ok=false', orphanCheck.ok === false);
 
+// ─────────────────────────────────────── 12d. 处置台：隔离区（只搬走，不删除，可放回）
+
+section('12d. 处置台：孤儿制品送进隔离区，随时可放回');
+
+const qr = store.quarantineOrphans();
+check('隔离区搬走了那件孤儿制品', qr.moved.some((m) => m.notebook === crashId && m.id === 'orphan-art'), JSON.stringify(qr.moved));
+check('搬走就是搬走，原地不再有该目录', !fs.existsSync(orphanDir));
+const orphanCheck2 = store.healthCheck();
+check('隔离后体检不再点名孤儿（报告回到只报真问题）', !orphanCheck2.orphanArtifacts.some((a) => a.id === 'orphan-art'), JSON.stringify(orphanCheck2.orphanArtifacts));
+check('体检报告带隔离区件数（处置台被看见）', orphanCheck2.quarantined >= 1, String(orphanCheck2.quarantined));
+const rr = store.restoreQuarantined();
+check('放回后目录回到原位', rr.restored.some((m) => m.notebook === crashId && m.id === 'orphan-art') && fs.existsSync(orphanDir), JSON.stringify(rr.restored));
+const orphanCheck3 = store.healthCheck();
+check('放回后体检恢复点名（处置台可逆）', orphanCheck3.orphanArtifacts.some((a) => a.id === 'orphan-art'), JSON.stringify(orphanCheck3.orphanArtifacts));
+// 原位被占：放回必须让路，不覆盖新文件
+store.quarantineOrphans();
+fs.mkdirSync(orphanDir, { recursive: true });
+fs.writeFileSync(path.join(orphanDir, 'index.html'), '<html><body>新东西</body></html>');
+const rr2 = store.restoreQuarantined();
+check('原位已有新文件时放回让路（不覆盖，留在隔离区）', rr2.kept.some((m) => m.id === 'orphan-art' && m.reason?.includes('让路')), JSON.stringify(rr2.kept));
+check('让路后新文件原样还在', fs.existsSync(path.join(orphanDir, 'index.html')));
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

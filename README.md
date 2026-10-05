@@ -955,6 +955,11 @@ agent 调 `read_artifact_evidence` 就能拿到。反过来 agent 下发的指�
 - **体检数据**：`GET /api/health` 只读扫一遍 `data/`，报告三件该修的事——七份 JSON 里解析失败的
   （坏了但没被察觉的）、制品目录不在 manifest 里的（孤儿）、manifest 有记录但 `index.html` 丢了的（空壳）。
   只报告不修（修是人的决定）。报告里只有文件/目录事实，没有学习进度数字。
+- **处置台**（2026-10-06 第四轮）：体检报告之后能动手了，但只搬走、不删除——
+  孤儿制品送进隔离区 `data/quarantine/`（`POST /api/health/quarantine`），随时放回原位
+  （`POST /api/health/restore`；原位已被新文件占用时**让路**，不覆盖）。每件搬进/放回都记在
+  `quarantine/index.json` 账本上（from/to 是相对路径，账本能跟着数据目录走，越界条目不执行）。
+  隔离区不是垃圾箱，是**暂存台**：数据是资产，动手要稳、可逆、看得见。
 
 ## 已知边界
 
