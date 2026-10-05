@@ -610,6 +610,22 @@ await new Promise((r) => setTimeout(r, 300));
 console.log('\n1. 启动');
 check('左栏渲染出学习条目', doc.getElementById('notebookList').children.length > 0);
 check('模型 chip 已显示', doc.getElementById('modelChipLabel').textContent.length > 0, doc.getElementById('modelChipLabel').textContent);
+
+// 重命名：列表条目里那颗 ✎ 打开弹窗，保存走 PATCH，列表刷新。
+// 在这里 state.notebook 还是 null（只渲染了列表），保存后不会误触发 openNotebook。
+const renameBtn = doc.getElementById('notebookList').findByClass('nb-item-rename')[0];
+check('列表条目有重命名入口', Boolean(renameBtn) && renameBtn.title.includes('重命名'), renameBtn?.title);
+const reqBeforeRename = requests.length;
+renameBtn.onclick();
+const renameInput = doc.getElementById('simpleModalBody').children[0];
+check('重命名弹窗带输入框（预填当前标题）', Boolean(renameInput) && renameInput.value === 'JavaScript 闭包', renameInput?.value);
+renameInput.value = '闭包与作用域';
+responses.set('PATCH /api/notebooks/nb-test', () => json({ notebook: { ...sampleNotebook(), title: '闭包与作用域' } }));
+const renameSaveBtn = doc.getElementById('simpleModalFoot').children[1];
+renameSaveBtn.onclick();
+await new Promise((r) => setTimeout(r, 30));
+check('重命名保存真的打了 PATCH（带新标题）', requests.slice(reqBeforeRename).includes('PATCH /api/notebooks/nb-test'), requests.slice(reqBeforeRename).join(','));
+check('重命名成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已重命名为「闭包与作用域」')));
 check('启动过程无异常', errors.length === 0, errors.join(' | '));
 
 // --- 导演台：中间列只有一条流，一切内容按「场」分组落在同一条流里 ---
@@ -694,11 +710,13 @@ check('确认完角标就灭', patchBadge.textContent === '' && patchBadge.class
 check('右栏这一节无异常', errors.length === 0, errors.join(' | '));
 
 // 整本备份：学习记录能离开这台机器（入口在「学习」页签底部，导出走真实接口）
-const backupRow = deepAll(doc.getElementById('panelBody'), 'backup-row')[0];
+// 注意：backup-row 在面板里不止一行（「回看」也复用这个类），按内容定位到真·备份行
+const backupRow = deepAll(doc.getElementById('panelBody'), 'backup-row')
+  .find((r) => Array.from(r.children).some((b) => b.textContent === '导出整本'));
 const backupBtns = backupRow ? Array.from(backupRow.children).map((b) => b.textContent) : [];
 check('「学习」页签底部有整本备份入口', backupBtns.includes('导出整本') && backupBtns.includes('导入整本') && backupBtns.includes('体检数据'), backupBtns.join('/'));
-const backupHint = deepAll(doc.getElementById('panelBody'), 'backup-hint')[0];
-check('备份入口带一句说明（不裸放几个键）', Boolean(backupHint) && backupHint.textContent.includes('JSON'), backupHint?.textContent);
+const backupHint = deepAll(doc.getElementById('panelBody'), 'backup-hint').find((h) => h.textContent.includes('JSON'));
+check('备份入口带一句说明（不裸放几个键）', Boolean(backupHint), backupHint?.textContent);
 responses.set('GET /api/notebooks/nb-test/export', () =>
   json({ format: 'socratic-studio-notebook', version: 1, exportedAt: 't', files: {}, uploads: [], artifacts: [] }));
 const reqBeforeExport = requests.length;
@@ -724,6 +742,36 @@ healthBtn.onclick();
 await new Promise((r) => setTimeout(r, 20));
 check('体检发现问题会点名（损坏文件 + 孤儿制品）', healthResult.textContent.includes('损坏文件 1 处') && healthResult.textContent.includes('孤儿制品 1 件'), healthResult.textContent);
 check('右栏备份这一节无异常', errors.length === 0, errors.join(' | '));
+
+// 回看与全部制品的渲染检查在面板这一节做（不点按钮、不改 chat）；按钮的点击验证放到
+// 文件末尾——它会把一句用户消息真的送进 /turn，放在这里会多出一拍，扰乱回放计数。
+const learnTitlesNow = deepAll(doc.getElementById('panelBody'), 'panel-section-title').map((t) => t.textContent);
+check('「学习」页有「回看」一节', learnTitlesNow.includes('回看'), learnTitlesNow.join(' | '));
+const reviewRow = deepAll(doc.getElementById('panelBody'), 'backup-row').find((r) => Array.from(r.children).some((b) => b.textContent === '回顾已学'));
+check('回看节里有「回顾已学」按钮', Boolean(reviewRow));
+
+// 全部制品：素材页从「扔掉的道具」扩成「全部制品」——在台上的标「在台上」，已收起的给「放回台面」
+early.state.panelTab = 'files';
+early.renderPanel();
+const filesTitles = deepAll(doc.getElementById('panelBody'), 'panel-section-title').map((t) => t.textContent);
+check('素材页有「全部制品」一节', filesTitles.includes('全部制品'), filesTitles.join(' | '));
+check('没有制品时摆一句说明（不裸放一个空节）', deepAll(doc.getElementById('panelBody'), 'empty-note').some((n) => n.textContent.includes('还没有制品')));
+// 确定性样本：在台上 / 已收起两行都列出来，且手势面各守各的
+early.state.notebook.artifacts = [
+  { id: 'live-1', title: '在台上的那件', kind: 'game', rel: 'artifacts/live-1/index.html' },
+  { id: 'ret-1', title: '收起的那件', kind: 'interactive', rel: 'artifacts/ret-1/index.html', retiredAt: '2026-01-01T00:00:00.000Z' },
+];
+early.renderPanel();
+const fileRows = deepAll(doc.getElementById('panelBody'), 'file-item');
+const liveRow = fileRows.find((n) => n.textContent.includes('在台上的那件'));
+const retRow = fileRows.find((n) => n.textContent.includes('收起的那件'));
+check('在台上的制品标「在台上」、不给键', Boolean(liveRow) && liveRow.textContent.includes('在台上') && liveRow.findByClass('btn').length === 0, liveRow?.textContent);
+check('已收起的制品只给「放回台面」一颗键', Boolean(retRow) && retRow.findByClass('btn').map((b) => b.textContent).join(',') === '放回台面', retRow?.textContent);
+// 还原样本与页签，别把后面的流程带偏
+early.state.notebook.artifacts = [];
+early.state.panelTab = 'learn';
+early.renderPanel();
+check('右栏回看/制品这一节无异常', errors.length === 0, errors.join(' | '));
 
 // 概念结构图：依赖骨架一眼可见，且图里没有任何数字（Invariant 4 违规指纹 ① 不沾边）
 const graphSvg = deepAll(doc.getElementById('panelBody'), 'concept-graph')[0];
@@ -3441,6 +3489,29 @@ console.log('\n32. 转场条：新场开头那行「接住第 1 场 ·「这件�
     /var\(--ink-3\)/.test(ghostCss) && /cursor: default/.test(ghostCss), ghostCss.replace(/\s+/g, ' ').trim());
 
   check('这一节无异常', errors.length === errsBefore, errors.slice(errsBefore).join(' | '));
+}
+
+// ─── 回看点击验证（放在收尾前：它真的把一句用户消息送进 /turn，会多出一拍，
+//     只能放在所有回放/计数断言之后）───
+{
+  const reviewState = appModule.__hooks;
+  reviewState.state.panelTab = 'learn';
+  reviewState.renderPanel();
+  const reviewRowNow = deepAll(doc.getElementById('panelBody'), 'backup-row')
+    .find((r) => Array.from(r.children).some((b) => b.textContent === '回顾已学'));
+  const reviewClickBtn = reviewRowNow && Array.from(reviewRowNow.children).find((b) => b.textContent === '回顾已学');
+  const msgsBeforeReview = reviewState.state.notebook.chat.messages.length;
+  const reqBeforeReview = requests.length;
+  reviewClickBtn.onclick();
+  const lastMsg = reviewState.state.notebook.chat.messages[reviewState.state.notebook.chat.messages.length - 1];
+  check('点「回顾已学」把一句普通消息发出去（不是排期、不是自动召回）',
+    reviewState.state.notebook.chat.messages.length === msgsBeforeReview + 1 &&
+      lastMsg.role === 'user' && lastMsg.content.includes('回顾一下已经学过的内容'),
+    JSON.stringify(lastMsg));
+  // 回合请求真的打了（nb-test 在本机服务里是桩，404 后前端有收尾提示——那条路基线就在走）
+  await new Promise((r) => setTimeout(r, 500));
+  check('回顾走的就是普通 /turn 通道', requests.slice(reqBeforeReview).some((k) => k.includes('/turn')), requests.slice(reqBeforeReview).join(','));
+  check('回顾这条链路无异常', errors.length === 0, errors.join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

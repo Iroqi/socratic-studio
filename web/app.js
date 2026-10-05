@@ -277,9 +277,45 @@ function renderNotebookList() {
       e?.stopPropagation?.();
       confirmDeleteNotebook(nb);
     };
-    row.append(del);
+    // 重命名入口：列表里改个名不该打开整本再翻设置（服务端 PATCH title 一直在，缺的只是这一颗键）
+    const ren = el('button', 'nb-item-rename', '✎');
+    ren.type = 'button';
+    ren.title = `重命名「${nb.title || '未命名'}」`;
+    ren.onclick = (e) => {
+      e?.stopPropagation?.();
+      renameNotebook(nb);
+    };
+    row.append(ren, del);
     box.append(row);
   }
+}
+
+/**
+ * 重命名：小弹窗 + 输入框。空名不保存；保存后刷新列表，若正开着这本就连带刷新内容。
+ */
+async function renameNotebook(nb) {
+  const input = el('input');
+  input.type = 'text';
+  input.value = nb.title || '';
+  input.maxLength = 120;
+  openSimpleModal({
+    title: '重命名',
+    body: input,
+    confirmText: '保存',
+    onConfirm: async () => {
+      const title = input.value.trim();
+      if (!title) return;
+      try {
+        await api('PATCH', `/api/notebooks/${nb.id}`, { title });
+        state.notebooks = (await api('GET', '/api/notebooks')).notebooks;
+        renderNotebookList();
+        if (state.notebook?.id === nb.id) await openNotebook(nb.id);
+        toast(`已重命名为「${title}」`);
+      } catch (err) {
+        toast(`重命名失败：${err.message}`, true);
+      }
+    },
+  });
 }
 
 /**
@@ -2879,7 +2915,31 @@ function renderLearnPanel(body) {
   renderEventsPanel(body);
   renderNotesPanel(body);
   renderTasksPanel(body);
+  renderReviewPanel(body);
   renderBackupPanel(body);
+}
+
+/**
+ * 回看：学习者**主动**发起的一轮回顾练习。
+ *
+ * 为什么会有这个键：规则允许且只允许用户主动提出复习/回顾（runtime.md「排程边界」——
+ * 不按日期、次数或"到期"排任何复习，也不自动召回）。这一颗键就是把"主动发起"变成一个
+ * 明确的手势：点了就走一条普通用户消息（"帮我回顾一下已经学过的内容"），老师按当前 session
+ * 的一次普通练习/迁移动作执行。它不建日历、不产生"下一次复习"记录，只是替你把那句话递出去。
+ */
+function renderReviewPanel(body) {
+  if (!state.notebook) return;
+  body.append(el('div', 'panel-section-title', '回看'));
+  const row = el('div', 'backup-row');
+  const btn = el('button', 'btn btn-ghost btn-sm', '回顾已学');
+  row.append(btn);
+  body.append(row);
+  body.append(el('div', 'backup-hint', '按当前的进度做一轮回顾练习。这是你主动发起的，不排期、不自动召回。'));
+  btn.onclick = () => {
+    $('input').value = '帮我回顾一下已经学过的内容';
+    autosize?.();
+    sendTurn().catch((err) => toast(`回顾发送失败：${err.message}`, true));
+  };
 }
 
 function pendingPatches() {
@@ -3280,19 +3340,24 @@ function renderFilesPanel(body) {
     body.append(row);
   }
 
-  // 扔掉的道具停在这儿，不停在台面上。这里是找回它的常驻入口——那一行可撤销提示会被下一条动作收掉。
-  body.append(el('div', 'panel-section-title', '扔掉的道具'));
-  const retired = (state.notebook.artifacts || []).filter((a) => a.retiredAt);
-  if (!retired.length) {
-    body.append(el('div', 'empty-note', '还没有扔掉过道具。台上那张卡片右上角有「扔掉」：它只把工作集清空，文件和你在那件里做过的记录都留着。'));
+  // 全部制品：这一本从开始到现在做出的每件东西都在这里——在台上的标「在台上」，
+  // 已收起的给「放回台面」。制品只软退役、文件永远在，所以这里只有"放回"一个手势面。
+  body.append(el('div', 'panel-section-title', '全部制品'));
+  const allArtifacts = state.notebook.artifacts || [];
+  if (!allArtifacts.length) {
+    body.append(el('div', 'empty-note', '还没有制品。讲到关键处它会把当前理解做成一件可以摆弄的东西，落进这一拍里。'));
   }
-  for (const a of retired) {
+  for (const a of allArtifacts) {
     const row = el('div', 'file-item');
     row.append(el('span', 'artifact-kind', ARTIFACT_KIND[a.kind] || '制品'));
     row.append(el('span', null, a.title || '未命名'));
-    const back = el('button', 'btn btn-ghost btn-sm', '放回台面');
-    back.onclick = () => restoreArtifact(a.id);
-    row.append(back);
+    if (a.retiredAt) {
+      const back = el('button', 'btn btn-ghost btn-sm', '放回台面');
+      back.onclick = () => restoreArtifact(a.id);
+      row.append(back);
+    } else {
+      row.append(el('span', 'meta', '在台上'));
+    }
     body.append(row);
   }
 }

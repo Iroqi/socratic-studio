@@ -161,6 +161,18 @@ html, body {
 .nb-item:hover .nb-item-del,
 .nb-item-del:focus-visible { opacity: 1; }
 .nb-item-del:hover { color: var(--danger); background: var(--danger-soft); }
+/* 重命名与删除同一套手势：默认隐形、悬停/聚焦才显，触屏档常显 */
+.nb-item-rename {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent; cursor: pointer;
+  color: var(--ink-3); font-size: 12px; line-height: 1;
+  min-width: 28px; min-height: 28px; padding: 8px; border-radius: 6px; opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.nb-item:hover .nb-item-rename,
+.nb-item-rename:focus-visible { opacity: 1; }
+.nb-item-rename:hover { color: var(--accent-ink); background: var(--accent-soft); }
 @media (hover: none) {
   /* 触屏没有 hover：两个删除入口在这一档常显，否则手机上删不掉东西 */
   .nb-item-del, .note-del { opacity: 1; }
