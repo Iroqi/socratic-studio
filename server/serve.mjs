@@ -860,6 +860,11 @@ const server = http.createServer(async (req, res) => {
       /**
        * 每次工具执行后就落盘。state 只能由 observed 证据推进（Invariant 4），
        * 但"落盘"本身不判对错——它只是把已经发生的观测结果写下来。
+       *
+       * 事件为什么并进同一趟保存（回归钉子见 test/http-smoke.ps1）：
+       * 以前 events 单独写一趟，而 progressDirty 那趟用不含 events 的 session.progress
+       * 整份覆盖 progress.json——前一批已落盘的事件会被下一次状态写入静默抹掉，
+       * 审计日志只剩最后一小批。修法：events 在保存前并进同一个对象，写盘只走一条路。
        */
       const persist = (snapshot) => {
         if (!snapshot) return;
@@ -868,21 +873,19 @@ const server = http.createServer(async (req, res) => {
           snapshot.graphDirty = false;
           emit({ type: 'graph', graph: snapshot.graph });
         }
-        if (snapshot.progressDirty && snapshot.progress) {
+        const pending = snapshot.pendingEvents || snapshot.events || [];
+        const progress = snapshot.progress;
+        if (progress && (snapshot.progressDirty || pending.length)) {
           const stored = store.getNotebook(id).progress;
-          // notes 是只追加的观察记录，保留别处写入的，其余以本回合为准
-          snapshot.progress.notes = mergeNotes(stored.notes, snapshot.progress.notes);
-          store.saveProgress(id, snapshot.progress);
+          // notes / events 都是只追加的观察记录：保留别处写入的，其余以本回合为准
+          progress.notes = mergeNotes(stored.notes, progress.notes);
+          if (pending.length) {
+            progress.events = [...(stored.events || []), ...pending];
+          }
+          store.saveProgress(id, progress);
           snapshot.progressDirty = false;
-          emit({ type: 'progress', progress: snapshot.progress });
-        }
-        const pending = snapshot.pendingEvents || snapshot.events;
-        if (pending?.length) {
-          const progress = store.getNotebook(id).progress;
-          progress.events = [...(progress.events || []), ...pending];
           if (snapshot.pendingEvents) snapshot.pendingEvents = [];
           else snapshot.events = [];
-          store.saveProgress(id, progress);
           emit({ type: 'progress', progress });
         }
       };
@@ -923,7 +926,13 @@ const server = http.createServer(async (req, res) => {
               session.flushTodos = flushTodos;
               flushTodos();
             },
-            onPersist: persist,
+            onPersist: (snapshot) => {
+              persist(snapshot);
+              // 待办是 UI 便签，README 承诺「每执行完一个工具就写」——顺带刷一次。
+              // 只在 onSession 之后的调用里存在（snapshot 即 session），回合中异常收尾
+              // 时 finally 还会再兜一遍。
+              if (snapshot.flushTodos) snapshot.flushTodos();
+            },
             onPersistMessage: persistMessage,
             taskRunner,
           });
@@ -951,6 +960,9 @@ const server = http.createServer(async (req, res) => {
           // 之前这里漏了：模型输出正文但不调任何工具时，runTurn 正常返回，
           // 谁也没发终止事件，浏览器就一直转圈。
           try {
+            // 异常收尾也把待办写掉：学习者 UI 上看到的便签刷新后不能消失
+            // （以前 flushTodos 只在成功路径，runTurn 一抛错整份待办就丢了）
+            turn.session?.flushTodos?.();
             const fresh = store.getNotebook(id);
             // turn_end 是权威收尾信号；done 保留为同义的终止标记（兼容既有客户端/测试）
             if (terminal === 'done' || terminal === null) {

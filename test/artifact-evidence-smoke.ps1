@@ -45,8 +45,17 @@ $script2 = @'
 
 $env:SOCRATIC_PORT = "$Port"; $env:SOCRATIC_DATA_DIR = $dataDir; $env:SOCRATIC_ENABLE_FAUX = '1'
 $out = Join-Path $tmp 'out.log'; $err = Join-Path $tmp 'err.log'
-$proc = Start-Process -FilePath 'node' -ArgumentList 'server/serve.mjs' -WorkingDirectory $app `
-  -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -WindowStyle Hidden
+# `-WindowStyle Hidden` 只在 Windows 上受支持，Linux/macOS 的 pwsh 直接报参数不支持。
+$startArgs = @{
+  FilePath = 'node'
+  ArgumentList = 'server/serve.mjs'
+  WorkingDirectory = $app
+  RedirectStandardOutput = $out
+  RedirectStandardError = $err
+  PassThru = $true
+}
+if ($IsWindows) { $startArgs.WindowStyle = 'Hidden' }
+$proc = Start-Process @startArgs
 Start-Sleep -Seconds 5
 
 $base = "http://127.0.0.1:$Port"

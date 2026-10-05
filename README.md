@@ -465,6 +465,31 @@ manifest 认这件、事件里不再有 `persisted`、工具返回值只剩一�
 剩下的账：`discardable` 现在有了"扔"，还没有"清空"——`data/` 只增不减，攒到什么程度要处理是另一刀；
 形态 2（会话列唯一的单元是 Scene + 服务端相位机）没开工。
 
+**亲口吃了一口梨：两处持久化账在真回合里露面（2026-10-05）。** 这一轮不靠读代码拍脑袋，照
+"你要知道梨子的滋味，你就得变革梨子亲口吃一吃"起服务开了一局 faux 回合（六段脚本一个回合全吞、
+再补 HTTP 探针和最小复现），两处只在真回合里才露面的账：
+
+1. **`progress.events` 会被下一笔状态写入整份覆盖。** `persist()` 的 progressDirty 分支用不含
+   events 的 `session.progress` 覆盖 `progress.json`，而 events 是另写一趟、只补当前批次——于是
+   "前一批事件"在每次状态推进时被静默抹掉，审计只剩最后一小批。复现最小到两步：一个回合里两次
+   `set_progress_state`，第一次带事件、第二次不带（只推进状态），第二次写完 `events` 直接消失。
+   旧断言为什么没抓住：`http-smoke` 只查 `events.Count -ge 1`，最后一小批侥幸存活，抹除被藏住。
+   修法是 pending events 并进**同一趟**保存（`[...stored.events, ...pending]`，盘上旧事件保留），
+   写盘只走一条路。`http-smoke` 补的钉子：同一回合第二次 progressDirty 写入后 `观察事件已记录`
+   仍绿——把修复还原成旧实现，这一条立刻红（变异验证过，1/74 红）。
+2. **回合异常收尾时 `todos` 不落盘。** `flushTodos` 只在 `runTurn` 成功返回后调用；模型途中抛错
+   （上游断了 / faux 队列空）时，学习者 UI 上实时打勾的待办刷新即丢。修法：`onPersist` 里顺带
+   flush（README 本来就承诺「每执行完一个工具就写」），`finally` 再兜一遍异常路径。端到端验证：
+   回合故意不装脚本制造抛错，`todos.json` 完整在盘。
+3. **两个 PS 套件在 Linux/macOS 的 pwsh 上跑不起来。** `Start-Process -WindowStyle Hidden` 是
+   Windows-only 参数，在这台无头 Linux 上 `http-smoke.ps1` / `artifact-evidence-smoke.ps1` 直接
+   0 项失败。按 `$IsWindows` 条件传参后跨平台可跑——这套东西本来就在无头 Linux 上迭代，套件
+   跑不了等于少了一双腿。
+
+证伪过的没动：PATCH 裁决（high 自动合并 / medium 待确认 / apply 幂等不重复并 / SPLIT 409）、
+字段延续（二次存图不丢 summary、misconceptions 并入）、learnerView 计数、场景相位与道具上台——
+探针全绿，没到要改的地步。断言总数 1316。
+
 ### 可读性：四条量出来的账（2026-10-02）
 
 一次 UX review 的结论是**不重做**——信息架构当天刚修对，再翻一遍只有 churn。真正有毛病的是四条能在真浏览器里

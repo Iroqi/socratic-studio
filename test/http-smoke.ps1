@@ -47,6 +47,12 @@ $script = @(
     @{ type = 'toolCall'; name = 'set_progress_state'; arguments = @{
         updates = @(@{ concept_id = 'closures'; state = 'seen'; next_action = '最小讲解→PREDICT'; evidence = '答出「能读到」且理由正确' })
         events = @(@{ concept_id = 'closures'; kind = 'observed'; summary = '冷启动探针答对' })
+    } },
+    # 回归钉子（events 只追加不覆盖）：同一回合里再推进一次状态、不带事件。
+    # 旧实现在这次 progressDirty 落盘时用不含 events 的进度对象整份覆盖 progress.json，
+    # 前一批已落盘的事件被静默抹掉——下面的「观察事件已记录」就会挂。
+    @{ type = 'toolCall'; name = 'set_progress_state'; arguments = @{
+        updates = @(@{ concept_id = 'closures'; state = 'understood'; evidence = '换一个问法再确认也答对' })
     } }
   ),
   @( @{ type = 'text'; text = '那换一个问法再确认一下。' } )
@@ -63,8 +69,18 @@ $env:SOCRATIC_ENABLE_FAUX = '1'
 $env:SOCRATIC_SSE_HEARTBEAT_MS = '300'
 $outLog = Join-Path $env:TEMP "socratic-http-out.log"
 $errLog = Join-Path $env:TEMP "socratic-http-err.log"
-$proc = Start-Process -FilePath 'node' -ArgumentList 'server/serve.mjs' -WorkingDirectory $app `
-  -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru -WindowStyle Hidden
+# `-WindowStyle Hidden` 只在 Windows 上受支持，Linux/macOS 的 pwsh 会直接报参数不支持——
+# 两个套件在 Linux 上跑不起来就是这个参数。按平台条件传，让套件跨平台可跑。
+$startArgs = @{
+  FilePath = 'node'
+  ArgumentList = 'server/serve.mjs'
+  WorkingDirectory = $app
+  RedirectStandardOutput = $outLog
+  RedirectStandardError = $errLog
+  PassThru = $true
+}
+if ($IsWindows) { $startArgs.WindowStyle = 'Hidden' }
+$proc = Start-Process @startArgs
 Start-Sleep -Seconds 4
 
 $base = "http://127.0.0.1:$Port"
@@ -227,14 +243,14 @@ try {
   $detail = (Invoke-RestMethod "$base/api/notebooks/$id").notebook
   Check 'Graph 已落盘（2 个概念）' ($detail.graph.concepts.Count -eq 2) ($detail.graph.concepts | ConvertTo-Json -Compress)
   Check '依赖关系保留' ($detail.graph.concepts[1].depends_on[0] -eq 'variable-scope')
-  Check '状态推进为 seen' ($detail.progress.concepts.closures.state -eq 'seen') ($detail.progress.concepts | ConvertTo-Json -Compress)
+  Check '状态推进为 understood' ($detail.progress.concepts.closures.state -eq 'understood') ($detail.progress.concepts | ConvertTo-Json -Compress)
   Check '观察事件已记录' ($detail.progress.events.Count -ge 1)
   Check '对话已落盘' (($detail.chat.messages | Where-Object { $_.role -eq 'user' }).Count -ge 1)
   # 结构化布局的持久化端：题目卡片靠这条数据在刷新后恢复题面与作答
   $asked = @($detail.chat.messages | Where-Object { $_.questions })
   Check '出过的题随消息落盘' (($asked.Count -ge 1) -and ($asked[0].questions.Count -ge 1)) ($asked | ConvertTo-Json -Compress -Depth 6)
   Check '题面与作答结果都在' (($asked[0].questions[0].questionId -ne $null) -and ($asked[0].questions[0].answer.selected.Count -ge 1)) ($asked[0].questions[0] | ConvertTo-Json -Compress -Depth 6)
-  Check '学习者视图是文字不是数字' ($detail.learnerView.counts.'正在学习' -eq 1) ($detail.learnerView.counts | ConvertTo-Json -Compress)
+  Check '学习者视图是文字不是数字' ($detail.learnerView.counts.'已学懂' -eq 1) ($detail.learnerView.counts | ConvertTo-Json -Compress)
   Check '提问已记录到对话流（信号未丢）' (($events | Where-Object { $_.type -eq 'ask' }).Count -eq 2)
 
   Write-Host "`n6. 素材真的送进模型"
