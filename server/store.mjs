@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
+  DATA_DIR,
   NOTEBOOKS_DIR,
   writeJsonAtomic,
   readJsonSafe,
@@ -835,4 +836,80 @@ export function importNotebook(bundle) {
   if (!files[SCENE_FILE]) writeJsonAtomic(path.join(dir, SCENE_FILE), emptySceneState());
 
   return getNotebook(id);
+}
+
+// ---------------------------------------------------------------- 数据体检
+//
+// 只读地扫一遍 data/，把"家底里该修的地方"列出来：七份 JSON 解析失败的（坏了但没被
+// 察觉）、制品目录不在 manifest 里的（孤儿）、manifest 有记录但 index.html 丢了的（空壳）。
+// 只报告不修——修是人的决定（或后续迭代）。体检报告里只有文件/目录事实，没有学习进度数字。
+
+const HEALTH_FILES = [
+  NOTEBOOK_FILE, GRAPH_FILE, PROGRESS_FILE, PATCH_FILE, CHAT_FILE, TODOS_FILE, SCENE_FILE, NOTES_FILE,
+];
+
+export function healthCheck() {
+  const corruptFiles = [];
+  const orphanArtifacts = [];
+  const missingHtml = [];
+  let notebooks = 0;
+  if (fs.existsSync(NOTEBOOKS_DIR)) {
+    for (const id of fs.readdirSync(NOTEBOOKS_DIR)) {
+      const dir = path.join(NOTEBOOKS_DIR, id);
+      let stat;
+      try {
+        stat = fs.statSync(dir);
+      } catch {
+        continue;
+      }
+      if (!stat.isDirectory()) continue;
+      notebooks += 1;
+
+      for (const name of HEALTH_FILES) {
+        const f = path.join(dir, name);
+        if (!fs.existsSync(f)) continue;
+        try {
+          JSON.parse(fs.readFileSync(f, 'utf8'));
+        } catch {
+          corruptFiles.push(`${id}/${name}`);
+        }
+      }
+
+      const artifactsDir = path.join(dir, ARTIFACTS_DIR);
+      if (!fs.existsSync(artifactsDir)) continue;
+      let manifest;
+      try {
+        manifest = JSON.parse(fs.readFileSync(path.join(artifactsDir, 'manifest.json'), 'utf8'));
+      } catch {
+        manifest = null;
+      }
+      const known = new Set(Array.isArray(manifest?.items) ? manifest.items.map((a) => a?.id).filter(Boolean) : []);
+      for (const entry of fs.readdirSync(artifactsDir)) {
+        if (entry === 'manifest.json') continue;
+        const full = path.join(artifactsDir, entry);
+        let st;
+        try {
+          st = fs.statSync(full);
+        } catch {
+          continue;
+        }
+        if (!st.isDirectory()) continue;
+        if (!known.has(entry)) orphanArtifacts.push({ notebook: id, id: entry });
+      }
+      // 空壳以 manifest 为准：有记录但 index.html 不在（目录不存在 / 目录在但没有文件都算）
+      for (const aid of known) {
+        if (!fs.existsSync(path.join(artifactsDir, aid, 'index.html'))) {
+          missingHtml.push({ notebook: id, id: aid });
+        }
+      }
+    }
+  }
+  return {
+    ok: corruptFiles.length === 0 && orphanArtifacts.length === 0 && missingHtml.length === 0,
+    dataDir: DATA_DIR,
+    notebooks,
+    corruptFiles,
+    orphanArtifacts,
+    missingHtml,
+  };
 }

@@ -2304,6 +2304,31 @@ check('损坏后写入正常（原子写）', afterCrash.title === '恢复后新
 const tmpLeft = fs.readdirSync(path.dirname(notesFile)).filter((f) => f.endsWith('.tmp'));
 check('原子写不留半截 .tmp 文件', tmpLeft.length === 0, tmpLeft.join(','));
 
+// ─────────────────────────────────────── 12c. 数据体检：只报告，不修
+
+section('12c. 数据体检：损坏 / 孤儿 / 空壳都要被看见');
+
+const cleanCheck = store.healthCheck();
+check('健康目录体检报告 ok', cleanCheck.ok === true, JSON.stringify(cleanCheck));
+check('体检报告带学习数（≥1）', cleanCheck.notebooks >= 1, String(cleanCheck.notebooks));
+
+// 造一处损坏：把 crashId 的 notes.json 写坏（12b 里已经坏过一次并留了副本，这里再坏一次新文件）
+const crashNotes = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', crashId, 'notes.json');
+fs.rmSync(crashNotes, { force: true });
+fs.writeFileSync(crashNotes, 'not json at all');
+const dirtyCheck = store.healthCheck();
+check('损坏的 JSON 被体检点名', dirtyCheck.corruptFiles.some((f) => f.includes(crashId) && f.endsWith('notes.json')), dirtyCheck.corruptFiles.join(','));
+
+// 孤儿制品：目录不在 manifest 里 → 点名；manifest 有记录但缺 index.html → 点名
+const orphanDir = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', crashId, 'artifacts', 'orphan-art');
+fs.mkdirSync(orphanDir, { recursive: true });
+const manifestPath = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', crashId, 'artifacts', 'manifest.json');
+fs.writeFileSync(manifestPath, JSON.stringify({ version: 1, items: [{ id: 'ghost-art', title: '空壳', kind: 'artifact', rel: 'artifacts/ghost-art/index.html', createdAt: 'x' }] }));
+const orphanCheck = store.healthCheck();
+check('manifest 外的制品目录被点名（孤儿）', orphanCheck.orphanArtifacts.some((a) => a.notebook === crashId && a.id === 'orphan-art'), JSON.stringify(orphanCheck.orphanArtifacts));
+check('有记录但缺 HTML 的制品被点名（空壳）', orphanCheck.missingHtml.some((a) => a.notebook === crashId && a.id === 'ghost-art'), JSON.stringify(orphanCheck.missingHtml));
+check('体检有问题时 ok=false', orphanCheck.ok === false);
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

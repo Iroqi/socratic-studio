@@ -582,6 +582,11 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, saveSettings(patch));
     }
 
+    // ---------- 数据体检：只读扫一遍 data/，报告损坏 / 孤儿 / 空壳（只报告不修）
+    if (pathname === '/api/health' && method === 'GET') {
+      return sendJson(res, 200, store.healthCheck());
+    }
+
     // ---------- notebooks
     if (pathname === '/api/notebooks' && method === 'GET') {
       return sendJson(res, 200, { notebooks: store.listNotebooks() });

@@ -696,9 +696,9 @@ check('右栏这一节无异常', errors.length === 0, errors.join(' | '));
 // 整本备份：学习记录能离开这台机器（入口在「学习」页签底部，导出走真实接口）
 const backupRow = deepAll(doc.getElementById('panelBody'), 'backup-row')[0];
 const backupBtns = backupRow ? Array.from(backupRow.children).map((b) => b.textContent) : [];
-check('「学习」页签底部有整本备份两个入口', backupBtns.includes('导出整本') && backupBtns.includes('导入整本'), backupBtns.join('/'));
+check('「学习」页签底部有整本备份入口', backupBtns.includes('导出整本') && backupBtns.includes('导入整本') && backupBtns.includes('体检数据'), backupBtns.join('/'));
 const backupHint = deepAll(doc.getElementById('panelBody'), 'backup-hint')[0];
-check('备份入口带一句说明（不裸放两个键）', Boolean(backupHint) && backupHint.textContent.includes('JSON'), backupHint?.textContent);
+check('备份入口带一句说明（不裸放几个键）', Boolean(backupHint) && backupHint.textContent.includes('JSON'), backupHint?.textContent);
 responses.set('GET /api/notebooks/nb-test/export', () =>
   json({ format: 'socratic-studio-notebook', version: 1, exportedAt: 't', files: {}, uploads: [], artifacts: [] }));
 const reqBeforeExport = requests.length;
@@ -707,7 +707,43 @@ exportBtn.onclick();
 await new Promise((r) => setTimeout(r, 20));
 check('点「导出整本」真的打了导出接口', requests.slice(reqBeforeExport).some((k) => k === 'GET /api/notebooks/nb-test/export'), requests.slice(reqBeforeExport).join(','));
 check('导出成功有提示（整本备份）', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出整本备份')));
+
+// 数据体检：只读报告，出现损坏/孤儿时如实说，没问题就说没问题
+responses.set('GET /api/health', () =>
+  json({ ok: true, dataDir: '/tmp/x', notebooks: 3, corruptFiles: [], orphanArtifacts: [], missingHtml: [] }));
+const reqBeforeHealth = requests.length;
+const healthBtn = Array.from(backupRow.children).find((b) => b.textContent === '体检数据');
+healthBtn.onclick();
+await new Promise((r) => setTimeout(r, 20));
+check('点「体检数据」真的打了体检接口', requests.slice(reqBeforeHealth).some((k) => k === 'GET /api/health'), requests.slice(reqBeforeHealth).join(','));
+const healthResult = deepAll(doc.getElementById('panelBody'), 'health-result')[0];
+check('体检结果如实显示（3 本学习，一切正常）', !healthResult.classList.contains('hidden') && healthResult.textContent.includes('3 本学习') && healthResult.textContent.includes('一切正常'), healthResult.textContent);
+responses.set('GET /api/health', () =>
+  json({ ok: false, dataDir: '/tmp/x', notebooks: 2, corruptFiles: ['nb-a/notes.json'], orphanArtifacts: [{ notebook: 'nb-b', id: 'art-1' }], missingHtml: [] }));
+healthBtn.onclick();
+await new Promise((r) => setTimeout(r, 20));
+check('体检发现问题会点名（损坏文件 + 孤儿制品）', healthResult.textContent.includes('损坏文件 1 处') && healthResult.textContent.includes('孤儿制品 1 件'), healthResult.textContent);
 check('右栏备份这一节无异常', errors.length === 0, errors.join(' | '));
+
+// 概念结构图：依赖骨架一眼可见，且图里没有任何数字（Invariant 4 违规指纹 ① 不沾边）
+const graphSvg = deepAll(doc.getElementById('panelBody'), 'concept-graph')[0];
+check('讲解顺序里画出了概念结构图', Boolean(graphSvg), graphSvg?.tagName);
+const graphNodes = deepAll(graphSvg, 'graph-node');
+const graphEdges = deepAll(graphSvg, 'graph-edge');
+check('节点数 = 概念数（2）', graphNodes.length === 2, String(graphNodes.length));
+check('连线数 = 依赖数（作用域 → 闭包）', graphEdges.length === 1, String(graphEdges.length));
+check('图里没有任何数字（结构图不是进度可视化）', !/\d/.test(graphSvg.textContent), graphSvg.textContent);
+check('节点带概念 id（取景/联调用）', graphNodes[0].getAttribute('data-concept-id') === 'variable-scope');
+// 节点点击 = 取景，和列表卡同一套交互（setCamera 会重渲染整栏，所以每次点完重新查 DOM）
+graphNodes[1].onclick();
+check('点图上的节点进入取景', early.state.camera?.conceptId === 'closures', early.state.camera?.conceptId);
+const svgAfterFocus = deepAll(doc.getElementById('panelBody'), 'concept-graph')[0];
+const framedNode = deepAll(svgAfterFocus, 'framed');
+check('取景中的节点带 framed 高亮', framedNode.length === 1 && framedNode[0].getAttribute('data-concept-id') === 'closures', String(framedNode.length));
+const closuresNode = deepAll(svgAfterFocus, 'graph-node').find((n) => n.getAttribute('data-concept-id') === 'closures');
+closuresNode.onclick();
+check('再点一次松开取景', early.state.camera === null, String(early.state.camera?.conceptId));
+check('右栏结构图这一节无异常', errors.length === 0, errors.join(' | '));
 
 console.log('\n3. 走一轮对话（SSE 回放）');
 const input = doc.getElementById('input');

@@ -2910,6 +2910,113 @@ function releaseCamera() {
   renderPanel();
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs, text) {
+  const n = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    // class 走 className：真实 DOM 里对 SVG 元素两者等价，桩里也只有这一条路径会同步 classList
+    if (k === 'class') n.className = String(v);
+    else n.setAttribute(k, String(v));
+  }
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+/**
+ * 概念结构图（SVG）：把「讲解顺序」的依赖骨架画成一张可点的图。
+ *
+ * 为什么列表之外还要一张图：列表是"一个一个"读的，图是"一眼"看整体——谁是谁的前置、
+ * 整块结构长什么样，扫一眼就懂。这是规则认可的结构呈现（protocols.md 把「结构图」列在
+ * 表现语言里），不是进度可视化：节点只有概念名，没有任何数字（Invariant 4 违规指纹 ①）。
+ *
+ * 布局：按依赖分层（依赖最浅的在最上），层内保持拓扑顺序；箭头从「前置」指向概念。
+ * Graph 校验保证无环、依赖必存在，所以布局不需要防御分支。节点点击 = 取景，和列表卡同一套。
+ */
+function conceptGraphSvg(g, ordered, progress, framed) {
+  const GAP_X = 150;
+  const GAP_Y = 64;
+  const NODE_H = 30;
+  const PAD = 6;
+  const nodeW = (name) => Math.max(52, Math.min(148, name.length * 7.5 + 16));
+  const byId = new Map(g.concepts.map((c) => [c.id, c]));
+  const layer = new Map();
+  const layerOf = (c) => {
+    if (layer.has(c.id)) return layer.get(c.id);
+    const deps = (c.depends_on || []).filter((d) => byId.has(d));
+    const l = deps.length ? Math.max(...deps.map((d) => layerOf(byId.get(d)))) + 1 : 0;
+    layer.set(c.id, l);
+    return l;
+  };
+  for (const c of g.concepts) layerOf(c);
+  const cols = [];
+  for (const c of ordered) {
+    const l = layer.get(c.id);
+    (cols[l] || (cols[l] = [])).push(c);
+  }
+  const layerW = (l) => cols[l].reduce((w, c, i) => w + nodeW(c.name) + (i ? GAP_X : 0), 0);
+  const totalW = Math.max(...cols.map((_, l) => layerW(l)));
+  const pos = new Map();
+  for (const c of ordered) {
+    const l = layer.get(c.id);
+    const i = cols[l].indexOf(c);
+    const w = nodeW(c.name);
+    const startX = (totalW - layerW(l)) / 2;
+    let x = startX;
+    for (let k = 0; k < i; k++) x += nodeW(cols[l][k].name) + GAP_X;
+    pos.set(c.id, { x, y: PAD + l * (NODE_H + GAP_Y), w, h: NODE_H });
+  }
+  const height = PAD * 2 + (cols.length - 1) * (NODE_H + GAP_Y) + NODE_H;
+
+  const svg = svgEl('svg', {
+    class: 'concept-graph',
+    viewBox: `0 0 ${totalW} ${height}`,
+    role: 'img',
+    'aria-label': '概念依赖结构图，节点可点击取景',
+  });
+
+  const defs = svgEl('defs');
+  const marker = svgEl('marker', { id: 'graph-arrow', markerWidth: 8, markerHeight: 8, refX: 7, refY: 4, orient: 'auto' });
+  marker.append(svgEl('path', { d: 'M0,0 L8,4 L0,8 z', class: 'graph-arrow-head' }));
+  defs.append(marker);
+  svg.append(defs);
+
+  // 连线先画（垫在节点底下，不被盖住）
+  for (const c of ordered) {
+    for (const d of c.depends_on || []) {
+      if (!byId.has(d)) continue;
+      const from = pos.get(d); // depends_on 里是 id 字符串
+      const to = pos.get(c.id);
+      const sx = from.x + from.w / 2;
+      const sy = from.y + from.h;
+      const ex = to.x + to.w / 2;
+      const ey = to.y;
+      const my = (sy + ey) / 2;
+      svg.append(
+        svgEl('path', { d: `M ${sx} ${sy} C ${sx} ${my}, ${ex} ${my}, ${ex} ${ey}`, class: 'graph-edge', 'marker-end': 'url(#graph-arrow)' }),
+      );
+    }
+  }
+
+  for (const c of ordered) {
+    const p = pos.get(c.id);
+    const st = progress[c.id]?.state || 'unknown';
+    const on = framed?.conceptId === c.id;
+    const g = svgEl('g', {
+      class: `graph-node${on ? ' framed' : framed ? ' dimmed' : ''}`,
+      'data-concept-id': c.id,
+      role: 'button',
+      'aria-label': c.name,
+    });
+    g.append(svgEl('rect', { x: p.x, y: p.y, width: p.w, height: p.h, rx: 7, class: `g-box g-state-${stateWord(st)}` }));
+    g.append(
+      svgEl('text', { x: p.x + p.w / 2, y: p.y + p.h / 2, 'text-anchor': 'middle', 'dominant-baseline': 'central', class: 'g-name' }, c.name),
+    );
+    g.onclick = () => (state.camera?.conceptId === c.id ? releaseCamera() : setCamera(c.id));
+    svg.append(g);
+  }
+  return svg;
+}
+
 function renderGraphPanel(body) {
   const g = state.notebook.graph;
   const todos = state.todos || state.notebook?.todos || [];
@@ -2933,6 +3040,8 @@ function renderGraphPanel(body) {
   // （和上面空结构那一支同一条规则：图上没有 = 镜头当场松开，不靠一行文字向学习者解释）
   if (state.camera && !ordered.some((c) => c.id === state.camera.conceptId)) state.camera = null;
   const framed = state.camera;
+  // 一张概念就画不成"结构"：两个节点起才有依赖骨架可看（图里没有数字，Invariant 4）
+  if (ordered.length >= 2) body.append(conceptGraphSvg(g, ordered, progress, framed));
   ordered.forEach((c, i) => {
     const p = progress[c.id];
     const on = framed?.conceptId === c.id;
@@ -3047,11 +3156,14 @@ function renderBackupPanel(body) {
   const row = el('div', 'backup-row');
   const exportBtn = el('button', 'btn btn-ghost btn-sm', '导出整本');
   const importBtn = el('button', 'btn btn-ghost btn-sm', '导入整本');
-  row.append(exportBtn, importBtn);
+  const healthBtn = el('button', 'btn btn-ghost btn-sm', '体检数据');
+  row.append(exportBtn, importBtn, healthBtn);
   body.append(row);
   body.append(
     el('div', 'backup-hint', '导出把这一整本打包成一个 JSON 文件；导入把备份还原成一本新学习，原来的学习不动。'),
   );
+  const healthResult = el('div', 'health-result hidden');
+  body.append(healthResult);
 
   exportBtn.onclick = async () => {
     try {
@@ -3099,6 +3211,27 @@ function renderBackupPanel(body) {
       }
     };
     input.click();
+  };
+
+  // 体检只读：扫一遍 data/，报告损坏的 JSON、孤儿制品、缺 HTML 的空壳。
+  // 这是文件/目录的事实报告，不是学习进度——报告里没有任何掌握度/理解度数字。
+  healthBtn.onclick = async () => {
+    try {
+      healthBtn.disabled = true;
+      const report = await api('GET', '/api/health');
+      const issues = [];
+      if (report.corruptFiles.length) issues.push(`损坏文件 ${report.corruptFiles.length} 处：${report.corruptFiles.slice(0, 3).join('、')}${report.corruptFiles.length > 3 ? '…' : ''}`);
+      if (report.orphanArtifacts.length) issues.push(`孤儿制品 ${report.orphanArtifacts.length} 件（manifest 外）`);
+      if (report.missingHtml.length) issues.push(`缺 HTML 的制品 ${report.missingHtml.length} 件`);
+      healthResult.classList.remove('hidden');
+      healthResult.textContent = issues.length
+        ? `数据体检：共 ${report.notebooks} 本学习，${issues.join('；')}。建议先导出备份再处理。`
+        : `数据体检：共 ${report.notebooks} 本学习，没有损坏、没有孤儿、没有空壳，一切正常。`;
+    } catch (err) {
+      toast(`体检失败：${err.message}`, true);
+    } finally {
+      healthBtn.disabled = false;
+    }
   };
 }
 

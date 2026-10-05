@@ -882,9 +882,28 @@ html, body {
 .panel-section-title:first-child { margin-top: 0; }
 .state-note { font-size: 12.5px; color: var(--ink-2); }
 
-/* 整本备份：一行两键 + 一句说明，不抢面板里的视觉层级 */
-.backup-row { display: flex; gap: 8px; align-items: center; }
+/* 整本备份：一行三键 + 一句说明 + 体检结果，不抢面板里的视觉层级 */
+.backup-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .backup-hint { font-size: 12px; color: var(--ink-3); margin-top: 7px; line-height: 1.5; }
+.health-result { font-size: 12px; color: var(--ink-2); margin-top: 8px; line-height: 1.55; background: var(--surface-2); border-radius: var(--radius-sm); padding: 8px 10px; }
+
+/* 概念结构图：SVG 节点只有概念名，没有数字（Invariant 4 违规指纹 ① 不沾边） */
+.concept-graph { display: block; width: 100%; height: auto; margin: 4px 0 12px; }
+.graph-edge { fill: none; stroke: var(--ink-3); stroke-width: 1.2; opacity: 0.85; }
+.graph-arrow-head { fill: var(--ink-3); }
+.graph-node { cursor: pointer; }
+.graph-node rect { stroke: var(--border-strong); stroke-width: 1; transition: stroke 0.15s ease; }
+.graph-node text { font-size: 11px; font-weight: 560; fill: var(--ink-2); }
+.graph-node:hover rect { stroke: var(--accent); }
+.graph-node.framed rect { stroke: var(--accent); stroke-width: 1.8; }
+.graph-node.framed text { fill: var(--ink); }
+/* 压暗不许用整组 opacity：文本和底色一起糊掉。分元素压，节点框保持可读。 */
+.graph-node.dimmed rect { opacity: 0.5; }
+.graph-node.dimmed text { opacity: 0.6; }
+/* 状态着色跟列表卡同一套语义：进行中 = accent，已到懂/掌握 = teal，待学 = 中性深块 */
+.g-state-待学 { fill: var(--surface-2); }
+.g-state-正在学习, .g-state-正在练习 { fill: var(--accent-soft); }
+.g-state-已学懂, .g-state-已掌握 { fill: var(--teal-soft); }
 
 .patch-card {
   border: 1px solid var(--border); border-left: 3px solid var(--warning);
