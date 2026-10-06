@@ -3273,9 +3273,10 @@ function renderBackupPanel(body) {
   const row = el('div', 'backup-row');
   const exportBtn = el('button', 'btn btn-ghost btn-sm', '导出整本');
   const summaryBtn = el('button', 'btn btn-ghost btn-sm', '导出小结');
+  const summaryHtmlBtn = el('button', 'btn btn-ghost btn-sm', '小结网页版');
   const importBtn = el('button', 'btn btn-ghost btn-sm', '导入整本');
   const healthBtn = el('button', 'btn btn-ghost btn-sm', '体检数据');
-  row.append(exportBtn, summaryBtn, importBtn, healthBtn);
+  row.append(exportBtn, summaryBtn, summaryHtmlBtn, importBtn, healthBtn);
   body.append(row);
   body.append(
     el('div', 'backup-hint', '导出把这一整本打包成一个 JSON 文件；导入把备份还原成一本新学习，原来的学习不动。'),
@@ -3326,6 +3327,30 @@ function renderBackupPanel(body) {
       toast(`导出小结失败：${err.message}`, true);
     } finally {
       summaryBtn.disabled = false;
+    }
+  };
+
+  // 小结网页版：同一份小结的 HTML 出口（自包含、无外部资源、可打印、双击即开）。
+  // 数据源与 Markdown 版是同一个（store 的 buildSummarySections），两种格式不会长出不同的事实。
+  summaryHtmlBtn.onclick = async () => {
+    try {
+      summaryHtmlBtn.disabled = true;
+      const { html } = await api('GET', `/api/notebooks/${state.notebook.id}/summary?format=html`);
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = el('a');
+      a.href = url;
+      const slug = String(state.notebook.title || '学习').replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'notebook';
+      a.download = `socratic-${slug}-小结.html`;
+      document.body.append(a);
+      if (typeof a.click === 'function') a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast('已导出小结网页版');
+    } catch (err) {
+      toast(`导出小结网页版失败：${err.message}`, true);
+    } finally {
+      summaryHtmlBtn.disabled = false;
     }
   };
 
@@ -3481,7 +3506,42 @@ function renderFilesPanel(body) {
     } else {
       row.append(el('span', 'meta', '在台上'));
     }
+    const dl = el('button', 'btn btn-ghost btn-sm', '下载');
+    dl.title = `下载「${a.title || '未命名'}」为独立 HTML`;
+    dl.setAttribute('aria-label', `下载制品「${a.title || '未命名'}」`);
+    dl.onclick = () => downloadArtifact(a);
+    row.append(dl);
     body.append(row);
+  }
+}
+
+/**
+ * 把一件制品下载成独立的 HTML 文件。
+ *
+ * 制品在落盘时就带着注入的运行时（artifact.mjs 在 share 时注入），所以
+ * GET /artifacts/:id 拿到的就是能独立打开的一整页。离开这台机器后，
+ * window.SocraticStudio 的回报通道（report / emit）没有宿主接收——运行时只在
+ * window.parent 存在时才上报，独立打开时静默跳过：作品本身照常跑，反馈回路自然失效。
+ * 这不是残缺，是边界：带走的只是作品，连接这台机器的线留在机器上。
+ */
+async function downloadArtifact(a) {
+  try {
+    const res = await fetch(`/api/notebooks/${state.notebook.id}/artifacts/${encodeURIComponent(a.id)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const html = await res.text();
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const aEl = el('a');
+    aEl.href = url;
+    const slug = String(a.title || '制品').replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'artifact';
+    aEl.download = `socratic-${slug}.html`;
+    document.body.append(aEl);
+    if (typeof aEl.click === 'function') aEl.click();
+    aEl.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    toast('已下载制品');
+  } catch (err) {
+    toast(`下载失败：${err.message}`, true);
   }
 }
 

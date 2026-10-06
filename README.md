@@ -182,7 +182,7 @@ auth 解析顺序：显式 `apiKey` → 已存的 credential → 环境变量。
 │  ├─ providers-catalog.mjs 哪些 provider 可选、各自的环境变量与 key 提示
 │  ├─ providers.mjs        CredentialStore、Models 集合、订阅列表、模型解析
 │  ├─ graph.mjs            Learning Graph 严格校验 + 拓扑排序
-│  ├─ store.mjs            每个 notebook 的落盘（graph / progress / patches / chat / uploads / artifacts / todos / jobs）+ 整本导出 / 导入 + 学习小结编译
+│  ├─ store.mjs            每个 notebook 的落盘（graph / progress / patches / chat / uploads / artifacts / todos / jobs）+ 整本导出 / 导入 + 学习小结编译（Markdown / HTML 双出口，同一数据源）
 │  ├─ tasks.mjs            后台任务与子 agent：任务记录、隔离执行、落盘、事件外发
 │  ├─ agent.mjs            18 个工具、状态转移守卫、agentic 循环（SSE 事件源）
 │  ├─ prompt.mjs           读 rules/ 编译 system prompt + 宿主能力映射 + 状态快照
@@ -367,6 +367,15 @@ DECOMPOSE 编译 → 终局对着 goal 收尾），前端此前却从不显示�
 变成一个明确手势——点了走一条普通用户消息（「帮我回顾一下已经学过的内容」），不建日历、
 不产生"下一次复习"记录。钉在 `web-smoke` 第 1 节（重命名弹窗 + PATCH + 提示）与收尾前
 （回顾走普通 /turn 通道）。
+
+**「带走的是作品」（2026-10-06 第九轮）：** 素材页「全部制品」每行多了颗「下载」——
+制品 HTML 在落盘时已注入运行时（`artifact.mjs` 在 share 时注入），`GET /artifacts/:id`
+返回的就是能独立打开的一整页，下载成 `socratic-<标题>.html` 即可带走 / 分享 / 存档。
+手势面从"只有放回一颗键"升级为：在台上 = 「下载」（只读、不碰状态）；已收起 =
+「放回台面」+「下载」两颗键。**诚实边界**：离开这台机器后 `window.SocraticStudio`
+的回报通道（report / emit）没有宿主接收——运行时只在 `window.parent` 存在时才上报，
+独立打开时静默跳过。带走的只是作品，连接这台机器的线留在机器上。钉在 `web-smoke`
+第 3 节（手势面）与第 30 节（下载链路）。
 
 **右栏的「取景」现在只剩一层框（2026-10-04 建，同日把取景条撤了）。** 概念卡以前只在自己状态变动时挂一个静态 `.current` 边，题卡问的是
 哪个概念则根本没送到前端——`ask` 的 SSE 里没有 `conceptId`（落盘副本里有），于是学习者只能自己在
@@ -1009,6 +1018,9 @@ agent 调 `read_artifact_evidence` 就能拿到。反过来 agent 下发的指�
   隔离区不是垃圾箱，是**暂存台**：数据是资产，动手要稳、可逆、看得见。
 - **导出小结**（2026-10-06 第八轮）：`GET /api/notebooks/<id>/summary` 把这一本的**结论**
   编译成一份人可读的 Markdown（`# 标题` → 目标/主题 → 概念结构 → 笔记 → 制品清单）。
+  **小结网页版**（第九轮）：`?format=html` 给同一份小结的自包含网页（内联 CSS、无外部资源、
+  可打印、双击即开）——两种格式共用 store 的 `buildSummarySections`，同一份数据源，
+  不会各自长出不同的事实。
   与「导出整本」的分工：导出是数据（JSON 完整备份），小结是文字（带走即读的总结）。
   事件流水不进小结——那是过程（右栏「事件」是它的去处），小结是结论。
   **Invariant 4 在服务端就守住**：状态一律用词（待学 / 正在学习 / 已学懂 / 正在练习 / 已掌握），

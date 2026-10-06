@@ -2655,6 +2655,64 @@ check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据
     bareMd.startsWith('# 空白本') && !bareMd.includes('## 目标') && !bareMd.includes('## 主题') && !bareMd.includes('## 概念结构'), bareMd);
 }
 
+// ─────────────────────────────────────── 12h. 小结网页版（同一份数据源的 HTML 出口）
+{
+  // 与 12g 同一套夹具：小结的两种格式必须从同一份数据源长出同一套事实
+  const sumId = store.createNotebook({ title: '正则表达式', topic: '正则表达式', goal: null, pace: 'normal' }).id;
+  store.saveGraph(sumId, {
+    meta: {
+      topic: '正则表达式',
+      goal: '能读懂并写出工作中的正则',
+      pedagogy: 'programming',
+      learner_profile: { background: '有编程基础', known_concepts: [], pace: 'normal' },
+    },
+    concepts: [
+      { id: 'char-class', name: '字符类', summary: '用 […] 匹配一组字符中的一个', depends_on: [], importance: 'core', misconceptions: ['把 [abc] 当成顺序匹配'], assessment_items: [] },
+      { id: 'quantifier', name: '量词', summary: '控制前面元素的重复次数', depends_on: ['char-class'], importance: 'core', misconceptions: ['贪婪与非贪婪分不清'], assessment_items: [] },
+    ],
+  });
+  store.saveProgress(sumId, {
+    version: 1,
+    session_open: false,
+    concepts: {
+      'char-class': { concept_id: 'char-class', state: 'understood', next_action: null, unverified_self_report: false, note: null },
+      'quantifier': { concept_id: 'quantifier', state: 'seen', next_action: '接地→探针', unverified_self_report: false, note: null },
+    },
+    notes: [],
+    updated_at: new Date().toISOString(),
+  });
+  const { saveNote } = await import('../server/notes.mjs');
+  saveNote(sumId, { title: '字符类', summary: '方括号里是字符集合', key_points: ['[a-z] 匹配一个小写字母'], example: '[0-9] 匹配任意数字', concepts: ['char-class'] });
+  store.saveArtifact(sumId, { title: '正则试错场', html: '<p>x</p>', kind: 'interactive' });
+  const retiredArt = store.saveArtifact(sumId, { title: '旧练习卡', html: '<p>y</p>', kind: 'page' });
+  store.setArtifactLifetime(sumId, retiredArt.id, true);
+
+  const h = store.summaryHtml(sumId);
+  check('小结网页版是自包含页面（<!doctype html>，无外部脚本 / 样式 / 图片资源）',
+    h.startsWith('<!doctype html>') && !/<(link|script|img)[^>]+src=/.test(h) && !/@import|url\(https?:/.test(h),
+    h.slice(0, 180));
+  check('网页版包含目标与状态词，且没有比率 / 百分比 / 分数指纹',
+    h.includes('<h2>目标</h2>') && h.includes('已学懂') && h.includes('正在学习') &&
+    !/%|掌握率|进度条|分数|星级|\d+\s*个里/.test(h), h.split('\n').filter((l) => l.includes('strong')).join(' / '));
+  check('网页版概念按依赖序、误解点与依赖都在',
+    h.indexOf('字符类') < h.indexOf('量词') && h.includes('容易踩的坑：贪婪与非贪婪分不清') && h.includes('前置：字符类'),
+    '');
+  check('网页版笔记与制品齐全（在台上 / 已收起）',
+    h.includes('正则试错场（交互物件）—— 在台上') && h.includes('旧练习卡（讲解页）—— 已收起'), h.split('\n').filter((l) => l.includes('<li>')).join(' / '));
+  check('网页版对模型 / 学习者内容做 HTML 转义（< 不被当成标签）',
+    (() => {
+      const escId = store.createNotebook({ title: '转义测试', topic: '', goal: null, pace: 'normal' }).id;
+      saveNote(escId, { title: 'a<b>', summary: 'x<y>', key_points: ['<script>alert(1)</script>'], concepts: [] });
+      const eh = store.summaryHtml(escId);
+      return eh.includes('a&lt;b&gt;') && eh.includes('&lt;script&gt;alert(1)&lt;/script&gt;') && !eh.includes('<b>');
+    })(), '');
+  check('无目标无主题：网页版也不摆空的「目标 / 主题」节',
+    (() => {
+      const bareH = store.summaryHtml(store.createNotebook({ title: '空白本', topic: '', goal: null, pace: 'normal' }).id);
+      return !bareH.includes('<h2>目标</h2>') && !bareH.includes('<h2>主题</h2>');
+    })(), '');
+}
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

@@ -1035,7 +1035,7 @@ const ARTIFACT_KIND_WORDS = {
 };
 
 /**
- * 把一本学习编译成一份人可读的 Markdown 小结——带得走的那份"结论"。
+ * 把一本学习编译成一份人可读的小结——带得走的那份"结论"。
  *
  * 与整本导出（JSON，机器可读、完整备份）的分工：导出是数据，小结是文字。
  * 内容是结论不是过程：目标、概念结构（按依赖序 + 状态词）、笔记、制品清单——
@@ -1044,42 +1044,31 @@ const ARTIFACT_KIND_WORDS = {
  * Invariant 4 在这里是硬约束：状态一律用词（待学 / 正在学习 / 已学懂 / 正在练习 / 已掌握），
  * 绝不出百分比、分数、进度条、比率。概念行"—— 已学懂"是词不是数字；制品清单只列
  * 「在台上 / 已收起」，不计数。这份文件是给学习者看的，不是给仪表盘看的。
+ *
+ * Markdown 与 HTML 两个出口共用同一份 buildSummarySections()：内容只编译一次，
+ * 两种格式不会各自长出不同的事实。Markdown 是给人（文本编辑器 / 任意设备）的，
+ * HTML 是给浏览器的（自包含、无外部资源、可打印，双击就能打开）。
  */
 export function summaryMarkdown(id) {
-  const nb = getNotebook(id);
-  const title = String(nb.title || '学习笔记');
-  const goal = nb.graph?.meta?.goal || nb.goal || null;
-  const topic = String(nb.graph?.meta?.topic || nb.topic || '').trim();
-  const lines = [`# ${title}`, ''];
-
-  if (goal) lines.push('## 目标', '', goal, '');
-  else if (topic) lines.push('## 主题', '', topic, '');
-  const background = nb.graph?.meta?.learner_profile?.background || nb.learner?.background || null;
-  if (background) lines.push('', `> 背景：${background}`);
-
-  const concepts = Array.isArray(nb.graph?.concepts) ? nb.graph.concepts : [];
-  if (concepts.length) {
+  const s = buildSummarySections(id);
+  const lines = [`# ${s.title}`, ''];
+  if (s.goal) lines.push('## 目标', '', s.goal, '');
+  else if (s.topic) lines.push('## 主题', '', s.topic, '');
+  if (s.background) lines.push('', `> 背景：${s.background}`);
+  if (s.concepts.length) {
     lines.push('## 概念结构（按依赖顺序）', '');
-    const progress = nb.progress?.concepts || {};
-    const byId = new Map(concepts.map((c) => [c.id, c]));
-    for (const c of topoSortConcepts(nb.graph)) {
-      const word = stateWord(progress[c.id]?.state);
-      lines.push(`- **${c.name}** —— ${word}`);
+    for (const c of s.concepts) {
+      lines.push(`- **${c.name}** —— ${c.word}`);
       if (c.summary) lines.push(`  ${c.summary}`);
-      if (c.depends_on?.length) {
-        const names = c.depends_on.map((d) => byId.get(d)?.name || d).filter(Boolean);
-        if (names.length) lines.push(`  前置：${names.join('、')}`);
-      }
-      if (c.misconceptions?.length) lines.push(`  容易踩的坑：${c.misconceptions.join('；')}`);
+      if (c.deps) lines.push(`  前置：${c.deps}`);
+      if (c.misconceptions) lines.push(`  容易踩的坑：${c.misconceptions}`);
       lines.push('');
     }
   }
-
-  const notes = Array.isArray(nb.notes) ? nb.notes : [];
-  if (notes.length) {
+  if (s.notes.length) {
     lines.push('## 笔记', '');
-    for (const n of notes) {
-      lines.push(`### ${n.title || '未命名笔记'}`, '');
+    for (const n of s.notes) {
+      lines.push(`### ${n.title}`, '');
       if (n.summary) lines.push(n.summary, '');
       if (n.key_points?.length) {
         for (const p of n.key_points) lines.push(`- ${p}`);
@@ -1088,16 +1077,120 @@ export function summaryMarkdown(id) {
       if (n.example) lines.push('```text', n.example, '```', '');
     }
   }
-
-  const artifacts = Array.isArray(nb.artifacts) ? nb.artifacts : [];
-  if (artifacts.length) {
+  if (s.artifacts.length) {
     lines.push('## 制品', '');
-    for (const a of artifacts) {
-      const status = a.retiredAt ? '已收起' : '在台上';
-      lines.push(`- ${a.title || '未命名制品'}（${ARTIFACT_KIND_WORDS[a.kind] || '制品'}）—— ${status}`);
-    }
+    for (const a of s.artifacts) lines.push(`- ${a.title}（${a.kindWord}）—— ${a.status}`);
     lines.push('');
   }
-
   return lines.join('\n');
+}
+
+export function summaryHtml(id) {
+  const s = buildSummarySections(id);
+  const esc = htmlEscape;
+  const out = ['<!doctype html>', '<html lang="zh-CN">', '<head>', '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    `<title>${esc(s.title)} — 学习小结</title>`,
+    '<style>',
+    'body{font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;',
+    'max-width:820px;margin:0 auto;padding:28px 20px 64px;color:#1f2430;line-height:1.65;}',
+    'h1{font-size:26px;margin:0 0 6px;}',
+    '.sub{color:#667;font-size:13px;margin-bottom:28px;}',
+    'h2{font-size:18px;margin:34px 0 12px;padding-bottom:6px;border-bottom:1px solid #e3e6ec;}',
+    'h3{font-size:15px;margin:18px 0 8px;}',
+    'p{margin:8px 0;}',
+    '.goal{background:#f4f6fa;border-left:4px solid #5b7cfa;padding:10px 14px;border-radius:6px;font-size:15px;}',
+    'blockquote{color:#667;margin:6px 0 0;}',
+    'ul{margin:8px 0 8px;padding-left:22px;}',
+    'li{margin:6px 0;}',
+    'li strong{color:#2b3452;}',
+    '.misc{color:#556;font-size:13px;margin:3px 0;}',
+    'pre{background:#f4f6fa;padding:10px 14px;border-radius:6px;overflow-x:auto;font-size:13px;}',
+    '@media print{body{max-width:none;padding:0;}}',
+    '</style>', '</head>', '<body>',
+    `<h1>${esc(s.title)}</h1>`,
+    `<div class="sub">${esc(new Date().toISOString().slice(0, 10))} 的学习小结</div>`];
+
+  if (s.goal) out.push(`<h2>目标</h2><p class="goal">${esc(s.goal)}</p>`);
+  else if (s.topic) out.push(`<h2>主题</h2><p class="goal">${esc(s.topic)}</p>`);
+  if (s.background) out.push(`<blockquote>背景：${esc(s.background)}</blockquote>`);
+
+  if (s.concepts.length) {
+    out.push('<h2>概念结构（按依赖顺序）</h2><ul>');
+    for (const c of s.concepts) {
+      out.push(`<li><strong>${esc(c.name)}</strong> —— ${esc(c.word)}`);
+      if (c.summary) out.push(`<p>${esc(c.summary)}</p>`);
+      if (c.deps) out.push(`<p class="misc">前置：${esc(c.deps)}</p>`);
+      if (c.misconceptions) out.push(`<p class="misc">容易踩的坑：${esc(c.misconceptions)}</p>`);
+      out.push('</li>');
+    }
+    out.push('</ul>');
+  }
+
+  if (s.notes.length) {
+    out.push('<h2>笔记</h2>');
+    for (const n of s.notes) {
+      out.push(`<h3>${esc(n.title)}</h3>`);
+      if (n.summary) out.push(`<p>${esc(n.summary)}</p>`);
+      if (n.key_points?.length) {
+        out.push('<ul>');
+        for (const p of n.key_points) out.push(`<li>${esc(p)}</li>`);
+        out.push('</ul>');
+      }
+      if (n.example) out.push(`<pre>${esc(n.example)}</pre>`);
+    }
+  }
+
+  if (s.artifacts.length) {
+    out.push('<h2>制品</h2><ul>');
+    for (const a of s.artifacts) {
+      out.push(`<li>${esc(a.title)}（${esc(a.kindWord)}）—— ${esc(a.status)}</li>`);
+    }
+    out.push('</ul>');
+  }
+
+  out.push('</body>', '</html>');
+  return out.join('\n');
+}
+
+function htmlEscape(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ));
+}
+
+function buildSummarySections(id) {
+  const nb = getNotebook(id);
+  const title = String(nb.title || '学习笔记');
+  const goal = nb.graph?.meta?.goal || nb.goal || null;
+  const topic = String(nb.graph?.meta?.topic || nb.topic || '').trim();
+  const background = nb.graph?.meta?.learner_profile?.background || nb.learner?.background || null;
+
+  const concepts = Array.isArray(nb.graph?.concepts) ? nb.graph.concepts : [];
+  const progress = nb.progress?.concepts || {};
+  const byId = new Map(concepts.map((c) => [c.id, c]));
+  const conceptRows = topoSortConcepts(nb.graph).map((c) => ({
+    name: c.name,
+    word: stateWord(progress[c.id]?.state),
+    summary: c.summary || '',
+    deps: c.depends_on?.length
+      ? c.depends_on.map((d) => byId.get(d)?.name || d).filter(Boolean).join('、') || null
+      : null,
+    misconceptions: c.misconceptions?.length ? c.misconceptions.join('；') : null,
+  }));
+
+  const notes = (Array.isArray(nb.notes) ? nb.notes : []).map((n) => ({
+    title: n.title || '未命名笔记',
+    summary: n.summary || '',
+    key_points: Array.isArray(n.key_points) ? n.key_points : [],
+    example: n.example || '',
+  }));
+
+  const artifacts = (Array.isArray(nb.artifacts) ? nb.artifacts : []).map((a) => ({
+    title: a.title || '未命名制品',
+    kindWord: ARTIFACT_KIND_WORDS[a.kind] || '制品',
+    status: a.retiredAt ? '已收起' : '在台上',
+  }));
+
+  return { title, goal, topic, background, concepts: conceptRows, notes, artifacts };
 }

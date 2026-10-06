@@ -510,6 +510,27 @@ try {
   check('DELETE 删得掉', delOut.data?.ok === true && (await jfetch(`${BASE}/api/notebooks/${id6}`)).data.notebook.notes.length === 0, JSON.stringify(delOut.data));
   const del2 = await jfetch(`${BASE}/api/notebooks/${id6}/notes/${noteId}`, { method: 'DELETE' });
   check('再删一次给 404（不是假装删了）', del2.status === 404, `status=${del2.status}`);
+
+  console.log('\n13. 学习小结：Markdown 与网页版同一份数据源');
+  const mdOut = await jfetch(`${BASE}/api/notebooks/${id}/summary`);
+  check('小结默认给 Markdown（# 标题 + ## 目标 + 概念结构）',
+    mdOut.data?.markdown?.startsWith('# ') && mdOut.data.markdown.includes('## 目标') && mdOut.data.markdown.includes('概念结构（按依赖顺序）'),
+    JSON.stringify(mdOut.data).slice(0, 160));
+  check('Markdown 里概念带状态词（—— 已学懂 / 待学），不出比率',
+    mdOut.data.markdown.includes('—— 已学懂') && mdOut.data.markdown.includes('—— 待学') && !/%|掌握率|进度条|分数|\d+\s*个里/.test(mdOut.data.markdown),
+    mdOut.data.markdown.split('\n').filter((l) => l.startsWith('-')).join(' / '));
+  const htmlOut = await jfetch(`${BASE}/api/notebooks/${id}/summary?format=html`);
+  check('小结网页版给自包含 HTML（<!doctype html>，无外部资源）',
+    htmlOut.data?.html?.startsWith('<!doctype html>') && !/<(link|script|img)[^>]+src=/.test(htmlOut.data.html),
+    JSON.stringify(htmlOut.data).slice(0, 160));
+  check('两种格式同一份事实：目标与概念都在、状态都是词',
+    mdOut.data.markdown.includes('在项目里用对闭包') && htmlOut.data.html.includes('在项目里用对闭包') &&
+    htmlOut.data.html.includes('闭包') && htmlOut.data.html.includes('—— 已学懂'),
+    '');
+  const bare = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '还没谈目标' }) })).data.notebook.id;
+  const bareMd = (await jfetch(`${BASE}/api/notebooks/${bare}/summary`)).data.markdown;
+  check('还没有图的书：小结只有标题，不摆空的「目标 / 概念」节',
+    bareMd.startsWith('# 还没谈目标') && !bareMd.includes('## 目标') && !bareMd.includes('## 概念结构'), bareMd);
 } finally {
   server.kill();
   await sleep(400);

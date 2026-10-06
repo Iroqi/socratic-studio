@@ -789,8 +789,11 @@ early.renderPanel();
 const fileRows = deepAll(doc.getElementById('panelBody'), 'file-item');
 const liveRow = fileRows.find((n) => n.textContent.includes('在台上的那件'));
 const retRow = fileRows.find((n) => n.textContent.includes('收起的那件'));
-check('在台上的制品标「在台上」、不给键', Boolean(liveRow) && liveRow.textContent.includes('在台上') && liveRow.findByClass('btn').length === 0, liveRow?.textContent);
-check('已收起的制品只给「放回台面」一颗键', Boolean(retRow) && retRow.findByClass('btn').map((b) => b.textContent).join(',') === '放回台面', retRow?.textContent);
+// 素材页的手势面（2026-10-06 第九轮起）：下载是**只读**的带走动作，不改任何状态，
+// 所以和「放回台面」（唯一改状态的手势）不冲突；在台上的也有一颗「下载」。
+// 钉的仍是同一句话：不许出现**状态改动**的手势面堆叠。
+check('在台上的制品标「在台上」、只给「下载」一颗键', Boolean(liveRow) && liveRow.textContent.includes('在台上') && liveRow.findByClass('btn').map((b) => b.textContent).join(',') === '下载', liveRow?.textContent);
+check('已收起的制品给「放回台面」「下载」两颗键', Boolean(retRow) && retRow.findByClass('btn').map((b) => b.textContent).join(',') === '放回台面,下载', retRow?.textContent);
 // 还原样本与页签，别把后面的流程带偏
 early.state.notebook.artifacts = [];
 early.state.panelTab = 'learn';
@@ -2736,8 +2739,8 @@ state.panelTab = 'files';
 cam.renderPanel();
 const retiredRow = domRoot.findById('panelBody').findByClass('file-item')
   .find((n) => n.textContent?.includes('正则试错场'));
-check('「素材」页列着扔掉的那件，行里只有一颗「放回台面」',
-  !!retiredRow && retiredRow.findByClass('btn').map((b) => b.textContent).join(',') === '放回台面',
+check('「素材」页列着扔掉的那件，行里有「放回台面」和「下载」两颗键',
+  !!retiredRow && retiredRow.findByClass('btn').map((b) => b.textContent).join(',') === '放回台面,下载',
   retiredRow ? retiredRow.textContent : '没找到那一行');
 const filesBody = /function renderFilesPanel\(body\) \{([\s\S]*?)\n\}/.exec(appSrc)?.[1] || '';
 check('那一节绝不给删除键：软退役唯一的手势面就是放回',
@@ -3632,6 +3635,52 @@ console.log('\n32. 转场条：新场开头那行「接住第 1 场 ·「这件�
   check('点「导出小结」真的请求了 /summary', requests.slice(reqBeforeSummary).some((k) => k.includes('/summary')), requests.slice(reqBeforeSummary).join(','));
   check('导出小结成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出学习小结')));
   check('导出小结这条链路无异常', errors.length === 0, errors.join(' | '));
+}
+
+// ─── 30. 带走的是作品：制品下载 + 小结网页版
+{
+  const { state: st, renderPanel: rp } = appModule.__hooks;
+  st.panelTab = 'files';
+  st.notebook = {
+    ...sampleNotebook(),
+    id: 'nb-test',
+    artifacts: [
+      { id: 'art-1', title: '正则试错场', kind: 'interactive', rel: 'artifacts/art-1/index.html', retiredAt: null, createdAt: 0 },
+      { id: 'art-2', title: '旧练习卡', kind: 'page', rel: 'artifacts/art-2/index.html', retiredAt: 1, createdAt: 0 },
+    ],
+  };
+  rp();
+  const fileRows = deepAll(doc.getElementById('panelBody'), 'file-item');
+  const dlBtns = fileRows.map((r) => Array.from(r.children).find((c) => c.textContent === '下载')).filter(Boolean);
+  check('素材页每件制品都有「下载」按钮', dlBtns.length === 2, `下载按钮数=${dlBtns.length}`);
+  const retiredRow = deepAll(doc.getElementById('panelBody'), 'file-item').find((r) => r.textContent.includes('旧练习卡'));
+  check('已收起的制品也有「下载」按钮（文件永远在）',
+    Boolean(retiredRow) && Array.from(retiredRow.children).some((c) => c.textContent === '下载'),
+    retiredRow ? retiredRow.textContent : '没有已收起那行');
+  responses.set('GET /api/notebooks/nb-test/artifacts/art-1', () => new Response('<!doctype html><title>正则试错场</title><p>可独立打开</p>', { status: 200, headers: { 'Content-Type': 'text/html' } }));
+  const reqBeforeDl = requests.length;
+  dlBtns[0].onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  check('点「下载」真的请求了制品页面', requests.slice(reqBeforeDl).some((k) => k.includes('/artifacts/art-1')), requests.slice(reqBeforeDl).join(','));
+  check('制品下载成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已下载制品')));
+  check('制品下载这条链路无异常', errors.length === 0, errors.join(' | '));
+
+  // 小结网页版：备份行里那颗键，点击真发 ?format=html 并提示
+  st.panelTab = 'learn';
+  st.notebook = { ...sampleNotebook(), id: 'nb-test' };
+  rp();
+  const htmlBtn = deepAll(doc.getElementById('panelBody'), 'backup-row')
+    .flatMap((r) => Array.from(r.children))
+    .find((b) => b.textContent === '小结网页版');
+  check('备份行里有「小结网页版」按钮', Boolean(htmlBtn));
+  responses.set('GET /api/notebooks/nb-test/summary?format=html', () => json({ html: '<!doctype html><title>小结</title><p>网页版</p>' }));
+  const reqBeforeHtml = requests.length;
+  htmlBtn.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  check('点「小结网页版」真的请求了 /summary?format=html',
+    requests.slice(reqBeforeHtml).some((k) => k === 'GET /api/notebooks/nb-test/summary?format=html'), requests.slice(reqBeforeHtml).join(','));
+  check('小结网页版成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出小结网页版')));
+  check('小结网页版这条链路无异常', errors.length === 0, errors.join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
