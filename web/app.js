@@ -1203,6 +1203,10 @@ function showQuestion(evt, answer, sceneId = null) {
       text: answer.text || '',
       skipped: Boolean(answer.skipped),
     });
+  } else {
+    // 新题正在等作答：主动播报一声（读屏用户不知道流里冒出一道题）。
+    // 带 answer 的是回放旧题，那时没有人等谁，播报是句过期话——不播。
+    announce('出一道题，正在等你作答。');
   }
   return card;
 }
@@ -2486,6 +2490,7 @@ function renderAskCard(evt) {
     const box = el('div', 'ask-options');
     evt.options.forEach((opt, i) => {
       const b = el('button', `ask-option ${evt.multiSelect ? 'multi' : 'single'}`);
+      b.setAttribute('aria-pressed', 'false'); // 选中态不只靠视觉勾选，读屏/键盘也要听得见
       const mark = el('span', 'mark', '✓');
       const body = el('span');
       body.append(el('span', 'label', opt.label));
@@ -2498,11 +2503,16 @@ function renderAskCard(evt) {
           if (selected.has(key)) selected.delete(key);
           else selected.add(key);
           b.classList.toggle('selected', selected.has(key));
+          b.setAttribute('aria-pressed', selected.has(key) ? 'true' : 'false');
         } else {
           selected.clear();
           selected.add(String(i));
-          for (const other of box.querySelectorAll('.ask-option')) other.classList.remove('selected');
+          for (const other of box.querySelectorAll('.ask-option')) {
+            other.classList.remove('selected');
+            other.setAttribute('aria-pressed', 'false');
+          }
           b.classList.add('selected');
+          b.setAttribute('aria-pressed', 'true');
         }
       };
       box.append(b);
@@ -3758,8 +3768,31 @@ function renderAttachments() {
 /**
  * 通用小弹层。{ title, body(HTML 字符串), confirmText, cancelText, danger, onConfirm }
  * onConfirm 收到弹层节点；返回 false 表示"这次不关"（校验没过），其余情况关掉。
+ *
+ * 焦点归还（第十二轮）：打开时记下触发元素，关闭时把焦点还给它——键盘用户关掉
+ * 对话框焦点不该掉回页面顶部（WCAG 2.4.3 焦点顺序 / 2.4.7 焦点可见）。两个模态
+ * 共用同一个记录位：同一时刻只可能开一个。
  */
+let modalLastFocus = null;
+
+function closeModal(id) {
+  const m = $(id);
+  if (!m) return;
+  m.classList.add('hidden');
+  const back = modalLastFocus;
+  modalLastFocus = null;
+  // 触发元素可能已被删（如刚重命名的会话列表项被重建）——有就还，没有就算了
+  if (back && typeof back.focus === 'function') back.focus();
+}
+
+/** 只给读屏的播报：题卡出现等"值得主动说一声"的状态变化。不放数字（Invariant 4）。 */
+function announce(text) {
+  const a = $('announcer');
+  if (a) a.textContent = text;
+}
+
 function openSimpleModal({ title, body, confirmText = '确定', cancelText = '取消', danger = false, onConfirm }) {
+  modalLastFocus = document.activeElement || null;
   $('simpleModalTitle').textContent = title || '标题';
   const bodyEl = $('simpleModalBody');
   bodyEl.innerHTML = '';
@@ -3772,13 +3805,13 @@ function openSimpleModal({ title, body, confirmText = '确定', cancelText = '�
   foot.innerHTML = '';
   const cancel = el('button', 'btn btn-ghost', cancelText);
   const go = el('button', `btn ${danger ? 'btn-danger' : 'btn-primary'}`, confirmText);
-  cancel.onclick = () => $('simpleModal').classList.add('hidden');
+  cancel.onclick = () => closeModal('simpleModal');
   go.onclick = async () => {
-    if (!onConfirm) return $('simpleModal').classList.add('hidden');
+    if (!onConfirm) return closeModal('simpleModal');
     go.disabled = true;
     try {
       const keepOpen = (await onConfirm($('simpleModal'), go)) === false;
-      if (!keepOpen) $('simpleModal').classList.add('hidden');
+      if (!keepOpen) closeModal('simpleModal');
     } finally {
       go.disabled = false;
     }
@@ -3786,7 +3819,11 @@ function openSimpleModal({ title, body, confirmText = '确定', cancelText = '�
   foot.append(cancel, go);
   $('simpleModal').classList.remove('hidden');
   const firstInput = bodyEl.querySelector('input, textarea, select');
-  setTimeout(() => firstInput?.focus?.(), 60);
+  // 60ms 后再聚焦第一个输入框：等模态真的进了渲染树。关得快的（60ms 内）不许偷焦——
+  // 焦点已经还给触发元素了，晚到的 focus 只会把用户又拽回一个看不见的对话框里。
+  setTimeout(() => {
+    if (!$('simpleModal').classList.contains('hidden')) firstInput?.focus?.();
+  }, 60);
 }
 
 /**
@@ -3889,6 +3926,7 @@ async function createNotebookFromMessage(text) {
 // 块与块之间用细线 + 块头分隔，整页一个滚动区。
 
 async function openConfig() {
+  modalLastFocus = document.activeElement || null;
   $('configModal').classList.remove('hidden');
   await refreshConfig();
   renderConfig();
@@ -4465,9 +4503,9 @@ function bindEvents() {
   if (themeToggle) {
     themeToggle.onclick = () => applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
   }
-  $('closeConfig').onclick = () => $('configModal').classList.add('hidden');
+  $('closeConfig').onclick = () => closeModal('configModal');
   $('configModal').onclick = (e) => {
-    if (e.target === $('configModal')) $('configModal').classList.add('hidden');
+    if (e.target === $('configModal')) closeModal('configModal');
   };
   $('closeSimple').onclick = () => $('simpleModal').classList.add('hidden');
   $('simpleModal').onclick = (e) => {
@@ -4560,36 +4598,54 @@ function bindEvents() {
       renderPanel();
     };
   }
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      $('configModal')?.classList.add('hidden');
-      $('simpleModal')?.classList.add('hidden');
-      // 搜索框里按 Esc = 清词回全显（搜索态也归 Esc 管，同一个键同一个语义）
-      const ds = $('deskSearch');
-      if (ds && ds.value) {
-        ds.value = '';
-        applyDeskFilter();
-      }
-      return;
+  document.addEventListener('keydown', handleGlobalKeydown);
+}
+
+/**
+ * 全局键盘。抽成具名函数是为了能被测试直接驱动（DOM 桩的 document.addEventListener
+ * 是空操作，只有把它当纯函数喂事件才钉得住）：Esc 关弹层 / 焦点圈 / `/` 聚焦输入框。
+ */
+function handleGlobalKeydown(e) {
+  if (e.key === 'Escape') {
+    // 关弹层走 closeModal：焦点还给打开它的触发元素（同一个键同一个语义）
+    if ($('configModal') && !$('configModal').classList.contains('hidden')) return closeModal('configModal');
+    if ($('simpleModal') && !$('simpleModal').classList.contains('hidden')) return closeModal('simpleModal');
+    // 搜索框里按 Esc = 清词回全显（搜索态也归 Esc 管）
+    const ds = $('deskSearch');
+    if (ds && ds.value) {
+      ds.value = '';
+      applyDeskFilter();
     }
-    if (e.key !== 'Tab') return;
-    // 焦点圈在弹层里：Tab 走到最后一个可聚焦元素就回到第一个（Shift+Tab 反向）。
-    // 不拦的话焦点会跑到弹层背后那些看不见的控件上。
-    const open = [$('configModal'), $('simpleModal')].find((m) => m && !m.classList.contains('hidden'));
-    if (!open) return;
-    const focusable = [...open.querySelectorAll('button, input, textarea, select, a[href]')]
-      .filter((n) => !n.disabled && !n.classList.contains('hidden'));
-    if (!focusable.length) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
+    return;
+  }
+  // `/` 聚焦输入框：只要焦点不在可输入控件里（在输入框里打 `/` 是字符，不是命令）
+  if (e.key === '/') {
+    const ae = document.activeElement;
+    const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable);
+    if (!typing) {
       e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
+      const input = $('input');
+      if (input) input.focus();
     }
-  });
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  // 焦点圈在弹层里：Tab 走到最后一个可聚焦元素就回到第一个（Shift+Tab 反向）。
+  // 不拦的话焦点会跑到弹层背后那些看不见的控件上。
+  const open = [$('configModal'), $('simpleModal')].find((m) => m && !m.classList.contains('hidden'));
+  if (!open) return;
+  const focusable = [...open.querySelectorAll('button, input, textarea, select, a[href]')]
+    .filter((n) => !n.disabled && !n.classList.contains('hidden'));
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
 }
 
 // ─────────────────────────────────────────────── 启动
@@ -4716,4 +4772,9 @@ export const __hooks = {
   STARTERS,
   // 草稿态上传素材（文件先攒在浏览器里，建会话时补传）
   uploadFiles,
+  // 键盘走得通（第十二轮）：模态焦点归还 / 题卡播报 / `/` 快捷键
+  openSimpleModal,
+  closeModal,
+  handleGlobalKeydown,
+  announce,
 };

@@ -89,11 +89,11 @@
           <div class="composer">
             <button class="icon-btn" id="attachBtn" title="添加素材（文本 / 图片）" aria-label="添加素材（文本 / 图片）">📎</button>
             <input type="file" id="fileInput" multiple hidden accept=".md,.markdown,.txt,.json,.yaml,.yml,.csv,.tsv,.log,.html,.htm,.png,.jpg,.jpeg,.webp,.gif" />
-            <textarea id="input" rows="1" placeholder="说你想学的主题，或直接回答上一步的问题…"></textarea>
+            <textarea id="input" rows="1" placeholder="说你想学的主题，或直接回答上一步的问题…" aria-keyshortcuts="/"></textarea>
             <button class="btn btn-primary" id="sendBtn">发送</button>
             <button class="btn btn-danger hidden" id="stopBtn">中断</button>
           </div>
-          <div class="composer-hint">Enter 发送 · Shift+Enter 换行</div>
+          <div class="composer-hint">Enter 发送 · Shift+Enter 换行 · / 聚焦输入框</div>
         </div>
       </main>
 
@@ -133,6 +133,9 @@
     </div>
 
     <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+    <!-- 只给读屏的播报区：题卡出现等"值得主动说一声"的状态变化。视觉隐藏但保留在渲染树里
+         （display:none 的 live 区多数读屏不播报），永远不放数字（Invariant 4）。 -->
+    <div class="sr-only" id="announcer" role="status" aria-live="polite"></div>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

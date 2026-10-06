@@ -352,6 +352,17 @@ curl -X POST http://127.0.0.1:8787/api/notebooks/$ID/answer \
 **可见面只出词、不出数字**：value / probability 是判定置信度不是学习量（服务端
 `readDecisions` 摘要里根本没有这些字段），完整记录仍在本地 `decision-journal.json`。
 
+**键盘走得通（2026-10-07 第十二轮）。** 三处键盘/读屏增量，都只动交互层、不碰教学判定：
+① **模态焦点归还**——打开对话框时记下触发元素，Esc / 取消 / 确认关闭后焦点回到它
+（WCAG 2.4.3 / 2.4.7）；关闭后 60ms 晚到的"聚焦首输入"被 hidden 守卫挡住，不偷焦。
+② **题卡对读屏友好**——新题出现时 `#announcer`（视觉隐藏的 `aria-live` 区）播报
+「出一道题，正在等你作答」；带答案的回放旧题不播（没人等谁）；选项按钮同步
+`aria-pressed`，选中态不只靠视觉勾选。播报词无数字（Invariant 4）。
+③ **`/` 聚焦输入框**——焦点不在输入控件里时按 `/` 直接开写（composer 带
+`aria-keyshortcuts="/"`，提示行写明）。焦点圈（Tab trap）与 Esc 语义沿用旧行为。
+测试侧把 DOM 桩的 focus/activeElement 从空操作升级成记账，`querySelector` 支持
+标签选择器——这三条可测了，且桩语义对齐真实 DOM。
+
 **「目标卡」是右栏第一行只读上下文（2026-10-06 第八轮）。** 规则把 goal 当锚点（CLARIFY 收窄 →
 DECOMPOSE 编译 → 终局对着 goal 收尾），前端此前却从不显示它。现在紧挨着改动区有一张卡：
 有 `graph.meta.goal` 标「目标」，只有 topic 时标「主题」（目标确认前不撒谎），两者都没有就不摆卡

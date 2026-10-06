@@ -1053,6 +1053,11 @@ html, body {
 
 /* toast */
 .toasts { position: fixed; bottom: 22px; right: 22px; display: flex; flex-direction: column; gap: 8px; z-index: 200; }
+/* 只给读屏：在渲染树里但不可见（live 区 display:none 多数读屏不播报） */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
 .toast {
   background: var(--ink); color: var(--bg); border-radius: var(--radius-sm);
   padding: 10px 15px; font-size: 13px; max-width: 380px; box-shadow: var(--shadow-pop);

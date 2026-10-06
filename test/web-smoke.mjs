@@ -206,13 +206,40 @@ class Node {
     return this.onclick ? this.onclick({ target: this }) : undefined;
   }
   focus() {}
-  querySelector() {
+  // 焦点追踪：第十二轮的 a11y 逻辑（焦点归还 / `/` 快捷键）真的读写 activeElement 与
+  // focus()——桩从"空操作"升级为"诚实记账"：focus 谁、document.activeElement 就是谁
+  // （对齐真实 DOM 语义，不替应用撒谎）。覆盖原型上的 focus(){}（保持类内方法不变，
+  // 这里追加记账）。
+  querySelector(sel) {
+    // 桩：支持 .class 与简单标签选择器（含逗号列表）。应用本来就在用
+    // bodyEl.querySelector('input, textarea, select') 找第一个可聚焦输入框，
+    // 桩一直回 null 是在撒谎——第十二轮焦点测试把它扶正。
+    if (sel.startsWith('.') || sel.includes('[')) {
+      const cls = sel.startsWith('.') ? sel.slice(1).split(/[.[\s]/)[0] : null;
+      if (cls) return this.findByClass(cls)[0] ?? null;
+      return null;
+    }
+    for (const tag of sel.split(',').map((s) => s.trim()).filter(Boolean)) {
+      const found = this.findByTag(tag);
+      if (found.length) return found[0];
+    }
     return null;
   }
   querySelectorAll(sel) {
     // 桩：只支持按 class 名找，够用
     const cls = sel.replace(/^\./, '').split(/[.\s]/)[0];
     return this.findByClass(cls);
+  }
+  findByTag(tag) {
+    const out = [];
+    const walk = (n) => {
+      for (const c of n._kids || []) {
+        if (String(c.tagName).toLowerCase() === tag) out.push(c);
+        walk(c);
+      }
+    };
+    walk(this);
+    return out;
   }
   findByClass(cls) {
     const out = [];
@@ -288,11 +315,21 @@ function parseHtml(html) {
   return root;
 }
 
+// 焦点记账：全局唯一的"当前焦点"。Node.prototype.focus 覆盖类内的空操作，
+// document.activeElement 读这里。app 第十二轮的 a11y 逻辑靠这对契约工作。
+let stubActiveElement = null;
+Node.prototype.focus = function focus() {
+  stubActiveElement = this;
+};
+
 const html = fs.readFileSync(path.join(webDir, 'index.html'), 'utf8');
 const domRoot = parseHtml(html);
 
 const doc = {
   getElementById: (id) => domRoot.findById(id),
+  get activeElement() {
+    return stubActiveElement;
+  },
   createElement: (tag) => new Node(tag),
   createElementNS: (ns, tag) => new Node(tag, ns),
   createTextNode: (t) => new TextNode(t),
@@ -3798,6 +3835,70 @@ console.log('\n32. 转场条：新场开头那行「接住第 1 场 ·「这件�
     requests.slice(reqBeforeCorrupt).some((k) => k.startsWith('GET /api/health/corrupt?path=')), requests.slice(reqBeforeCorrupt).join(','));
   check('下载损坏文件成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已下载损坏文件原件')));
   check('损坏取证这条链路无异常', errors.length === 0, errors.join(' | '));
+}
+
+// ─── 33. 键盘走得通：模态焦点归还 / 题卡播报 / `/` 快捷键
+{
+  const { state: st, openSimpleModal, closeModal, handleGlobalKeydown, announce, showQuestion } = appModule.__hooks;
+  const ann = () => doc.getElementById('announcer');
+
+  // 33a. 模态焦点归还：关掉对话框，焦点回到打开它的触发元素（WCAG 2.4.3 / 2.4.7）。
+  // 诚实测法：打开后等 60ms 聚焦真的把焦点带进对话框，关闭后断言它回到触发元素——
+  // 不先把焦点移开的话"没归还"和"焦点没动过"分不出来，那条断言就是假的。
+  const trigger = doc.createElement('button');
+  doc.body.append(trigger);
+  const inputHost = doc.createElement('div');
+  inputHost.append(doc.createElement('input'));
+  trigger.focus();
+  check('焦点先落在触发元素上（桩在记账）', doc.activeElement === trigger, doc.activeElement?.tagName || 'null');
+  openSimpleModal({ title: '改名', body: inputHost, confirmText: '确定', cancelText: '取消' });
+  await new Promise((r) => setTimeout(r, 80)); // 60ms 聚焦把焦点带进对话框
+  check('打开模态后焦点进入对话框（60ms 聚焦生效）', doc.activeElement !== trigger, doc.activeElement?.tagName || 'null');
+  closeModal('simpleModal');
+  check('closeModal 把焦点还给触发元素', doc.activeElement === trigger, doc.activeElement?.tagName || 'null');
+  // Esc 走同一条 closeModal 通道，同样归还
+  trigger.focus();
+  openSimpleModal({ title: '改名', body: inputHost });
+  await new Promise((r) => setTimeout(r, 80));
+  handleGlobalKeydown({ key: 'Escape' });
+  check('Esc 关模态同样归还焦点', doc.activeElement === trigger, doc.activeElement?.tagName || 'null');
+  // 60ms 晚到的"聚焦首个输入框"不许偷焦：关得快的，焦点已经还给触发元素了
+  trigger.focus();
+  openSimpleModal({ title: '改名', body: inputHost });
+  closeModal('simpleModal'); // 立即关（60ms 内）
+  await new Promise((r) => setTimeout(r, 80)); // 晚到的 timer 被 hidden 守卫挡下
+  check('关闭后晚到的 60ms 聚焦不偷焦', doc.activeElement === trigger, doc.activeElement?.tagName || 'null');
+
+  // 33b. 题卡播报：新题出现播一声（读屏知道冒出一道题），回放旧题不播；
+  //      选项选中态不只靠视觉勾选（aria-pressed 同步）
+  announce('');
+  const q = { questionId: 'q-a11y', question: '外层函数 return 了什么？', options: [{ label: '闭包' }, { label: '函数' }], multiSelect: false, allowText: false };
+  const card = showQuestion(q, null, null); // 新题，无 answer → 有人等，播报
+  check('新题出现时播报「出一道题」', Boolean(card) && (ann().textContent || '').includes('出一道题'), ann().textContent);
+  check('播报词里没有数字（Invariant 4）', !/\d/.test(ann().textContent || ''), ann().textContent);
+  announce('');
+  showQuestion({ ...q, questionId: 'q-replay' }, { selected: [], text: '答过', skipped: false }, 's1'); // 回放旧题，带 answer
+  check('回放旧题（带答案）不播报', (ann().textContent || '') === '', ann().textContent);
+  const opts = card ? deepAll(card, 'ask-option') : [];
+  check('选项初始 aria-pressed=false', opts.length >= 2 && opts.every((b) => b.getAttribute('aria-pressed') === 'false'), opts.map((b) => b.getAttribute('aria-pressed')).join(','));
+  if (opts.length) opts[0].onclick();
+  check('点选后 aria-pressed=true（读屏听得到选中）', opts[0]?.getAttribute('aria-pressed') === 'true', opts[0]?.getAttribute('aria-pressed'));
+  if (opts.length >= 2) opts[1].onclick();
+  check('单选切换互斥：前一选项 aria-pressed 回 false', opts[0]?.getAttribute('aria-pressed') === 'false' && opts[1]?.getAttribute('aria-pressed') === 'true', opts.map((b) => b.getAttribute('aria-pressed')).join(','));
+
+  // 33c. `/` 聚焦输入框：焦点不在输入控件里按下即聚焦；在输入框里按是字符不是命令
+  const input = doc.getElementById('input');
+  const somewhere = doc.createElement('div');
+  doc.body.append(somewhere);
+  somewhere.focus();
+  let prevented = false;
+  handleGlobalKeydown({ key: '/', preventDefault: () => { prevented = true; } });
+  check('焦点不在输入框时按 / 聚焦 composer', doc.activeElement === input && prevented, doc.activeElement?.tagName || 'null');
+  prevented = false;
+  input.focus();
+  handleGlobalKeydown({ key: '/', preventDefault: () => { prevented = true; } });
+  check('在输入框里按 / 不抢焦点（是字符）', doc.activeElement === input && !prevented, doc.activeElement?.tagName || 'null');
+  check('a11y 增量这条链路无异常', errors.length === 0, errors.join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
