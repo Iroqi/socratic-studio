@@ -909,6 +909,17 @@ html, body {
 .panel-section-title:first-child { margin-top: 0; }
 .state-note { font-size: 12.5px; color: var(--ink-2); }
 
+/* 目标卡：右栏"为什么在学这本"的一行只读上下文，不是动作入口。
+   底色沿用 --surface-2、强调边沿用 --accent，不新造配色（新配色组合要先量对比度）。
+   只显示、不统计：这里没有任何数字（Invariant 4）。 */
+.goal-card {
+  background: var(--surface-2); border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm); padding: 9px 11px; margin: 0 0 4px;
+}
+.goal-label { font-size: 10.5px; letter-spacing: 0.08em; font-weight: 700; color: var(--ink-3); margin-bottom: 3px; }
+.goal-text { font-size: 13px; color: var(--ink); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.goal-sub { font-size: 12px; color: var(--ink-2); margin-top: 4px; }
+
 /* 整本备份：一行三键 + 一句说明 + 体检结果，不抢面板里的视觉层级 */
 .backup-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .backup-hint { font-size: 12px; color: var(--ink-3); margin-top: 7px; line-height: 1.5; }

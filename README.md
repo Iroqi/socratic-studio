@@ -182,7 +182,7 @@ auth 解析顺序：显式 `apiKey` → 已存的 credential → 环境变量。
 │  ├─ providers-catalog.mjs 哪些 provider 可选、各自的环境变量与 key 提示
 │  ├─ providers.mjs        CredentialStore、Models 集合、订阅列表、模型解析
 │  ├─ graph.mjs            Learning Graph 严格校验 + 拓扑排序
-│  ├─ store.mjs            每个 notebook 的落盘（graph / progress / patches / chat / uploads / artifacts / todos / jobs）+ 整本导出 / 导入
+│  ├─ store.mjs            每个 notebook 的落盘（graph / progress / patches / chat / uploads / artifacts / todos / jobs）+ 整本导出 / 导入 + 学习小结编译
 │  ├─ tasks.mjs            后台任务与子 agent：任务记录、隔离执行、落盘、事件外发
 │  ├─ agent.mjs            18 个工具、状态转移守卫、agentic 循环（SSE 事件源）
 │  ├─ prompt.mjs           读 rules/ 编译 system prompt + 宿主能力映射 + 状态快照
@@ -331,10 +331,17 @@ curl -X POST http://127.0.0.1:8787/api/notebooks/$ID/answer \
 
 **右栏也合成了一页「学习」。** 以前分「学习地图」「学习轨迹」两页，真重叠只有一段：「现在的位置」那个
 文字汇总和概念卡上的状态词是同一份 `learnerView` 排了两遍。现在一段顺序排到底——待确认的结构改动 →
-概念结构（顶部挂着本轮待办的进度条）→ 事件 → 备注 → 后台任务（`renderLearnPanel()`），重复的汇总删掉，少一次切页。
+目标卡 → 概念结构（顶部挂着本轮待办的进度条）→ 事件 → 备注 → 后台任务（`renderLearnPanel()`），重复的汇总删掉，少一次切页。
 代价是长列表会把「待你确认的结构改动」那张卡埋在中间，而它是右栏唯一**有副作用**的入口，所以它置顶，
 页签上再挂一个件数角标（`#learnTabBadge`，用告警色而不是页签自己的强调色；面板收起时也在 `renderPanel()`
 早退之前刷新）。没有待确认的就完全不亮，不会变成常驻装饰。
+
+**「目标卡」是右栏第一行只读上下文（2026-10-06 第八轮）。** 规则把 goal 当锚点（CLARIFY 收窄 →
+DECOMPOSE 编译 → 终局对着 goal 收尾），前端此前却从不显示它。现在紧挨着改动区有一张卡：
+有 `graph.meta.goal` 标「目标」，只有 topic 时标「主题」（目标确认前不撒谎），两者都没有就不摆卡
+（新会话还没谈目标，空卡是噪声）；`learner_profile.background` 存在时带一行「背景：…」。
+**只显示、不改**——改目标走对话（CLARIFY 是老师的事），UI 不抢这条通道。也**没有数字**
+（Invariant 4：这里只有一句话，不是进度可视化）。钉在 `web-smoke` 第 29 节。
 
 **「本轮待办」接着又并进了「讲解顺序」（2026-10-02）。** 两节各列一份进度清单——概念卡带状态词、待办带
 ○◐●——学习者在同一个面板里看两遍同一件事。现在待办压成讲解顺序标题下面的**一条进度条**（`本轮 2/5` +
@@ -1000,6 +1007,13 @@ agent 调 `read_artifact_evidence` 就能拿到。反过来 agent 下发的指�
   （`POST /api/health/restore`；原位已被新文件占用时**让路**，不覆盖）。每件搬进/放回都记在
   `quarantine/index.json` 账本上（from/to 是相对路径，账本能跟着数据目录走，越界条目不执行）。
   隔离区不是垃圾箱，是**暂存台**：数据是资产，动手要稳、可逆、看得见。
+- **导出小结**（2026-10-06 第八轮）：`GET /api/notebooks/<id>/summary` 把这一本的**结论**
+  编译成一份人可读的 Markdown（`# 标题` → 目标/主题 → 概念结构 → 笔记 → 制品清单）。
+  与「导出整本」的分工：导出是数据（JSON 完整备份），小结是文字（带走即读的总结）。
+  事件流水不进小结——那是过程（右栏「事件」是它的去处），小结是结论。
+  **Invariant 4 在服务端就守住**：状态一律用词（待学 / 正在学习 / 已学懂 / 正在练习 / 已掌握），
+  整份小结不出百分比、分数、进度条或任何比率（含"N 个里已学 M 个"这种文字比率）。
+  空小节不摆：没有概念/笔记/制品时对应节整体不出现。
 
 ## 已知边界
 

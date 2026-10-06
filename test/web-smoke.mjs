@@ -3562,6 +3562,78 @@ console.log('\n32. 转场条：新场开头那行「接住第 1 场 ·「这件�
   check('回顾这条链路无异常', errors.length === 0, errors.join(' | '));
 }
 
+// ─── 29. 学情在场：目标卡（右栏）＋ 导出小结
+{
+  const { state: st, renderPanel: rp } = appModule.__hooks;
+  const direct = (n) => Array.from(n?.children || []);
+  const nbWithPatch = () => ({
+    ...sampleNotebook(),
+    patches: {
+      patches: [{
+        id: 'p-test', operation: 'ADD', target: '闭包', reason: '测试用待确认改动',
+        applied: false, rejected: false, proposed_at: new Date().toISOString(),
+      }],
+    },
+  });
+  st.panelTab = 'learn';
+  st.notebook = nbWithPatch();
+  rp();
+  const bodyNow = doc.getElementById('panelBody');
+  const titlesNow = deepAll(bodyNow, 'panel-section-title').map((t) => t.textContent);
+  const goalCards = deepAll(bodyNow, 'goal-card');
+  check('目标卡渲染在「待你确认的结构改动」之后（改动区仍置顶）',
+    titlesNow[0] === '待你确认的结构改动' && goalCards.length === 1 &&
+      direct(bodyNow).findIndex((c) => c.classList?.contains?.('goal-card')) > 1,
+    titlesNow.join(' | '));
+  check('目标卡标「目标」并显示 graph.meta.goal 的内容（用对闭包）',
+    goalCards.length === 1 && goalCards[0].textContent.includes('目标') && goalCards[0].textContent.includes('用对闭包'),
+    goalCards[0] ? goalCards[0].textContent : '没有目标卡');
+
+  // 有 goal 就显示背景行（learner_profile.background）
+  const gWithBg = { ...sampleNotebook().graph, meta: { ...sampleNotebook().graph.meta, learner_profile: { pace: 'normal', background: '写过一点 JS' } } };
+  st.notebook = { ...nbWithPatch(), graph: gWithBg };
+  rp();
+  const goalCardsBg = deepAll(doc.getElementById('panelBody'), 'goal-card');
+  check('有背景时目标卡带背景行（背景：写过一点 JS）',
+    goalCardsBg.length === 1 && goalCardsBg[0].textContent.includes('背景：写过一点 JS'),
+    goalCardsBg[0] ? goalCardsBg[0].textContent : '没有目标卡');
+
+  // 无 goal 但有 topic：标「主题」、内容回退到主题（目标确认前不撒谎叫它"目标"）
+  st.notebook = {
+    ...nbWithPatch(),
+    graph: { ...sampleNotebook().graph, meta: { ...sampleNotebook().graph.meta, goal: null, learner_profile: { pace: 'normal' } } },
+  };
+  rp();
+  const goalCardsTopic = deepAll(doc.getElementById('panelBody'), 'goal-card');
+  check('无 goal 时有主题：标「主题」并显示主题内容（JavaScript 闭包）',
+    goalCardsTopic.length === 1 && goalCardsTopic[0].textContent.includes('主题') && goalCardsTopic[0].textContent.includes('JavaScript 闭包'),
+    goalCardsTopic[0] ? goalCardsTopic[0].textContent : '没有目标卡');
+
+  // 都没有：不摆空卡（新会话还没谈目标，空卡是噪声）
+  st.notebook = {
+    ...nbWithPatch(),
+    graph: { ...sampleNotebook().graph, meta: { ...sampleNotebook().graph.meta, goal: null, topic: '', learner_profile: { pace: 'normal' } } },
+  };
+  rp();
+  check('没有目标也没有主题：不摆空卡',
+    deepAll(doc.getElementById('panelBody'), 'goal-card').length === 0);
+
+  // 导出小结：备份行里那颗键，点击真发 GET /summary、下载并提示
+  st.notebook = { ...nbWithPatch(), id: 'nb-test' };
+  rp();
+  const summaryRow = deepAll(doc.getElementById('panelBody'), 'backup-row')
+    .find((r) => Array.from(r.children).some((b) => b.textContent === '导出小结'));
+  const summaryBtn = summaryRow && Array.from(summaryRow.children).find((b) => b.textContent === '导出小结');
+  check('备份行里有「导出小结」按钮', Boolean(summaryBtn), summaryRow ? summaryRow.textContent : '没有备份行');
+  responses.set('GET /api/notebooks/nb-test/summary', () => json({ markdown: '# JavaScript 闭包\n\n## 目标\n用对闭包\n' }));
+  const reqBeforeSummary = requests.length;
+  summaryBtn.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  check('点「导出小结」真的请求了 /summary', requests.slice(reqBeforeSummary).some((k) => k.includes('/summary')), requests.slice(reqBeforeSummary).join(','));
+  check('导出小结成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出学习小结')));
+  check('导出小结这条链路无异常', errors.length === 0, errors.join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

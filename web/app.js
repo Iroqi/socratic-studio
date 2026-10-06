@@ -2943,12 +2943,37 @@ function renderPanel() {
 // 待确认的结构改动是右栏唯一有副作用的入口，必须置顶，不能埋在长列表里等人翻到。
 function renderLearnPanel(body) {
   renderPendingPatches(body);
+  renderGoalCard(body);
   renderGraphPanel(body);
   renderEventsPanel(body);
   renderNotesPanel(body);
   renderTasksPanel(body);
   renderReviewPanel(body);
   renderBackupPanel(body);
+}
+
+/**
+ * 目标在场：右栏紧挨着改动区的那一行，说清"这一本为什么在学"。
+ *
+ * 规则把 goal 当锚点（CLARIFY 收窄目标 → DECOMPOSE 编译成 Graph → 终局对着 goal 收尾），
+ * 但前端此前从不显示它——目标是学习者自己的，却只在模型侧存在。
+ * 显示顺序：graph.meta.goal（分解时编译过的目标）→ notebook.goal（建会话时的原始目标）→
+ * topic（还没有明确目标时，先给"在学什么"）；都没有就不摆卡（新会话还没谈目标，
+ * 空卡是噪声）。只显示、不改——改目标走对话（CLARIFY 是老师的事），UI 不抢这条通道。
+ * 状态词与数字一概不出现（Invariant 4：这里只有一句话，不是进度可视化）。
+ */
+function renderGoalCard(body) {
+  const g = state.notebook.graph;
+  const goal = g?.meta?.goal || state.notebook.goal || '';
+  const topic = g?.meta?.topic || state.notebook.topic || '';
+  const text = String(goal || topic || '').trim();
+  if (!text) return;
+  const card = el('div', 'goal-card');
+  card.append(el('div', 'goal-label', goal ? '目标' : '主题'));
+  card.append(el('div', 'goal-text', text));
+  const background = g?.meta?.learner_profile?.background || state.notebook.learner?.background;
+  if (background) card.append(el('div', 'goal-sub', `背景：${background}`));
+  body.append(card);
 }
 
 /**
@@ -3247,9 +3272,10 @@ function renderBackupPanel(body) {
   body.append(el('div', 'panel-section-title', '整本备份'));
   const row = el('div', 'backup-row');
   const exportBtn = el('button', 'btn btn-ghost btn-sm', '导出整本');
+  const summaryBtn = el('button', 'btn btn-ghost btn-sm', '导出小结');
   const importBtn = el('button', 'btn btn-ghost btn-sm', '导入整本');
   const healthBtn = el('button', 'btn btn-ghost btn-sm', '体检数据');
-  row.append(exportBtn, importBtn, healthBtn);
+  row.append(exportBtn, summaryBtn, importBtn, healthBtn);
   body.append(row);
   body.append(
     el('div', 'backup-hint', '导出把这一整本打包成一个 JSON 文件；导入把备份还原成一本新学习，原来的学习不动。'),
@@ -3276,6 +3302,30 @@ function renderBackupPanel(body) {
       toast(`导出失败：${err.message}`, true);
     } finally {
       exportBtn.disabled = false;
+    }
+  };
+
+  // 导出小结：不是 JSON 备份，是把这一本的结论编译成一份人可读的 Markdown（目标 / 概念结构 / 笔记 / 制品）。
+  // 状态只用词不出数字——它和整本导出的分工是：导出是数据，小结是文字。
+  summaryBtn.onclick = async () => {
+    try {
+      summaryBtn.disabled = true;
+      const { markdown } = await api('GET', `/api/notebooks/${state.notebook.id}/summary`);
+      const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = el('a');
+      a.href = url;
+      const slug = String(state.notebook.title || '学习').replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'notebook';
+      a.download = `socratic-${slug}-小结.md`;
+      document.body.append(a);
+      if (typeof a.click === 'function') a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast('已导出学习小结');
+    } catch (err) {
+      toast(`导出小结失败：${err.message}`, true);
+    } finally {
+      summaryBtn.disabled = false;
     }
   };
 

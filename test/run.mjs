@@ -2589,6 +2589,72 @@ check('system prompt 点名 jev_judge 两个场合（判对/判错、证据支�
 check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据判 unknown」',
   jevPrompt.includes('read_artifact_evidence') && jevPrompt.includes('缺证据就判 unknown'));
 
+// ─────────────────────────────────────── 12g. 学习小结（人可读的整本总结）
+{
+  const sumId = store.createNotebook({ title: '正则表达式', topic: '正则表达式', goal: null, pace: 'normal' }).id;
+  store.saveGraph(sumId, {
+    meta: {
+      topic: '正则表达式',
+      goal: '能读懂并写出工作中的正则',
+      pedagogy: 'programming',
+      learner_profile: { background: '有编程基础', known_concepts: [], pace: 'normal' },
+    },
+    concepts: [
+      {
+        id: 'char-class', name: '字符类', summary: '用 […] 匹配一组字符中的一个',
+        depends_on: [], importance: 'core', misconceptions: ['把 [abc] 当成顺序匹配'], assessment_items: [],
+      },
+      {
+        id: 'quantifier', name: '量词', summary: '控制前面元素的重复次数',
+        depends_on: ['char-class'], importance: 'core', misconceptions: ['贪婪与非贪婪分不清'], assessment_items: [],
+      },
+    ],
+  });
+  store.saveProgress(sumId, {
+    version: 1,
+    session_open: false,
+    concepts: {
+      'char-class': { concept_id: 'char-class', state: 'understood', next_action: null, unverified_self_report: false, note: null },
+      'quantifier': { concept_id: 'quantifier', state: 'seen', next_action: '接地→探针', unverified_self_report: false, note: null },
+    },
+    notes: [],
+    updated_at: new Date().toISOString(),
+  });
+  const { saveNote } = await import('../server/notes.mjs');
+  saveNote(sumId, {
+    title: '字符类',
+    summary: '方括号里是字符集合',
+    key_points: ['[a-z] 匹配一个小写字母', '^ 在括号内表示取反'],
+    example: '[0-9] 匹配任意数字',
+    concepts: ['char-class'],
+  });
+  store.saveArtifact(sumId, { title: '正则试错场', html: '<p>x</p>', kind: 'interactive' });
+  const retiredArt = store.saveArtifact(sumId, { title: '旧练习卡', html: '<p>y</p>', kind: 'page' });
+  store.setArtifactLifetime(sumId, retiredArt.id, true);
+
+  const md = store.summaryMarkdown(sumId);
+  check('小结优先用编译后的目标（graph.meta.goal），建会话时的原始 goal 为空也能顶上',
+    md.includes('## 目标') && md.includes('能读懂并写出工作中的正则'), md.split('\n').slice(0, 6).join(' / '));
+  check('概念按依赖顺序出现（量词排在字符类之后）',
+    md.indexOf('字符类') < md.indexOf('量词'), md.split('\n').filter((l) => l.startsWith('-')).join(' / '));
+  check('状态是词不是数字，且整份小结没有比率 / 百分比 / 分数指纹',
+    md.includes('—— 已学懂') && md.includes('—— 正在学习') && !/%|掌握率|进度条|分数|星级|\d+\s*\/\s*\d+|\d+\s*个里/.test(md), md);
+  check('误解点写进小结（容易踩的坑）',
+    md.includes('容易踩的坑') && md.includes('贪婪与非贪婪分不清'), md);
+  check('依赖引用的是概念名而不是 id（前置：字符类）', md.includes('前置：字符类'), md);
+  check('笔记段落完整（### 标题 / 要点 / 例子代码块）',
+    md.includes('### 字符类') && md.includes('[a-z] 匹配一个小写字母') && md.includes('[0-9] 匹配任意数字'), md);
+  check('制品清单区分软退役：在台上 / 已收起',
+    md.includes('正则试错场（交互物件）—— 在台上') && md.includes('旧练习卡（讲解页）—— 已收起'), md);
+  check('背景写进小结（learner_profile.background）', md.includes('背景：有编程基础'), md);
+
+  // 退化形状：没有目标也没有主题时，目标/主题节整体不出现，但标题仍在（小结不是空文件）
+  const bareSumId = store.createNotebook({ title: '空白本', topic: '', goal: null, pace: 'normal' }).id;
+  const bareMd = store.summaryMarkdown(bareSumId);
+  check('无目标无主题：小结只有标题，不摆空的「目标」节',
+    bareMd.startsWith('# 空白本') && !bareMd.includes('## 目标') && !bareMd.includes('## 主题') && !bareMd.includes('## 概念结构'), bareMd);
+}
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

@@ -18,7 +18,7 @@ import {
   isWithin,
 } from './config.mjs';
 import { readNotes } from './notes.mjs';
-import { validateGraph } from './graph.mjs';
+import { validateGraph, topoSortConcepts } from './graph.mjs';
 import { normaliseSceneState, placeProp, emptySceneState } from './scene.mjs';
 
 const NOTEBOOK_FILE = 'notebook.json';
@@ -1022,4 +1022,82 @@ export function restoreQuarantined() {
   }
   writeJsonAtomic(QUARANTINE_INDEX, remaining);
   return { restored, kept };
+}
+
+// ---------------------------------------------------------------- 学习小结（人可读的整本总结）
+
+const ARTIFACT_KIND_WORDS = {
+  illustration: '示意图',
+  interactive: '交互物件',
+  diagram: '结构图',
+  page: '讲解页',
+  artifact: '制品',
+};
+
+/**
+ * 把一本学习编译成一份人可读的 Markdown 小结——带得走的那份"结论"。
+ *
+ * 与整本导出（JSON，机器可读、完整备份）的分工：导出是数据，小结是文字。
+ * 内容是结论不是过程：目标、概念结构（按依赖序 + 状态词）、笔记、制品清单——
+ * 事件流水不进小结（那是过程，右栏「事件」就是它的去处，和小结/轨迹的分界同一套）。
+ *
+ * Invariant 4 在这里是硬约束：状态一律用词（待学 / 正在学习 / 已学懂 / 正在练习 / 已掌握），
+ * 绝不出百分比、分数、进度条、比率。概念行"—— 已学懂"是词不是数字；制品清单只列
+ * 「在台上 / 已收起」，不计数。这份文件是给学习者看的，不是给仪表盘看的。
+ */
+export function summaryMarkdown(id) {
+  const nb = getNotebook(id);
+  const title = String(nb.title || '学习笔记');
+  const goal = nb.graph?.meta?.goal || nb.goal || null;
+  const topic = String(nb.graph?.meta?.topic || nb.topic || '').trim();
+  const lines = [`# ${title}`, ''];
+
+  if (goal) lines.push('## 目标', '', goal, '');
+  else if (topic) lines.push('## 主题', '', topic, '');
+  const background = nb.graph?.meta?.learner_profile?.background || nb.learner?.background || null;
+  if (background) lines.push('', `> 背景：${background}`);
+
+  const concepts = Array.isArray(nb.graph?.concepts) ? nb.graph.concepts : [];
+  if (concepts.length) {
+    lines.push('## 概念结构（按依赖顺序）', '');
+    const progress = nb.progress?.concepts || {};
+    const byId = new Map(concepts.map((c) => [c.id, c]));
+    for (const c of topoSortConcepts(nb.graph)) {
+      const word = stateWord(progress[c.id]?.state);
+      lines.push(`- **${c.name}** —— ${word}`);
+      if (c.summary) lines.push(`  ${c.summary}`);
+      if (c.depends_on?.length) {
+        const names = c.depends_on.map((d) => byId.get(d)?.name || d).filter(Boolean);
+        if (names.length) lines.push(`  前置：${names.join('、')}`);
+      }
+      if (c.misconceptions?.length) lines.push(`  容易踩的坑：${c.misconceptions.join('；')}`);
+      lines.push('');
+    }
+  }
+
+  const notes = Array.isArray(nb.notes) ? nb.notes : [];
+  if (notes.length) {
+    lines.push('## 笔记', '');
+    for (const n of notes) {
+      lines.push(`### ${n.title || '未命名笔记'}`, '');
+      if (n.summary) lines.push(n.summary, '');
+      if (n.key_points?.length) {
+        for (const p of n.key_points) lines.push(`- ${p}`);
+        lines.push('');
+      }
+      if (n.example) lines.push('```text', n.example, '```', '');
+    }
+  }
+
+  const artifacts = Array.isArray(nb.artifacts) ? nb.artifacts : [];
+  if (artifacts.length) {
+    lines.push('## 制品', '');
+    for (const a of artifacts) {
+      const status = a.retiredAt ? '已收起' : '在台上';
+      lines.push(`- ${a.title || '未命名制品'}（${ARTIFACT_KIND_WORDS[a.kind] || '制品'}）—— ${status}`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
 }

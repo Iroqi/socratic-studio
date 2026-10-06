@@ -652,6 +652,15 @@ const server = http.createServer(async (req, res) => {
       return res.end(payload);
     }
 
+    // 学习小结：人可读的整本总结（Markdown）。与 /export 的分工——导出是完整 JSON 备份，
+    // 小结是把这一本的结论编译成能直接带走的一份文字：目标、概念结构、笔记、制品清单。
+    // Invariant 4 在服务端就守住：只用状态词，不出任何比率 / 百分比 / 分数。
+    m = /^\/api\/notebooks\/([^/]+)\/summary$/.exec(pathname);
+    if (m && method === 'GET') {
+      const id = decodeURIComponent(m[1]);
+      return sendJson(res, 200, { markdown: store.summaryMarkdown(id) });
+    }
+
     // ---------- 上传素材
     m = /^\/api\/notebooks\/([^/]+)\/uploads$/.exec(pathname);
     if (m && method === 'POST') {
