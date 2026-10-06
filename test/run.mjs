@@ -2851,6 +2851,51 @@ check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据
   check('无判错证据时候选为空', store.getNotebook(store.createNotebook({ topic: '干净本', goal: null, pace: 'normal' }).id).retests.length === 0);
 }
 
+// ─────────────────────────────────────── 12k. 跨本搜索（找得到：哪本学习里说过 X）
+{
+  const nbA = store.createNotebook({ topic: 'JavaScript 闭包', goal: '在项目里用对闭包', pace: 'normal' }).id;
+  const nbB = store.createNotebook({ topic: 'Git 版本控制', goal: null, pace: 'normal' }).id;
+  const t0 = Date.now() - 60_000;
+  store.appendChat(nbA, [
+    { role: 'user', content: '我想弄明白闭包', timestamp: t0, attachments: [] },
+    { role: 'assistant', content: '循环里共享同一个变量，是闭包最常见的坑。', timestamp: t0 + 1000, attachments: [] },
+    { role: 'user', content: '那怎么避免循环里的坑？', timestamp: t0 + 2000, attachments: [] },
+  ]);
+  store.appendChat(nbB, [
+    { role: 'user', content: 'rebase 和 merge 有什么区别', timestamp: t0 + 3000, attachments: [] },
+  ]);
+  const notesFileA = path.join(tmpRoot, 'notebooks', nbA, 'notes.json');
+  const notesFileB = path.join(tmpRoot, 'notebooks', nbB, 'notes.json');
+  fs.mkdirSync(path.dirname(notesFileA), { recursive: true });
+  fs.writeFileSync(notesFileA, JSON.stringify({ version: 1, notes: [{ id: 'n1', at: new Date(t0 + 4000).toISOString(), text: '闭包演示：计数器工厂，注意内存泄漏' }] }));
+  fs.writeFileSync(notesFileB, JSON.stringify({ version: 1, notes: [{ id: 'n1', at: new Date(t0 + 4000).toISOString(), text: 'rebase 会重写历史' }] }));
+  const manifest = path.join(tmpRoot, 'notebooks', nbA, 'artifacts', 'manifest.json');
+  fs.mkdirSync(path.dirname(manifest), { recursive: true });
+  fs.writeFileSync(manifest, JSON.stringify({ version: 1, items: [{ id: 'art-1', title: '闭包演示卡片', kind: 'artifact', rel: 'artifacts/art-1/index.html', createdAt: new Date().toISOString() }] }));
+
+  check('12k-1 空词不给结果', store.searchAllNotebooks('  ').length === 0);
+  check('12k-2 无命中回空数组', store.searchAllNotebooks('量子计算').length === 0);
+  const chatHit = store.searchAllNotebooks('循环');
+  check('12k-3 对话命中带本/种类/摘要（找得到在哪个本、哪一段）',
+    chatHit.some((h) => h.kind === 'chat' && h.notebookId === nbA && h.snippet.includes('循环') && h.notebookTitle.includes('闭包')),
+    JSON.stringify(chatHit.slice(0, 3)));
+  const noteHit = store.searchAllNotebooks('泄漏');
+  check('12k-4 笔记命中', noteHit.some((h) => h.kind === 'note' && h.notebookId === nbA && h.snippet.includes('泄漏')));
+  const titleHit = store.searchAllNotebooks('javascript');
+  check('12k-5 标题命中且大小写不敏感', titleHit.some((h) => h.kind === 'notebook' && h.notebookId === nbA));
+  const artHit = store.searchAllNotebooks('演示卡片');
+  check('12k-6 制品标题命中', artHit.some((h) => h.kind === 'artifact' && h.notebookId === nbA && h.snippet.includes('演示卡片')));
+  // perNotebook 上限：一页对话全是同一个词，不该把整个列表占满
+  store.appendChat(nbA, Array.from({ length: 8 }, (_, i) => ({ role: 'user', content: `还是循环问题第 ${i} 条`, timestamp: t0 + 10_000 + i, attachments: [] })));
+  const flood = store.searchAllNotebooks('循环问题');
+  const perNb = flood.filter((h) => h.notebookId === nbA).length;
+  check('12k-7 每本最多 perNotebook 条（一个词占满一页也压得住）', perNb <= 5, `nbA 命中 ${perNb} 条`);
+  const capped = store.searchAllNotebooks('循环问题', { cap: 2 });
+  check('12k-8 总量 cap 生效', capped.length <= 2, `cap=2 实际 ${capped.length}`);
+  check('12k-9 命中都带本标题（前端结果行可以直接显示是哪本）',
+    chatHit.every((h) => h.notebookId && h.notebookTitle), JSON.stringify(chatHit.slice(0, 2)));
+}
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

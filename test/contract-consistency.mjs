@@ -312,6 +312,57 @@ check('顺排时可视区先扣掉旁白那一截（"一屏看全"包括讲它�
 check('摘掉摊开不许顺手把讲稿删了（服务端说过的话，落哪儿都不能消失）',
   !/releaseStageNotes\(/.test(stageBody), stageBody.replace(/\s+/g, ' ').slice(0, 200));
 
+// ──────────────────────────────────────────────── README 排查命令的 API 路由守护
+//
+// README「排查"卡住不回话"」手写了一条 curl 排查流程，README 自己承认过这段债务：
+// "这三条 curl 里的路由和字段名是抄现在的 serve.mjs，没有测试盯着它们——改了路由，
+// 这段文档就静默过期，下次排查的人照抄会 404"。这一节让 README 里出现的每一个
+// /api/ 引用都有 serve.mjs 里的真实路由兜底——文档与代码不许漂移（跟 artifact.md
+// 契约同一句口号），排查照抄不会 404。
+
+const readmeDoc = fs.readFileSync(path.join(app, 'README.md'), 'utf8');
+const serveSrc = fs.readFileSync(path.join(app, 'server', 'serve.mjs'), 'utf8');
+
+// 参数段统一写成 :id：README 里 $ID / <id> / <nb> / <制品id> / <任意串> / :noteId，
+// serve.mjs 正则里 ([^/]+) / (.+)，是同一个东西在不同文档里的写法。
+// 注意 ([^/]+) 这类段**里面含 /（字符类里的斜杠）**，所以不能先 split('/') 再归一，
+// 只能整串替换。
+function normalizeRouteTemplate(p) {
+  let t = p.replace(/\?.*$/, ''); // 查询串不是路由的一部分（/api/health/corrupt?path=<rel>）
+  t = t.replace(/<[^/]*>|\$[A-Za-z0-9]+|:[A-Za-z0-9]+|\([^)]+\)/g, ':id');
+  t = t.replace(/\\\//g, '/'); // serve 正则的转义斜杠（\/）摊平
+  return t.replace(/\/+$/, ''); // 末尾斜杠（`GET /api/notebooks 里有` 那种）不算数
+}
+
+// serve.mjs 路由清单：字面路径（pathname === '/api/...'）＋ 正则路径（/^\/api\/...$/）。
+// 正则的 (…)+ 捕获段就是参数位，跟 README 的 <…> 一样按位置对位。
+function serveRoutes(src) {
+  const routes = new Set();
+  for (const m of src.matchAll(/pathname === '(\/api\/[^']+)' && method === '[A-Z]+'/g)) {
+    routes.add(normalizeRouteTemplate(m[1]));
+  }
+  for (const m of src.matchAll(/\^\\\/api\\\/(.+?)\$\/\.exec\(pathname\)/g)) {
+    const raw = m[1].replace(/\\\//g, '/');
+    routes.add(normalizeRouteTemplate(`/api/${raw}`));
+  }
+  return routes;
+}
+
+const routeSet = serveRoutes(serveSrc);
+const seen = new Set();
+let readmeApiRefs = 0;
+for (const m of readmeDoc.matchAll(/\/api\/[^\s"'，。；）】、`]+/g)) {
+  const ref = m[0];
+  const tpl = normalizeRouteTemplate(ref);
+  if (seen.has(tpl)) continue; // 同一个路径在 README 里出现多次（导出/制品各讲一遍）只钉一次
+  seen.add(tpl);
+  readmeApiRefs += 1;
+  check(`README 里写到的 ${ref} 在 serve.mjs 有真路由（排查照抄不 404）`,
+    routeSet.has(tpl), `模板 ${tpl} 不在 serve.mjs 路由清单里`);
+}
+check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由文档静默过期"）`,
+  readmeApiRefs >= 20, `只找到 ${readmeApiRefs} 处 /api/ 引用，排查节的那几条应该在`);
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;

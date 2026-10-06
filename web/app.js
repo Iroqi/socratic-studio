@@ -150,6 +150,7 @@ const state = {
   orphanTimer: null, // 刷新后接管"服务端还在跑的回合"的轮询定时器
   draftNotebook: null, // 侧栏里的草稿条目：点了「新建」但还没发出第一条消息；切会话不丢，点回侧栏条目可继续
   composerStore: new Map(), // 会话 id（草稿用 DRAFT_KEY）→ { text, files }：输入框里没发出去的内容按会话各存各的
+  search: { q: '', results: null, timer: null }, // 跨本搜索：q 非空时左栏列表换成搜索结果
 };
 
 // ─────────────────────────────────────────────── 启动
@@ -220,9 +221,70 @@ async function refreshConfig() {
 
 // ─────────────────────────────────────────────── 左栏
 
+// 跨本搜索：命中种类的可见标签。搜索是"找得到"的入口，这里只给词、不给数字。
+const KIND_LABEL = { notebook: '学习', chat: '对话', note: '笔记', event: '事件', concept: '概念', artifact: '制品' };
+
+function openSearchHit(hit) {
+  // 点搜索结果：打开那本学习，并把搜索态清掉——回到"列表里能看见整本"的普通态。
+  state.search.q = '';
+  state.search.results = null;
+  const input = $('railSearch');
+  if (input) input.value = '';
+  openNotebook(hit.notebookId);
+  renderNotebookList();
+}
+
+async function runSearch() {
+  const q = ($('railSearch')?.value || '').trim();
+  if (!q) {
+    state.search.q = '';
+    state.search.results = null;
+    renderNotebookList();
+    return;
+  }
+  state.search.q = q;
+  state.search.results = null;
+  renderNotebookList();
+  try {
+    const data = await api('GET', `/api/search?q=${encodeURIComponent(q)}`);
+    state.search.results = (data && data.results) || [];
+    renderNotebookList();
+  } catch {
+    state.search.results = [];
+    renderNotebookList();
+  }
+}
+
 function renderNotebookList() {
   const box = $('notebookList');
   box.innerHTML = '';
+  // 搜索态：左栏列表换成"搜索所有学习"的结果（跨本，含对话/笔记/事件/制品）。
+  // 空词/无结果回退到普通列表；点结果打开那本学习并清掉搜索态。
+  if (state.search.q) {
+    if (!state.search.results) {
+      box.append(el('div', 'rail-section-label', `搜索「${state.search.q}」…`));
+      return;
+    }
+    box.append(el('div', 'rail-section-label', `搜索「${state.search.q}」`));
+    if (!state.search.results.length) {
+      box.append(el('div', 'rail-section-label search-empty', '没找到。试试别的词，或搜概念/笔记里的说法。'));
+      return;
+    }
+    for (const hit of state.search.results) {
+      const row = el('div', 'nb-item search-hit');
+      row.dataset.notebookId = hit.notebookId;
+      const main = el('div', 'nb-item-main');
+      const head = el('div', 'search-hit-head');
+      head.append(el('span', `search-kind search-kind-${hit.kind}`, KIND_LABEL[hit.kind] || hit.kind));
+      head.append(el('span', 'search-hit-title', hit.notebookTitle || '未命名'));
+      main.append(head);
+      main.append(el('div', 'search-hit-snippet', hit.snippet || ''));
+      row.onclick = () => openSearchHit(hit);
+      row.append(main);
+      box.append(row);
+    }
+    return;
+  }
   // 草稿条目排在最前：「新建」先在侧栏占位，真的发出第一条消息才 commit 成正式会话。
   // 切到别的会话它不消失——半截的话和攒着的文件都停在草稿里，点回来接着写。
   const draft = state.draftNotebook;
@@ -4480,6 +4542,27 @@ function autosize() {
 
 function bindEvents() {
   $('newNotebookBtn').onclick = openNewNotebookDialog;
+  // 跨本搜索：输入即搜（300ms 防抖，本地扫描很快但别每个键都打一发）。
+  // 清空词回普通列表；Esc 清空并归还焦点给输入框自己。
+  const railSearch = $('railSearch');
+  if (railSearch) {
+    railSearch.oninput = () => {
+      clearTimeout(state.search.timer);
+      state.search.timer = setTimeout(runSearch, 300);
+    };
+    railSearch.onkeydown = (e) => {
+      if (e.key === 'Escape' && state.search.q) {
+        state.search.q = '';
+        state.search.results = null;
+        railSearch.value = '';
+        runSearch();
+      } else if (e.key === 'Enter') {
+        clearTimeout(state.search.timer);
+        runSearch();
+      }
+      e.stopPropagation(); // 全局 keydown（/ 聚焦、Esc 弹层）不跟搜索框抢
+    };
+  }
   const exportBtn = $('exportNotesBtn');
   if (exportBtn) exportBtn.onclick = exportNotesMarkdown;
   // 回看：顶栏那一行的「回到最新」把镜头松开并真的滚回末尾；他自己滚回末尾也算松开。
@@ -4745,6 +4828,11 @@ export const __hooks = {
   renderChatLive,
   resetDesk,
   updateDeskChrome,
+  // 跨本搜索：左栏搜索入口（第十三轮）
+  renderNotebookList,
+  runSearch,
+  openSearchHit,
+  KIND_LABEL,
   artifactNodeEl,
   artifactTitle,
   NO_SCENE,

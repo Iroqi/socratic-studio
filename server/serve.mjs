@@ -617,6 +617,12 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // ---------- 跨本搜索：学习者找"哪本学习里说过 X"。只读扫描，词为空回空结果
+    if (pathname === '/api/search' && method === 'GET') {
+      const url = new URL(req.url, 'http://localhost');
+      return sendJson(res, 200, { results: store.searchAllNotebooks(url.searchParams.get('q') || '') });
+    }
+
     // ---------- notebooks
     if (pathname === '/api/notebooks' && method === 'GET') {
       return sendJson(res, 200, { notebooks: store.listNotebooks() });

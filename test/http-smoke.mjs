@@ -564,6 +564,32 @@ try {
   check('没损坏的文件不在取证白名单（400，不是任意读取口）', badPath.status === 400, `status=${badPath.status}`);
   const escape = await jfetch(`${BASE}/api/health/corrupt?path=${encodeURIComponent('../../credentials.json')}`);
   check('路径越界一律拒绝（400）', escape.status === 400, `status=${escape.status}`);
+
+  console.log('\n16. 跨本搜索（找得到：哪本学习里说过 X，真服务）');
+  // 注意：本节跑在 15 节"写坏 chat.json 取证"之后，`id` 的对话已被故意写坏，
+  // 所以对话命中要自建新本、走一发真回合，不依赖 `id` 的聊天内容。
+  const s1 = (await jfetch(`${BASE}/api/search?q=${encodeURIComponent('闭包')}`)).data;
+  check('标题命中：搜「闭包」能找到这本学习（kind=notebook 且指向正确的本）',
+    Array.isArray(s1.results) && s1.results.some((r) => r.kind === 'notebook' && r.notebookId === id && r.notebookTitle.includes('闭包')),
+    JSON.stringify((s1.results || []).slice(0, 2)));
+  const s2nb = await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '搜索探针', goal: null }) });
+  const s2id = s2nb.data?.notebook?.id;
+  await jfetch(`${BASE}/api/settings`, { method: 'PUT', headers: H, body: JSON.stringify({ activeModel: { provider: 'faux', model: fauxModelId } }) });
+  const s2turn = await fetch(`${BASE}/api/notebooks/${s2id}/turn`, {
+    method: 'POST', headers: H,
+    body: JSON.stringify({ message: '搜索探针回合：闭包的坑在循环变量共享', model: { provider: 'faux', model: fauxModelId } }),
+  });
+  await readSSE(s2turn, { onEvent: async (evt) => { if (evt.type === 'ask') { /* 不用作答，探针只要消息落盘 */ } } });
+  const s2 = (await jfetch(`${BASE}/api/search?q=${encodeURIComponent('搜索探针回合')}`)).data;
+  check('对话命中：搜回合里说过的那句话能找到（kind=chat 带摘要，指向新本）',
+    Array.isArray(s2.results) && s2.results.some((r) => r.kind === 'chat' && r.notebookId === s2id && r.snippet.includes('搜索探针回合')),
+    JSON.stringify((s2.results || []).slice(0, 2)));
+  const s3 = (await jfetch(`${BASE}/api/search?q=${encodeURIComponent('量子碎纸机')}`)).data;
+  check('无命中回空数组', Array.isArray(s3.results) && s3.results.length === 0, JSON.stringify(s3.results));
+  const s4 = (await jfetch(`${BASE}/api/search?q=${encodeURIComponent('')}`)).data;
+  check('空词不给结果', Array.isArray(s4.results) && s4.results.length === 0, JSON.stringify(s4.results));
+  const s5 = (await jfetch(`${BASE}/api/search`)).data;
+  check('缺 q 参数兜成空词', Array.isArray(s5.results) && s5.results.length === 0, JSON.stringify(s5.results));
 } finally {
   server.kill();
   await sleep(400);

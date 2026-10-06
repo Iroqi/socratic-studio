@@ -402,6 +402,15 @@ globalThis.fetch = async (url, opts = {}) => {
     turnBodies.push(opts.body);
     return sseResponse(turnQueue.length ? turnQueue.shift() : buildTurnScript());
   }
+  // 跨本搜索：桩按词给结果——「没找到」给空，其余给一条聊天命中（第十三轮）
+  if (/^GET \/api\/search\?q=/.test(key)) {
+    const q = decodeURIComponent(url.split('?q=')[1] || '');
+    return json({
+      results: q === '没找到'
+        ? []
+        : [{ notebookId: 'nb-test', notebookTitle: 'JavaScript 闭包', kind: 'chat', snippet: `…${q}…`, at: '2026-10-07T00:00:00.000Z' }],
+    });
+  }
   if (responses.has(key)) return responses.get(key)(opts);
   // 未桩化的读请求打到真实服务（服务不必有数据，能连上即可）
   try {
@@ -3899,6 +3908,39 @@ console.log('\n32. 转场条：新场开头那行「接住第 1 场 ·「这件�
   handleGlobalKeydown({ key: '/', preventDefault: () => { prevented = true; } });
   check('在输入框里按 / 不抢焦点（是字符）', doc.activeElement === input && !prevented, doc.activeElement?.tagName || 'null');
   check('a11y 增量这条链路无异常', errors.length === 0, errors.join(' | '));
+}
+
+{
+  // 34. 跨本搜索：左栏搜索入口（第十三轮）
+  const railSearch = doc.getElementById('railSearch');
+  check('左栏有搜索框（type=search，占位文案钉在 index.html 源码）',
+    railSearch?.type === 'search' && html.includes('placeholder="搜所有学习…"'), String(railSearch?.type));
+  appModule.__hooks.runSearch();
+  const label0 = doc.getElementById('notebookList').findByClass('rail-section-label')[0];
+  check('空词时列表还是普通列表（没有搜索态残留）', Boolean(label0) && label0.textContent.includes('个学习'), label0?.textContent);
+  railSearch.value = '闭包';
+  appModule.__hooks.runSearch();
+  await new Promise((r) => setTimeout(r, 20));
+  const hits = doc.getElementById('notebookList').findByClass('search-hit');
+  check('搜索结果渲染成结果行（指向正确的本）', hits.length === 1 && hits[0].dataset.notebookId === 'nb-test', `${hits.length} hits`);
+  const kindEl = hits[0]?.findByClass('search-kind')[0];
+  check('结果行带可读种类标签（对话/笔记/…给词）', kindEl?.textContent === '对话', kindEl?.textContent);
+  const reqsBefore = requests.length;
+  hits[0].onclick();
+  await new Promise((r) => setTimeout(r, 50));
+  check('点结果打开那本学习（GET /api/notebooks/nb-test）',
+    requests.slice(reqsBefore).some((r) => r.includes('GET /api/notebooks/nb-test')), requests.slice(reqsBefore).join(' | '));
+  check('点结果后搜索态清掉、输入框清空（回到"列表里能看见整本"）',
+    appModule.__hooks.state.search.q === '' && railSearch.value === '', `${appModule.__hooks.state.search.q} / ${railSearch.value}`);
+  const label1 = doc.getElementById('notebookList').findByClass('rail-section-label')[0];
+  check('清态后列表回到普通列表', Boolean(label1) && label1.textContent.includes('个学习'), label1?.textContent);
+  railSearch.value = '没找到';
+  appModule.__hooks.runSearch();
+  await new Promise((r) => setTimeout(r, 20));
+  const empty = doc.getElementById('notebookList').findByClass('search-empty');
+  check('无结果给一句人话（不是空列表假装没事）', Boolean(empty[0]) && empty[0].textContent.includes('没找到'), empty[0]?.textContent);
+  appModule.__hooks.runSearch(); // 清回普通态
+  check('跨本搜索这条链路无异常', errors.length === 0, errors.join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

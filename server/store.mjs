@@ -1052,6 +1052,74 @@ export function readCorruptFile(relPath) {
   return { buffer, relPath };
 }
 
+// ---------------------------------------------------------------- 跨本搜索
+
+function around(text, idx, termLen, width = 36) {
+  const start = Math.max(0, idx - Math.floor(width / 2));
+  const end = Math.min(text.length, idx + termLen + Math.floor(width / 2));
+  return `${start > 0 ? '…' : ''}${text.slice(start, end).trim()}${end < text.length ? '…' : ''}`;
+}
+
+/**
+ * 跨本搜索：学习者找"哪本学习里说过 X"。数据全在本地，逐本读 JSON 扫字符串即可
+ * （本地工具，几 MB 级扫描可接受），不需要索引。只读，不改任何状态。
+ * 命中种类：notebook（标题/主题/目标）、chat（消息）、note（笔记）、event（事件）、
+ * concept（概念）、artifact（制品标题）。每个命中：{notebookId, notebookTitle,
+ * kind, snippet, at}；每本最多 perNotebook 条，总量 cap 条。空词/无命中回 []。
+ */
+export function searchAllNotebooks(q, { cap = 40, perNotebook = 5 } = {}) {
+  const term = String(q || '').trim().toLowerCase();
+  if (!term) return [];
+  const out = [];
+  for (const nb of listNotebooks()) {
+    const id = nb.id;
+    const dir = path.join(NOTEBOOKS_DIR, id);
+    const title = nb.title || '';
+    const hits = [];
+    const metaText = `${title} ${nb.topic || ''}`.toLowerCase();
+    if (metaText.includes(term)) {
+      hits.push({ kind: 'notebook', snippet: title, at: nb.updatedAt || null });
+    }
+    const chat = readJsonSafe(path.join(dir, CHAT_FILE), emptyChat());
+    for (const m of chat.messages || []) {
+      const text = String(m.content ?? m.text ?? '');
+      const idx = text.toLowerCase().indexOf(term);
+      if (idx >= 0) {
+        hits.push({ kind: 'chat', snippet: around(text, idx, term.length), at: m.timestamp ? new Date(m.timestamp).toISOString() : null });
+        if (hits.length >= perNotebook + 8) break; // 一页对话可能全是同一个词，别把其它种类挤没
+      }
+    }
+    for (const n of readNotes(id)) {
+      const text = String(n.text || '');
+      const idx = text.toLowerCase().indexOf(term);
+      if (idx >= 0) hits.push({ kind: 'note', snippet: around(text, idx, term.length), at: n.at || null });
+    }
+    const progress = readJsonSafe(path.join(dir, PROGRESS_FILE), emptyProgress());
+    for (const ev of progress.events || []) {
+      const text = `${ev.kind || ''} ${ev.summary || ''}`;
+      const idx = text.toLowerCase().indexOf(term);
+      if (idx >= 0) hits.push({ kind: 'event', snippet: String(ev.summary || text).slice(0, 80), at: null });
+    }
+    for (const c of Object.values(progress.concepts || {})) {
+      const text = `${c.concept_id || ''} ${c.next_action || ''}`;
+      if (text.toLowerCase().includes(term)) {
+        hits.push({ kind: 'concept', snippet: String(c.concept_id || ''), at: null });
+      }
+    }
+    for (const a of listArtifacts(id)) {
+      const text = `${a.title || ''} ${a.rel || ''}`;
+      const idx = text.toLowerCase().indexOf(term);
+      if (idx >= 0) hits.push({ kind: 'artifact', snippet: String(a.title || a.rel || ''), at: a.createdAt || null });
+    }
+    hits.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+    for (const h of hits.slice(0, perNotebook)) {
+      out.push({ notebookId: id, notebookTitle: title, ...h });
+    }
+  }
+  out.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+  return out.slice(0, cap);
+}
+
 // ---------------------------------------------------------------- 处置台（隔离区）
 
 /**
