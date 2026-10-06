@@ -22,6 +22,7 @@ const { checkTransition, runTurn, buildTools, TOOL_NAMES, seedArtifacts, normali
   await import('../server/agent.mjs');
 const store = await import('../server/store.mjs');
 const { ensureDirs, NOTEBOOKS_DIR } = await import('../server/config.mjs');
+const { jevDecide, normalizeAnswers, validateQuestions, DecisionError } = await import('../server/decision.mjs');
 
 ensureDirs();
 
@@ -888,7 +889,7 @@ check('分身那一份不许冒充台面：不带讲稿槽那句（它没有 cur
 
 section('7. 工具 schema');
 const tools = buildTools();
-check('工具数量与设计一致', tools.length === 19, String(tools.length));
+check('工具数量与设计一致（18 个教学工具 + jev_judge 判定外包）', tools.length === 20, String(tools.length));
 check('每个工具都有 TypeBox schema', tools.every((t) => t.parameters && typeof t.parameters === 'object'));
 check('工具名唯一', new Set(tools.map((t) => t.name)).size === tools.length);
 check(
@@ -1195,7 +1196,7 @@ for (const ghost of ['命令执行工具', 'str_replace', 'pdf 技能', '语音�
 section('7c. 制品通用通道：state / event / 下行指令 / 跨轮续玩');
 
 check('下行指令工具在场', buildTools().some((t) => t.name === 'push_artifact_command'));
-check('工具数变为 19', buildTools().length === 19, String(buildTools().length));
+check('工具数变为 20（+jev_judge）', buildTools().length === 20, String(buildTools().length));
 check('异步制备制品工具在场', buildTools().some((t) => t.name === 'prepare_artifact'));
 check('结构化笔记工具在场', buildTools().some((t) => t.name === 'compile_notes'));
 check('present_plan 在场', buildTools().some((t) => t.name === 'present_plan'));
@@ -2393,6 +2394,189 @@ check('短对话时 prompt 不出现窗口说明（不吓模型）', !slimPrompt
 const fatPrompt = buildSystemPrompt({ topic: 't', chat: { messages: longHistory } });
 check('窗口启用时 prompt 明说旧轮不在上下文（报告诚实）', fatPrompt.includes('对话窗口说明') && fatPrompt.includes('不要凭印象编造'), '没说明');
 check('窗口说明是"去笔记/图谱找"，不是让模型硬想', fatPrompt.includes('笔记') && fatPrompt.includes('图谱'), '没指向持久记忆');
+
+// ─────────────────────────────────────── 13. JEV 判定外包
+
+section('13. JEV 判定外包（决策模型做判定，状态机不做法官）');
+
+// —— 13a. 请求校验（镜像官方 CLI：choice 2–255、score 2–10、noul 只能缺省或 {true,false}）
+const choiceOk = validateQuestions([{ id: 'next', type: 'choice', instructions: '选一个', criteria: { a: '甲', b: '乙' } }]);
+check('choice 问题通过校验', choiceOk.next.type === 'choice');
+const noulOk = validateQuestions([{ id: 'ok', type: 'noul', instructions: '判一下' }]);
+check('noul 问题（无 criteria）通过校验', noulOk.ok.type === 'noul');
+const scoreOk = validateQuestions([{ id: 's', type: 'score', instructions: '打分', criteria: ['差', '中', '好'] }]);
+check('score 问题（2–10 级）通过校验', scoreOk.s.type === 'score');
+const multiOk = validateQuestions([
+  { id: 'a', type: 'noul', instructions: 'x' },
+  { id: 'b', type: 'choice', instructions: 'y', criteria: { a: '1', b: '2' } },
+]);
+check('数组形状归一成 id→问题 对象', Object.keys(multiOk).sort().join(',') === 'a,b');
+const rejectIds = (qs) => {
+  try { validateQuestions(qs); return false; }
+  catch (e) { return e instanceof DecisionError && e.kind === 'validation'; }
+};
+check('重复 id 必须拒绝', rejectIds([
+  { id: 'a', type: 'noul', instructions: 'x' },
+  { id: 'a', type: 'noul', instructions: 'y' },
+]));
+check('空 questions 必须拒绝', rejectIds([]));
+check('choice 少于 2 个候选必须拒绝', rejectIds([{ id: 'c', type: 'choice', instructions: 'x', criteria: { a: '1' } }]));
+check('未知 type 必须拒绝', rejectIds([{ id: 'z', type: 'maybe', instructions: 'x' }]));
+check('noul 带非 true/false criteria 必须拒绝', rejectIds([{ id: 'n', type: 'noul', instructions: 'x', criteria: { yes: '对', no: '错' } }]));
+check('score 少于 2 级必须拒绝', rejectIds([{ id: 's', type: 'score', instructions: 'x', criteria: ['一'] }]));
+check('空 instructions 必须拒绝', rejectIds([{ id: 'i', type: 'noul', instructions: '  ' }]));
+
+// —— 13b. 响应归一化：概率只当门槛，低概率 / 低边际 / 让位标签进 needs_review
+const normPayload = {
+  model: 'jev-1.13.0',
+  state: { goal: '判定这条作答', observations: '作答：闭包是复制变量' },
+  questions: validateQuestions([
+    { id: 'verdict', type: 'noul', instructions: '作答是否展示了对闭包的理解' },
+    { id: 'pick', type: 'choice', instructions: '下一步', criteria: { review_again: '再问一次', teach: '重新讲' } },
+    { id: 'grade', type: 'score', instructions: '把握度', criteria: ['低', '中', '高'] },
+  ]),
+};
+const goodAnswers = normalizeAnswers(normPayload, {
+  answers: {
+    verdict: { type: 'noul', noul: 0.88 },
+    pick: { type: 'choice', choice: 'review_again', probabilities: { review_again: 0.85, teach: 0.15 }, confidence: 0.9 },
+    grade: { type: 'score', score: 1, legend: { 0: '低', 1: '中', 2: '高' }, probabilities: { 0: 0.1, 1: 0.7, 2: 0.2 } },
+  },
+});
+check('noul 高置信 → selected，value=true，概率即 P(true)',
+  goodAnswers.verdict.status === 'selected' && goodAnswers.verdict.value === true && goodAnswers.verdict.probability === 0.88);
+check('choice 顶选概率够 → selected 且带 margin',
+  goodAnswers.pick.status === 'selected' && goodAnswers.pick.value === 'review_again' && goodAnswers.pick.margin === 0.7);
+check('score → scored 且带等级', goodAnswers.grade.status === 'scored' && goodAnswers.grade.value === 1 && goodAnswers.grade.levels.length === 3);
+const lowAnswers = normalizeAnswers(normPayload, {
+  answers: {
+    verdict: { type: 'noul', noul: 0.55 },
+    pick: { type: 'choice', choice: 'review_again', probabilities: { review_again: 0.6, teach: 0.4 }, confidence: 0.6 },
+    grade: { type: 'score', score: 0, legend: { 0: '低', 1: '中', 2: '高' }, probabilities: { 0: 0.9, 1: 0.05, 2: 0.05 } },
+  },
+});
+check('noul 置信不足 → needs_review（不硬判）', lowAnswers.verdict.status === 'needs_review');
+check('choice 顶选概率不足 → needs_review', lowAnswers.pick.status === 'needs_review');
+const unknownPayload = {
+  model: 'jev-1.13.0',
+  state: normPayload.state,
+  questions: validateQuestions([
+    { id: 'verdict', type: 'noul', instructions: '作答是否展示了对闭包的理解' },
+    { id: 'pick', type: 'choice', instructions: '下一步', criteria: { review_again: '再问一次', teach: '重新讲', unknown: '证据不足' } },
+    { id: 'grade', type: 'score', instructions: '把握度', criteria: ['低', '中', '高'] },
+  ]),
+};
+const unknownAnswers = normalizeAnswers(unknownPayload, {
+  answers: {
+    verdict: { type: 'noul', noul: 0.92 },
+    pick: { type: 'choice', choice: 'unknown', probabilities: { unknown: 0.95, teach: 0.03, review_again: 0.02 }, confidence: 0.9 },
+    grade: { type: 'score', score: 2, legend: { 0: '低', 1: '中', 2: '高' }, probabilities: { 0: 0.05, 1: 0.05, 2: 0.9 } },
+  },
+});
+check('choice 选中让位标签（unknown）→ needs_review（缺失证据=unknown）',
+  unknownAnswers.pick.status === 'needs_review' && unknownAnswers.pick.value === 'unknown');
+const rejectAnswers = (raw) => {
+  try { normalizeAnswers(normPayload, raw); return false; }
+  catch (e) { return e instanceof DecisionError && e.kind === 'parse'; }
+};
+check('响应缺题 → parse 错误', rejectAnswers({ answers: { verdict: { type: 'noul', noul: 0.9 } } }));
+check('choice 返回非最高概率候选 → parse 错误', rejectAnswers({
+  answers: {
+    verdict: { type: 'noul', noul: 0.9 },
+    pick: { type: 'choice', choice: 'teach', probabilities: { review_again: 0.9, teach: 0.1 }, confidence: 0.9 },
+    grade: { type: 'score', score: 0, legend: { 0: 'a', 1: 'b', 2: 'c' }, probabilities: { 0: 0.9, 1: 0.05, 2: 0.05 } },
+  },
+}));
+check('probabilities 未归一 → parse 错误', rejectAnswers({
+  answers: {
+    verdict: { type: 'noul', noul: 0.9 },
+    pick: { type: 'choice', choice: 'teach', probabilities: { review_again: 0.7, teach: 0.1 }, confidence: 0.9 },
+    grade: { type: 'score', score: 0, legend: { 0: 'a', 1: 'b', 2: 'c' }, probabilities: { 0: 0.9, 1: 0.05, 2: 0.05 } },
+  },
+}));
+
+// —— 13c. faux 模式：确定性桩，jev_called=false（不联网、不花钱、不假装真判过）
+const fauxResult = await jevDecide(
+  { state: { goal: 'g', observations: 'o' }, questions: [
+    { id: 'v', type: 'noul', instructions: '判' },
+    { id: 'c', type: 'choice', instructions: '选', criteria: { a: '甲', b: '乙' } },
+  ] },
+  { faux: true },
+);
+check('faux 模式返回确定性判定（choice 取首个候选）',
+  fauxResult.mode === 'faux' && fauxResult.jev_called === false &&
+    fauxResult.decisions.v.value === true && fauxResult.decisions.c.value === 'a' && fauxResult.decisions.c.margin === 0.4);
+const fauxInjected = await jevDecide(
+  { state: { goal: 'g' }, questions: [{ id: 'v', type: 'noul', instructions: '判' }] },
+  { faux: true, fauxAnswers: { v: { status: 'needs_review', value: false, probability: 0.5 } } },
+);
+check('fauxAnswers 可注入（测试用例可控）',
+  fauxInjected.decisions.v.status === 'needs_review' && fauxInjected.decisions.v.value === false);
+
+// —— 13d. 无 key 不假装：config 错误明说（点名环境变量），绝不静默降级
+let cfgErr = null;
+try {
+  await jevDecide(
+    { state: { goal: 'g' }, questions: [{ id: 'v', type: 'noul', instructions: '判' }] },
+    { faux: false, apiKey: '' },
+  );
+} catch (e) { cfgErr = e; }
+check('无 key 且非 faux → config 错误（点名环境变量）',
+  cfgErr instanceof DecisionError && cfgErr.kind === 'config' && /TYPESAFE_API_KEY/.test(cfgErr.message));
+
+// —— 13e. 工具接线：buildTools 注册、execJevJudge 判定留痕、无 key 明说、坏输入报 validation
+const jevTool = buildTools().find((t) => t.name === TOOL_NAMES.JEV_JUDGE);
+check('buildTools 注册了 jev_judge', Boolean(jevTool));
+check('jev_judge 参数是 state + questions 数组',
+  /state/.test(JSON.stringify(jevTool.parameters)) && /questions/.test(JSON.stringify(jevTool.parameters)));
+
+const jevNb = store.getNotebook(store.createNotebook({ topic: '判定外包探针', goal: '看判定怎么留痕', pace: 'normal' }).id);
+const jevSession = new TeachingSession({
+  registry,
+  notebook: jevNb,
+  emit: () => {},
+  systemPrompt: '',
+  deskWriter: false,
+  decision: { faux: true },
+});
+const judged = await jevSession.execTool(TOOL_NAMES.JEV_JUDGE, {
+  state: { goal: '判断这条作答是否展示理解', observations: '作答：闭包是返回的函数带着词法环境' },
+  questions: [{ id: 'verdict', type: 'noul', instructions: '作答是否展示了闭包概念的理解' }],
+});
+check('execJevJudge 在 faux 下 ok 且 jev_called=false',
+  judged.ok === true && judged.mode === 'faux' && judged.jev_called === false && judged.decisions.verdict.value === true);
+const journalPath = path.join(NOTEBOOKS_DIR, jevNb.id, 'decision-journal.json');
+const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+check('判定写进 notebook 的 decision-journal（判定全留痕）',
+  journal.length === 1 && journal[0].kind === 'decision' && journal[0].mode === 'faux' && journal[0].decisions.verdict);
+check('留痕含完整输入（state/questions）与输出（decisions）',
+  journal[0].state.goal && Array.isArray(journal[0].questions) && journal[0].jev_called === false);
+check('key 不进留痕', !JSON.stringify(journal).includes('TYPESAFE') && !JSON.stringify(journal).includes('Bearer'));
+
+const noKeyNb = store.getNotebook(store.createNotebook({ topic: '无 key 探针', goal: '看明说跳过', pace: 'normal' }).id);
+const noKeySession = new TeachingSession({
+  registry,
+  notebook: noKeyNb,
+  emit: () => {},
+  systemPrompt: '',
+  deskWriter: false,
+  decision: { faux: false, apiKey: '' },
+});
+const jevRefused = await noKeySession.execTool(TOOL_NAMES.JEV_JUDGE, {
+  state: { goal: 'g', observations: 'o' },
+  questions: [{ id: 'v', type: 'noul', instructions: '判' }],
+});
+check('无 key 时工具明说跳过（ok:false + config 错误）',
+  jevRefused.ok === false && jevRefused.decision_error === 'config' && /TYPESAFE_API_KEY/.test(jevRefused.error));
+const errJournal = JSON.parse(fs.readFileSync(path.join(NOTEBOOKS_DIR, noKeyNb.id, 'decision-journal.json'), 'utf8'));
+check('失败的判定也留痕（error 条目带 kind）',
+  errJournal.length === 1 && errJournal[0].kind === 'error' && errJournal[0].error.kind === 'config');
+const badJudge = await noKeySession.execTool(TOOL_NAMES.JEV_JUDGE, {
+  state: { goal: 'g' },
+  questions: [{ id: 'v', type: 'noul', instructions: '   ' }],
+});
+check('坏输入（空 instructions）→ ok:false + kind=validation',
+  badJudge.ok === false && badJudge.decision_error === 'validation');
 
 // ─────────────────────────────────────── 收尾
 

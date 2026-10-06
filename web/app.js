@@ -2242,6 +2242,7 @@ const TOOL_LABELS = {
   prepare_artifact: '让分身做一个可视化',
   compile_notes: '收一条讲义',
   run_scene: '摆这一场的台面',
+  jev_judge: '请决策模型判一判',
 };
 
 // ─────────────────────────────────────────────── 工具调用明细卡

@@ -409,6 +409,23 @@ export function appendChat(id, messages) {
   return chat;
 }
 
+// ---------------------------------------------------------------- decision journal
+// JEV 判定账本：每次判定（含失败的）只增不改地记一条。判定全留痕是红线——
+// 输入（state/questions）、输出（decisions 或 error kind）、模式（real/faux）都在，
+// 但 key 绝不进账本。export 白名单里没有它：账本是本地审计，不是学习者带走的东西。
+
+const DECISION_JOURNAL_FILE = 'decision-journal.json';
+
+export function appendDecisionJournal(id, entry) {
+  const dir = assertExists(id);
+  const file = path.join(dir, DECISION_JOURNAL_FILE);
+  const journal = readJsonSafe(file, []);
+  journal.push(entry);
+  writeJsonAtomic(file, journal);
+  return journal;
+}
+
+
 /**
  * 按 msgId 幂等落一条消息：有就原地更新，没有就追加。
  * 为什么不是 append：回合中途会按 step 增量落盘（刷新/崩溃不丢已讲内容），

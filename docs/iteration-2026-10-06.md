@@ -337,3 +337,73 @@ missingHtml }`，健康目录 `ok: true`。
 ## 21. 后续候选（维持）
 
 对话压缩摘要 / 语义检索、TTS/PDF/鉴权、a11y 专项（模态焦点复位 / 状态播报）、损坏 JSON 处置、PS1 套件移植 Node。
+
+---
+
+# 第六轮（用户手动接入：JEV 判定外包）
+
+## 22. 本轮头脑风暴：判定该不该外包
+
+第五轮交付后，用户手动提出：「你觉得在状态机上我交给 JEV 类的 decision 怎么样」，随后给出
+`wuyoscar/jev-skill` 仓库并说明 JEV 是一类专门做 decision 的模型，合适就给 key。
+
+读官方脚本（skills/jev/scripts/jev.py）拿到准确契约：JEV 走**类型化决策 API**（不是聊天补全），
+两条路由——TypeSafe `POST https://api.typesafe.ai/v1/systemone`（模型 `jev-1.13.0`）与 OpenRouter
+`POST https://openrouter.ai/api/alpha/decisions`（`typesafe/jev-1.13`）；载荷 `{model, state, questions}`，
+questions = { id: { type: choice|noul|score, instructions, criteria } }；输出 value + probability。
+官方口径三条红线：probability≠正确率（当门槛不当执行信号）、缺失证据 = unknown、判定会过期。
+
+对照本仓库哲学，结论一句话：**状态机当执法者，JEV 当法官**——判定类外包，手续类绝不外包。
+
+| 决策点 | 归属 | 理由 |
+|---|---|---|
+| 判对/判错（作答是否展示理解） | JEV（noul） | 有标准有证据，正是 JEV 的形状 |
+| 证据是否支撑主张 | JEV（noul，jev-documents 同款） | claim-to-source 检查 |
+| 候选中选下一步（含回马枪） | JEV（choice） | 有候选有判据 |
+| transition 合法性 / 证据归一化 / 自报打标 / 一次一级 | 状态机 | 纯手续，JEV 不碰 |
+| 讲解 / 制品 / 笔记 | 主模型 | JEV 不做生成 |
+
+## 23. 实施
+
+### 23.1 server/decision.mjs（新模块）
+- 环境配置：`TYPESAFE_API_KEY` / `OPENROUTER_API_KEY` / `SOCRATIC_JEV_API_KEY`（统一覆盖）、
+  `SOCRATIC_JEV_PROVIDER`（typesafe 默认）、`SOCRATIC_JEV_MODEL`；`SOCRATIC_ENABLE_FAUX=1` 走桩。
+- `validateQuestions`：镜像官方 CLI 校验（choice 2–255、score 2–10、noul 只能缺省或 {true,false}、
+  id 唯一、instructions 非空），数组/对象两种输入形状归一。
+- `normalizeAnswers`：保守解释——顶选概率 < 0.8 或边际 < 0.15 或选中让位标签（unknown 等）→
+  `needs_review`；probabilities 未归一 / 响应缺题 / 非最高概率候选 → 显式 parse 错误。
+- `jevDecide`：faux 模式确定性桩（`jev_called: false`，和仓库 faux provider 同一诚实口径）；
+  真实模式无 key 抛 `config` 错误点名环境变量，绝不静默降级；请求带超时、无自动重试、
+  key 绝不进日志/错误/返回值。
+- 错误分类：config / validation / http / timeout / network / parse。
+
+### 23.2 工具接线（agent.mjs + store.mjs + prompt.mjs + web/app.js）
+- 新工具 `jev_judge`：state（goal/permissions/recent_steps/observations）+ questions 数组；
+  模型侧只给证据与标准，拿回逐题 `{status, value, probability, margin?}`。
+- 判定留痕：`store.appendDecisionJournal` → `data/notebooks/<id>/decision-journal.json`
+  （镜像 appendChat 的原子写盘；每次调用含失败都记：输入 + 输出 + 模式，key 不进账本）。
+- prompt.mjs 工具映射表新增一行（判定类外包 + 三条纪律 + 手续类绝不外包）；
+  web/app.js TOOL_LABELS 补 `jev_judge: '请决策模型判一判'`（web-smoke 要求每个工具都有中文标签）。
+
+## 24. 验证
+
+| 套件 | 基线（第五轮后） | 本轮后 | 说明 |
+|---|---|---|---|
+| `run.mjs` | 477 | **510** | +33：校验 / 归一化 / faux / 无 key 明说 / 工具接线 / 留痕（含失败留痕） |
+| `runtime-unit.mjs` | 92 | 92 | 未动 |
+| `contract-consistency.mjs` | 110 | 110 | 未动 |
+| `web-smoke.mjs` | 619 | **619** | 工具数断言 19→20、标签断言补 jev_judge |
+| **合计** | 1298 | **1331** | 全绿（web-smoke 需真服务 + faux） |
+
+**真实 API 探通（用户提供的 TypeSafe key，一次性最小冒烟）**：`jevDecide` 走
+`https://api.typesafe.ai/v1/systemone` 返回
+`{mode: real, jev_called: true, provider: typesafe, model: jev-1.13.0}`，
+noul 判 `{status: needs_review, value: false, probability: 0.28}`——key 有效、路由与报文形状
+与解析器完全吻合（判定本身也合理：冒烟句不构成可验证的事实陈述）。key 只经环境变量注入，
+不进仓库、不进日志、不进留痕。
+
+## 25. 后续候选（维持 + 待用户拍板）
+
+维持：对话压缩摘要 / 语义检索、TTS/PDF/鉴权、a11y 专项、损坏 JSON 处置、PS1 移植。
+待拍板：JEV 后续接哪些判定点（建议先接答案判定 noul 与制品证据支撑 claim-to-source）；
+key 由用户在本机环境变量/凭据里配（README「判定外包」一节有变量表），不贴聊天。

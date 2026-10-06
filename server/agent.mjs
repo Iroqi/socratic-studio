@@ -8,9 +8,10 @@
 
 import { validateToolCall, Type } from '@earendil-works/pi-ai';
 import { topoSortConcepts, GraphValidationError, validateGraph } from './graph.mjs';
-import { appendPatch, applyPatchToGraph, patchError, stateWord, saveSceneState } from './store.mjs';
+import { appendPatch, applyPatchToGraph, patchError, stateWord, saveSceneState, appendDecisionJournal } from './store.mjs';
 import { MAX_DIALOGUE_MESSAGES } from './config.mjs';
 import { saveNote } from './notes.mjs';
+import { jevDecide, DecisionError } from './decision.mjs';
 import {
   PHASE_LABELS,
   normaliseSceneState,
@@ -214,6 +215,7 @@ export const TOOL_NAMES = {
   PREPARE_ARTIFACT: 'prepare_artifact',
   COMPILE_NOTES: 'compile_notes',
   RUN_SCENE: 'run_scene',
+  JEV_JUDGE: 'jev_judge',
 };
 
 // 待办状态机：待办 → 进行中 → 已完成。模型只给自己排步骤，不涉及学习状态。
@@ -521,6 +523,31 @@ export function buildTools() {
         artifact_id: Type.Optional(Type.String({ description: 'place/remove 必填：制品 id' })),
       }),
     },
+    {
+      name: TOOL_NAMES.JEV_JUDGE,
+      description:
+        '把「判定类」决策外包给专用决策模型（JEV）：判对/判错、证据是否支撑某个主张、在候选中选下一步。你负责**提供证据和标准**，它负责**只做判断**：给它目标（goal）、边界（permissions）、证据（observations / recent_steps，作答原文、制品内容、工具回执都算）、和逐题的判定标准（instructions + criteria），拿回 value + probability。三条纪律：① probability 只是置信度、不是正确率也不是 confidence，它把题判成 needs_review 时不要硬拗、要补证据或问学习者；② 证据不足就如实 unknown/needs_review，低概率硬凑比不判更糟；③ 每次判定都会留痕（输入输出与模式进笔记本的 decision-journal）。**手续类决策绝不外包**：状态转移合法性、证据归一化、自报未验证打标、一次一级，这些还是你自己的活。没有配置 key 时工具会明说并跳过，你退回自行判断，不假装判过。',
+      parameters: Type.Object({
+        state: Type.Object({
+          goal: Type.String({ description: '这次判定要支持的目标/主张' }),
+          permissions: Type.Optional(Type.String({ description: '可用手段与边界' })),
+          recent_steps: Type.Optional(Type.Array(Type.Any())),
+          observations: Type.Optional(Type.String({ description: '证据：作答原文/制品内容/工具回执，给足、别给碎' })),
+        }),
+        questions: Type.Array(
+          Type.Object({
+            id: Type.String({ description: '英文小写+连字符的唯一 id' }),
+            type: Type.Union([Type.Literal('choice'), Type.Literal('noul'), Type.Literal('score')]),
+            instructions: Type.String({ description: '判定标准：给足条件、边界与"算不算"的判据，别写空话' }),
+            criteria: Type.Optional(
+              Type.Any({
+                description: 'choice: {"标签": "含义", ...} 2–255 个；score: ["等级说明", ...] 2–10 个；noul: 不填',
+              }),
+            ),
+          }),
+        ),
+      }),
+    },
   ];
 }
 
@@ -596,12 +623,14 @@ export class TeachingSession {
    * @param {AbortSignal} [deps.signal]
    * @param {object} deps.systemPrompt
    */
-  constructor({ registry, notebook, emit, signal, systemPrompt, taskRunner = null, modelRef = null, deskWriter = true }) {
+  constructor({ registry, notebook, emit, signal, systemPrompt, taskRunner = null, modelRef = null, deskWriter = true, decision = null }) {
     this.registry = registry;
     this.notebook = notebook;
     this.emit = emit;
     this.signal = signal;
     this.systemPrompt = systemPrompt;
+    // 判定外包的注入口：测试/宿主传 { faux, fauxAnswers, provider, apiKey }；null 时全走环境变量
+    this.decisionOpts = decision;
     // 任务运行器：派分身 / 挂后台。没给就退化成"无法派生"（单测与旧调用方不受影响）
     this.taskRunner = taskRunner;
     this.modelRef = modelRef;
@@ -1185,6 +1214,44 @@ export class TeachingSession {
     return { ok: true, recorded: true };
   }
 
+  /**
+   * 判定外包：把「判定类」决策交给专用决策模型（JEV），模型这边只提供证据与标准。
+   * 每次调用（含失败）都写进 notebook 的 decision-journal——判定全留痕是红线，
+   * 但 key 绝不进账本。没有 key 且不在 faux 模式时明说并跳过，绝不假装判过。
+   */
+  async execJevJudge(args) {
+    const { state, questions } = args;
+    const entryBase = { at: new Date().toISOString(), state, questions };
+    try {
+      const result = await jevDecide({ state, questions }, this.decisionOpts || {});
+      appendDecisionJournal(this.notebook.id, {
+        ...entryBase,
+        kind: 'decision',
+        mode: result.mode,
+        jev_called: result.jev_called,
+        provider: result.provider,
+        model: result.model,
+        decisions: result.decisions,
+      });
+      return {
+        ok: true,
+        mode: result.mode,
+        jev_called: result.jev_called,
+        provider: result.provider,
+        decisions: result.decisions,
+        note: '概率只是置信度，不是正确率；判定已全部留痕。',
+      };
+    } catch (err) {
+      const kind = err instanceof DecisionError ? err.kind : 'internal';
+      appendDecisionJournal(this.notebook.id, {
+        ...entryBase,
+        kind: 'error',
+        error: { kind, message: err.message },
+      });
+      return { ok: false, decision_error: kind, error: err.message };
+    }
+  }
+
   async execTool(name, args) {
     switch (name) {
       case TOOL_NAMES.ASK:
@@ -1225,6 +1292,8 @@ export class TeachingSession {
         return this.execCompileNotes(args);
       case TOOL_NAMES.RUN_SCENE:
         return this.execRunScene(args);
+      case TOOL_NAMES.JEV_JUDGE:
+        return this.execJevJudge(args);
       default:
         return { ok: false, error: `未知工具: ${name}` };
     }

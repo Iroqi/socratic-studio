@@ -1518,8 +1518,8 @@ const agentSrc = fs.readFileSync(path.join(here, '..', 'server', 'agent.mjs'), '
 const toolNames = [...(/export const TOOL_NAMES = \{([\s\S]*?)\n\};/.exec(agentSrc)?.[1] || '').matchAll(/:\s*'([a-z_]+)'/g)].map((m) => m[1]);
 const { TOOL_LABELS } = appModule.__hooks;
 const unlabeled = toolNames.filter((n) => !TOOL_LABELS[n]);
-check('每个工具都有中文标签（含 run_scene / compile_notes / prepare_artifact）',
-  toolNames.length === 19 && unlabeled.length === 0, `${toolNames.length} 个工具，没标签的：${unlabeled.join(',') || '无'}`);
+check('每个工具都有中文标签（含 run_scene / compile_notes / prepare_artifact / jev_judge）',
+  toolNames.length === 20 && unlabeled.length === 0, `${toolNames.length} 个工具，没标签的：${unlabeled.join(',') || '无'}`);
 
 // 出题 / 作答落在当前这一拍，滚动跟着整块落地的卡走
 state.turn = { blocks: [], flow: null, sceneId: currentScene()?.id || NO_SCENE };

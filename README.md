@@ -92,6 +92,26 @@ auth 解析顺序：显式 `apiKey` → 已存的 credential → 环境变量。
 > 安全提醒：这是本机工具，不是多租户服务。绑在 `127.0.0.1` 上、API key 明文落盘是本机工具的
 > 正常取舍；如果要放到公网，得先加访问控制和后端代理。
 
+### 判定外包（JEV，可选）
+
+模型侧只做生成与提议；**判定类**决策（判对/判错、证据是否支撑主张、候选中选下一步）可以外包给
+专用决策模型 JEV（`jev_judge` 工具）。不配 key 就用不了：工具会明说「未配置 key」并跳过，
+退回模型自行判断，**绝不假装判过**。环境变量：
+
+| 变量 | 作用 |
+|---|---|
+| `TYPESAFE_API_KEY` | 官方 TypeSafe 路由的 key（console.typesafe.ai 申请，默认路由；模型 `jev-1.13.0`） |
+| `OPENROUTER_API_KEY` | 走 OpenRouter 路由时用它（模型 `typesafe/jev-1.13`） |
+| `SOCRATIC_JEV_PROVIDER` | `typesafe`（默认）\| `openrouter` |
+| `SOCRATIC_JEV_API_KEY` | 统一覆盖，不区分路由 |
+| `SOCRATIC_JEV_MODEL` | 覆盖模型 id |
+| `SOCRATIC_ENABLE_FAUX` | `1` 时判定走确定性桩（不联网、不花钱、结果标 `jev_called: false`） |
+
+三条红线写在 `server/decision.mjs`（与 JEV 官方文档同口径）：**probability ≠ 正确率**，只当置信度
+门槛（< 0.8 或边际 < 0.15 进 `needs_review`）；**缺失证据 = needs_review**（unknown），低概率硬凑
+比不判更糟；**判定全留痕**——每次调用（含失败）写进 `data/notebooks/<id>/decision-journal.json`
+（完整输入 + 输出 + 模式，key 绝不进账本；export 白名单里没有它，账本是本地审计）。
+
 ---
 
 > 模型层的上游文档看 `node_modules/@earendil-works/pi-ai/README.md`（随依赖一起装，永远和实际
@@ -111,6 +131,7 @@ auth 解析顺序：显式 `apiKey` → 已存的 credential → 环境变量。
 | mastery 状态机（`runtime.md` §1.2） | `checkTransition()` 在服务端强制执行：一次只升一级；升级必须带 observed 证据；自报未验证的 concept 单次概念错误即降一级。违反规则**拒绝写入**并把规则原文回给模型。**唯一的无条件那条边由应用自己走**：`ask_user_question` 的 `concept_id` 是必填字段，学习者一答，`execAsk` 就把那格从 `unknown` 写成 `seen` 并记一条 observed 事件（证据 = 作答原文），跳过不算接触、已 seen 不重复写、绝不越级。理由很实在：曾经有一局 50 多轮的活会话，老师把 Graph、提问、待办都调了，`set_progress_state` / `record_learning_event` / `compile_notes` **一次都没调**，地图从头到尾全灰——把一条不需要判断的转换押在模型自觉上，就是没押 |
 | 制品（内联 / 可交互 / 可带走） | `share_artifact` 工具 → `sandbox` iframe 内联渲染；**每一件都落盘** `data/notebooks/<id>/artifacts/<制品id>/index.html`，随事件带一条 `rel`，稳定地址 `GET /api/notebooks/<id>/artifacts/<制品id>`（响应带 `Content-Security-Policy: sandbox …`）；寿命归学习者：`POST …/artifacts/<制品id>/lifetime` `{retired}` 只在 manifest 上盖 / 抹 `retiredAt`（软退役，文件与他在里面做过的记录一条不删） |
 | PATCH（`protocols.md` §1） | `propose_graph_patch`：先对当前 Graph 空跑，合不上的当场退回给模型（不给学习者一张点不动的卡）；high 置信度直接合并，medium/low 落成待确认记录，右侧可接受/忽略 |
+| 判定类决策（可选外包） | `jev_judge` 工具（需配 JEV key，见「判定外包」）。判对/判错、证据是否支撑主张、候选中选下一步——**判定**交给专用决策模型 JEV，模型侧只提供证据与标准，拿回 `value + probability`。概率只是置信度不是正确率；判成 `needs_review` 时补证据或问学习者，缺失证据 = unknown，低概率硬凑比不判更糟。**手续类绝不外包**：状态转移合法性、证据归一化、自报未验证打标、一次一级，仍是状态机自己的活。没配 key 时工具明说并跳过，绝不假装判过 |
 | 跨 session 续学 | 每回合把 Graph + Progress State 快照注入 system prompt 末尾。历史**按原样回放**：出过的题还原成 `ask_user_question` 的调用、学习者的作答还原成工具结果——只回放正文的话，模型会在二十来轮后从自己的记录里学会"这个应用不用工具"，提问退回正文、答语丢失（`historyToModelMessages`，实测踩过） |
 
 ### 两条不变量在代码里被硬保
