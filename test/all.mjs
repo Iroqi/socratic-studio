@@ -4,8 +4,10 @@
 // 这条脚本把总数变成跑出来的：每个套件自己打印"通过 N 项"，这里加起来。
 // 任一套件非零退出，本脚本非零退出。
 //
-// 命令缺失的套件（如 Linux 上没有 pwsh 时的 PS1 套件）如实报 SKIP + 原因——
-// 以前它们报「FAIL 0 项」，像真的跑了 0 项一样，汇总口径是骗人的。
+// 命令缺失的套件（如没有 jq）如实报 SKIP + 原因——
+// 以前 PS1 套件在 Linux 上没有 pwsh 就报 SKIP；第七轮把它们移植成 Node 版
+// （http-smoke.mjs / artifact-evidence.mjs），任何机器跑 test:all 都是全绿，不再依赖 pwsh。
+// PS1 原件仍保留在 test/ 下，Windows 上想用 pwsh 跑可以直接 `pwsh -File test/*.ps1`。
 //
 //   npm run test:all
 import { spawnSync } from 'node:child_process';
@@ -19,8 +21,8 @@ const SUITES = [
   { name: 'runtime-unit.mjs（制品运行时契约）', cmd: 'node', args: ['test/runtime-unit.mjs'] },
   { name: 'contract-consistency.mjs（文档 ↔ 运行时不许漂移）', cmd: 'node', args: ['test/contract-consistency.mjs'] },
   { name: 'web-smoke.mjs（前端 DOM 桩）', cmd: 'node', args: ['test/web-smoke.mjs'] },
-  { name: 'http-smoke.ps1（HTTP + SSE + 分身组合根）', cmd: 'pwsh', args: ['-NoProfile', '-File', 'test/http-smoke.ps1'] },
-  { name: 'artifact-evidence-smoke.ps1（制品证据端到端）', cmd: 'pwsh', args: ['-NoProfile', '-File', 'test/artifact-evidence-smoke.ps1'] },
+  { name: 'http-smoke.mjs（HTTP + SSE + 分身组合根，Node 版）', cmd: 'node', args: ['test/http-smoke.mjs'] },
+  { name: 'artifact-evidence.mjs（制品证据端到端，Node 版）', cmd: 'node', args: ['test/artifact-evidence.mjs'] },
 ];
 
 /** 命令是否可用：找不到命令时 spawnSync 返回 status === null 且 error.code === 'ENOENT'。 */

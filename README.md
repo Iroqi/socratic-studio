@@ -211,8 +211,10 @@ auth 解析顺序：显式 `apiKey` → 已存的 credential → 环境变量。
 npm run test:all   # 一条命令跑完 6 个套件：各自打「通过 N 项」，末行打合计
 ```
 
-> 缺运行环境的套件如实报 `SKIP`（原因写清楚），不冒充「FAIL 0 项」：比如 Linux 上没有
-> PowerShell 时，两个 `*.ps1` 套件会跳过，其余照跑，退出码仍然 0——没跑就是没跑，汇总口径不骗人。
+> 全部套件都是 Node（跨平台，不需要 PowerShell / pwsh）。第七轮把两个 `*.ps1` 端到端套件
+> 移植成了 `http-smoke.mjs` / `artifact-evidence.mjs`：以前 Linux/macOS 缺 pwsh 时它们如实
+> `SKIP`，现在任何机器 `npm run test:all` 都是 6/6 全绿，汇总口径不再有"没跑"的格子。
+> PS1 原件仍留在 `test/` 下，Windows 上想用 pwsh 跑可以直接 `pwsh -File test/*.ps1`。
 
 单个套件（`npm test` 只含前三个，`test:http` / `test:artifact` / `test:web` 各自单跑）：
 
@@ -222,8 +224,8 @@ npm run test:all   # 一条命令跑完 6 个套件：各自打「通过 N 项�
 | `runtime-unit.mjs` | 制品运行时的契约语义（DOM 桩驱动真运行时） |
 | `contract-consistency.mjs` | `artifact.md` §13.1 与运行时不许漂移 |
 | `web-smoke.mjs` | 前端逻辑：Markdown / 防注入 / 制品回放 / 题目落在流里 / 会话单列 / 草稿会话 |
-| `http-smoke.ps1` | HTTP + SSE + 提问阻塞 + 收尾回归 + 分身组合根 |
-| `artifact-evidence-smoke.ps1` | 制品证据 / state / event 端到端 |
+| `http-smoke.mjs` | HTTP + SSE + 提问阻塞 + 收尾回归 + 分身组合根（`http-smoke.ps1` 移植） |
+| `artifact-evidence.mjs` | 制品证据 / state / event 端到端（`artifact-evidence-smoke.ps1` 移植） |
 
 **这里的项数一律不手写**：`test/all.mjs` 从各套件自己的输出里抓「通过 N 项」再求和，新增断言
 不会让文档过期。全部用 pi-ai 的 **faux provider**（脚本化内存 provider，**不需要任何 API key**），
@@ -234,9 +236,11 @@ npm run test:all   # 一条命令跑完 6 个套件：各自打「通过 N 项�
   每个都得在 system prompt 里有映射（这是"规则已被本应用吸收"的可执行版本）；③ 幻影能力黑名单
   （原 skill 宿主有、本应用**没有**的东西：命令执行工具、`str_replace`、PDF 解析、语音转写、外部
   `Skill` 工具……措辞里再出现就红，因为骗模型比漏一条规则更贵）。
-- `http-smoke.ps1`：真的起服务走 HTTP/SSE，含「模型只回正文不调工具」的收尾回归、素材送达、证据去重，
-  以及**分身（subagent / 后台任务）的组合根回归**——unit 测试是手工把 `taskRunner` 挂上去的，
-  只有真 HTTP 才暴露得出来"服务没把它接上、整条功能在生产里是死的"这类漂移。
+- `http-smoke.mjs`：真的起服务走 HTTP/SSE（自起 `node server/serve.mjs` + 临时数据目录 + faux，
+  跑完杀进程清目录），含「模型只回正文不调工具」的收尾回归、素材送达、证据去重、
+  重连 `/stream` 重放、答题期心跳，以及**分身（subagent / 后台任务）的组合根回归**——
+  unit 测试是手工把 `taskRunner` 挂上去的，只有真 HTTP 才暴露得出来"服务没把它接上、
+  整条功能在生产里是死的"这类漂移。
 - `runtime-unit.mjs`：制品跑在 `sandbox="allow-scripts"`（**无** `allow-same-origin`）的 iframe 里，
   浏览器打不开时也测不到它，所以这里用最小 DOM 桩驱动**真正的** `socratic-runtime.js`，
   断言契约里那几条硬语义：明确答错 → `data-completed='0'`；参与型完成不写 `data-locked`；

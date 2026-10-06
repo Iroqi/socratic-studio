@@ -420,3 +420,38 @@ key 由用户在本机环境变量/凭据里配（README「判定外包」一节
 - run.mjs +4（13f：prompt 与工具描述都点名两场合 + 先读证据再判/缺证据判 unknown），
   test:all = run 514 / unit 92 / contract 110 / web-smoke 619，全绿。
 - 回马枪候选选择（choice）留待需要时一行接上。
+
+## 27. 第七轮：PS1 套件移植 Node——test:all 首次全绿，SKIP 归零
+
+历轮候选表里常年「维持」的 **PS1 移植 Node** 本轮落实。背景：HTTP+SSE 与制品证据两条端到端
+链路一直以 `test/http-smoke.ps1`（536 行 / 12 节）与 `test/artifact-evidence-smoke.ps1`
+（314 行 / 5 节）存在，但**只有装了 pwsh 的机器能跑**；本机没有 pwsh，test:all 里这两格永远
+如实 SKIP，组合根（serve.mjs 真起服务、SSE 流、taskRunner 接线、CSP sandbox）在无 pwsh 环境
+没有任何验证。
+
+**本轮改动（全部为测试基建，零产品代码）**：
+- 新增 `test/http-smoke.mjs`（74 项）与 `test/artifact-evidence.mjs`（43 项），忠实移植两个
+  PS1 的全部断言：服务/静态资源、建学习+装载 faux 脚本、SSE 教学回合（0.9 秒想题的答题期
+  心跳、重连 /stream 重放、GATE-1 题卡化且排在存图后、探针一答应用代写 Seen 且只写一次）、
+  落盘恢复、素材送达、纯正文收尾（turn_end/done/closed/turn-state 空闲）、分身经 task-stream
+  外发与结论落账、引导缓存与白卷、自定义端点槽位 400、笔记 PUT/DELETE 白名单与盖章、制品证据
+  去重、state 快照合并、event 流水去重、软退役/放回（盘上文件还在 + 流水留痕 + 无第二本账）、
+  导演台↔lifetime 联动、**活回合卡题时扔掉内存同步**、下一回合证据链路、CSP sandbox+nosniff。
+- `test/all.mjs`：两个 PS1 条目换成 Node 版（cmd='node'，不再探活 pwsh）；PS1 原件保留在
+  test/ 下可选用。`package.json`：`test:http` / `test:artifact` 指向 Node 版。
+- README「测试」节改写：全部套件 Node、跨平台、无需 pwsh；PS1 仅作可选保留。
+
+**移植踩到的一个真 bug（在本套件里，不在产品里）**：制品套件初版 readSSE 只解构
+`{deadlineMs}`、不支持 onEvent，而 4e 节的「卡题时扔掉」全靠 onEvent 里 push + 作答——事件被
+内部数组收集后整个丢弃，ev4 恒为空、5 项断言全红。探针过程抓到服务端 `buffered:4` 与裸字节
+能读到完整事件流，确认字节在、解析在、是 onEvent 接口没接。补上 onEvent/onPing 后 43/43 全绿。
+**移植还修正了原 PS1 的一个 cleanup 顺序问题**：日志在删除临时目录之后才读，永远打不出 stderr；
+改成先打印再删。
+
+**验证**：`npm run test:all` = run 514 / runtime-unit 92 / contract-consistency 110 /
+web-smoke 619 / http-smoke 74 / artifact-evidence 43，**合计 1452 项，6/6 套件通过，0 跳过**
+——这是仓库第一次 test:all 无 SKIP 全绿（此前 1331 + 2 SKIP）。两个新套件都自起
+`node server/serve.mjs` + 临时数据目录 + faux，跑完杀进程清目录，单跑退出码即结果。
+
+**后续候选（维持）**：对话压缩摘要 / 语义检索、TTS/PDF/鉴权、a11y 专项、孤儿自动清理；
+JEV 回马枪候选选择（choice）留待需要时一行接上。

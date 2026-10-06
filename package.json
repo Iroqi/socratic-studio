@@ -8,8 +8,8 @@
     "start": "node server/serve.mjs",
     "test": "node test/run.mjs && node test/runtime-unit.mjs && node test/contract-consistency.mjs",
     "test:all": "node test/all.mjs",
-    "test:http": "pwsh -File test/http-smoke.ps1",
-    "test:artifact": "pwsh -File test/artifact-evidence-smoke.ps1",
+    "test:http": "node test/http-smoke.mjs",
+    "test:artifact": "node test/artifact-evidence.mjs",
     "test:web": "node test/web-smoke.mjs"
   },
   "dependencies": {
