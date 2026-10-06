@@ -197,6 +197,10 @@ export function getNotebook(id) {
     notes: readNotes(id),
     scene: readSceneState(id),
     learnerView: summariseLearnerView(progress),
+    // 续学锚点：上次判错、还没判对的题（同一份候选，prompt 快照与前端都从这里取）。
+    retests: retestCandidates(progress?.artifact_evidence || []),
+    // 判定账本的可读摘要（审计视图，只出词不出数字——见 readDecisions 注释）。
+    decisions: readDecisions(id),
   };
 }
 
@@ -397,6 +401,38 @@ export function summariseLearnerView(progress) {
   };
 }
 
+/**
+ * 回马枪候选：按 question_id 分组，只留"最后一次仍判错、之后没有判对"的那些。
+ *
+ * 证据记录里没有时间戳（`agent.mjs` 归一化时就没这个字段），所以间隔只能按回合算：
+ * 这一轮读到候选、下一轮重测，本身就隔着至少一次完整回合。别把它当成"隔了几天"的间隔重复。
+ *
+ * 它住在数据层而不是 prompt 层，是因为前端也要读它（右栏「上次还差这些」续学卡）——
+ * 同一份候选只算一次，两种出口不会长出不同的事实。prompt.mjs 的快照从这里取。
+ */
+export function retestCandidates(evidence, cap = 3) {
+  const byQuestion = new Map();
+  for (const e of evidence) {
+    if (!e.question_id) continue;
+    const list = byQuestion.get(e.question_id) || [];
+    list.push(e);
+    byQuestion.set(e.question_id, list);
+  }
+  const out = [];
+  for (const [qid, list] of byQuestion) {
+    const last = list[list.length - 1];
+    if (last.result !== 'incorrect') continue;
+    out.push({
+      qid,
+      concept: list.find((e) => e.concept_id)?.concept_id || null,
+      attempts: Number(last.attempts) || 0,
+      response: String(last.response ?? '').slice(0, 80),
+      at: evidence.indexOf(last),
+    });
+  }
+  return out.sort((a, b) => b.at - a.at).slice(0, cap);
+}
+
 // ---------------------------------------------------------------- chat history
 
 export function appendChat(id, messages) {
@@ -423,6 +459,38 @@ export function appendDecisionJournal(id, entry) {
   journal.push(entry);
   writeJsonAtomic(file, journal);
   return journal;
+}
+
+// 判定账本的可读出口（右栏「判定记录」审计视图）。只给结论，不给数字：
+// value / probability / margin 是这次判定的置信度，不是学习量（Invariant 4 的
+// 违规指纹 ① 是"掌握度/理解度/进度的数值化形态"，概率数字放在学习者可见面上
+// 有被读成"你掌握了 28%"的风险，所以可见面只出词）。完整记录（含输入输出）
+// 仍在本地 decision-journal.json 里，要审计细节直接翻文件。
+export function readDecisions(id, cap = 30) {
+  const dir = assertExists(id);
+  const file = path.join(dir, DECISION_JOURNAL_FILE);
+  if (!fs.existsSync(file)) return [];
+  const journal = readJsonSafe(file, []);
+  if (!Array.isArray(journal)) return [];
+  return journal.slice(-cap).reverse().map((entry) => {
+    if (!entry || typeof entry !== 'object') return null;
+    if (entry.kind === 'error') {
+      return {
+        kind: 'error',
+        at: entry.at || null,
+        error: entry.error?.kind || 'internal',
+      };
+    }
+    const decisions = Array.isArray(entry.decisions) ? entry.decisions : [];
+    const hasReview = decisions.some((d) => d?.status === 'needs_review');
+    return {
+      kind: 'decision',
+      at: entry.at || null,
+      mode: entry.mode === 'faux' ? 'faux' : entry.mode === 'real' ? 'real' : null,
+      n: decisions.length,
+      verdict: hasReview ? 'needs_review' : 'selected',
+    };
+  }).filter(Boolean);
 }
 
 
@@ -946,6 +1014,42 @@ export function healthCheck() {
     missingHtml,
     quarantined,
   };
+}
+
+// 损坏文件取证下载：体检点名之后，原件拿得到。只允许下载"体检此刻认定的损坏文件"
+// （七份 notebook JSON 之一，路径就是 healthCheck 报告里的相对路径）——不是任意
+// 文件读取口。损坏文件可能正是"待诊断现场"，原件原样发出去（字节不重写），
+// 太大就先拒绝、让人直接翻 data/ 目录，不把整块内存拖进下载。
+const CORRUPT_DOWNLOAD_MAX_BYTES = 5 * 1024 * 1024;
+
+export function readCorruptFile(relPath) {
+  const report = healthCheck();
+  if (!report.corruptFiles.includes(relPath)) {
+    const err = new BadRequestError('这个文件不在体检报告的损坏清单里');
+    err.reason = 'not-in-report';
+    throw err;
+  }
+  // 体检报告的路径是相对 NOTEBOOKS_DIR 的（`<id>/<file>`），取证同样以它为基准
+  const abs = path.join(NOTEBOOKS_DIR, relPath);
+  if (!isWithin(NOTEBOOKS_DIR, abs)) {
+    const err = new BadRequestError('路径越界，拒绝下载');
+    err.reason = 'outside-data-dir';
+    throw err;
+  }
+  let buffer;
+  try {
+    buffer = fs.readFileSync(abs);
+  } catch (err) {
+    err.status = 404;
+    err.reason = 'missing';
+    throw err;
+  }
+  if (buffer.length > CORRUPT_DOWNLOAD_MAX_BYTES) {
+    const err = new BadRequestError('损坏文件太大（超过 5MB），请直接翻 data/ 目录取证');
+    err.reason = 'too-large';
+    throw err;
+  }
+  return { buffer, relPath };
 }
 
 // ---------------------------------------------------------------- 处置台（隔离区）

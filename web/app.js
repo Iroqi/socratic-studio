@@ -2944,8 +2944,10 @@ function renderPanel() {
 function renderLearnPanel(body) {
   renderPendingPatches(body);
   renderGoalCard(body);
+  renderRetestCard(body);
   renderGraphPanel(body);
   renderEventsPanel(body);
+  renderDecisionsPanel(body);
   renderNotesPanel(body);
   renderTasksPanel(body);
   renderReviewPanel(body);
@@ -2974,6 +2976,65 @@ function renderGoalCard(body) {
   const background = g?.meta?.learner_profile?.background || state.notebook.learner?.background;
   if (background) card.append(el('div', 'goal-sub', `背景：${background}`));
   body.append(card);
+}
+
+/**
+ * 续学锚点：上次判错、还没判对的题（回马枪候选）。
+ *
+ * 这份候选模型每回合都读（prompt 快照），学习者却从来看不见——打开一本旧学习，
+ * 不知道"上次差在哪"。这里把它变成右栏一张只读卡：概念名 + 一句状态，点击取景
+ * 那张概念卡（与概念卡同一套 setCamera 交互）。
+ * 边界：不显示错过次数、不显示上次作答内容（Invariant 4 不出数字；作答原文是
+ * 私人证据，留在对话里）；无候选不摆卡（没有就不打扰）。
+ */
+function renderRetestCard(body) {
+  const retests = state.notebook?.retests || [];
+  if (!retests.length) return;
+  const g = state.notebook.graph;
+  const names = new Map((g?.concepts || []).map((c) => [c.id, c.name]));
+  const card = el('div', 'retest-card');
+  card.append(el('div', 'retest-label', '上次还差这些'));
+  for (const r of retests) {
+    const name = (r.concept && names.get(r.concept)) || r.qid || '上一题';
+    const line = el('div', 'retest-item', `· ${name}`);
+    line.title = '点这里在概念结构里找到它';
+    line.onclick = () => {
+      if (r.concept && (g?.concepts || []).some((c) => c.id === r.concept)) setCamera(r.concept);
+      else releaseCamera();
+    };
+    card.append(line);
+  }
+  body.append(card);
+}
+
+/**
+ * 判定账本的可读出口：JEV 判定模型留了什么痕，打开就看得见。
+ *
+ * 第六轮接的判定外包红线是"判定全留痕"，但留痕在盘上没有任何入口看——这是审计
+ * 视图：谁判的（真实/测试桩）、判出什么结论（通过/待复核/失败）、什么时候判的。
+ * Invariant 4 边界：这里只出词、不出数字——value / probability 是判定置信度，
+ * 不是学习量，放进可见面有被读成"你掌握了百分之几"的风险（见 store.readDecisions）。
+ * 有记录才显示；错误条目照实说"判定失败"。
+ */
+function renderDecisionsPanel(body) {
+  const decisions = state.notebook?.decisions || [];
+  if (!decisions.length) return;
+  body.append(el('div', 'panel-section-title', '判定记录'));
+  body.append(el('div', 'state-note', '模型判定留痕（审计视图）——不是你的掌握度。'));
+  const list = el('div', 'state-note');
+  for (const d of decisions) {
+    const words = [];
+    if (d.kind === 'error') {
+      words.push('判定失败');
+      if (d.error) words.push(`：${d.error}`);
+    } else {
+      words.push(d.mode === 'faux' ? '测试桩' : '真实判定');
+      words.push(d.verdict === 'needs_review' ? '· 有待复核' : '· 判定通过');
+    }
+    const ts = d.at ? formatTime(d.at) : '';
+    list.append(el('div', null, `· ${words.join(' ')}${ts ? ` · ${ts}` : ''}`));
+  }
+  body.append(list);
 }
 
 /**
@@ -3430,6 +3491,46 @@ function renderBackupPanel(body) {
         ? `数据体检：共 ${report.notebooks} 本学习，${issues.join('；')}。建议先导出备份再处理。`
         : `数据体检：共 ${report.notebooks} 本学习，没有损坏、没有孤儿、没有空壳，一切正常。`),
     );
+    // 损坏文件取证：体检点名之后原件拿得到。每个文件原样下载（字节不重写），
+    // 供诊断/发给维护者看——损坏文件可能正是"待诊断现场"，只读、不修。
+    if (report.corruptFiles.length) {
+      const list = el('div', 'health-list');
+      for (const rel of report.corruptFiles) {
+        const row = el('div', 'health-corrupt-row');
+        row.append(el('span', null, rel));
+        const dl = el('button', 'btn btn-ghost btn-sm', '下载原件');
+        dl.onclick = async () => {
+          try {
+            dl.disabled = true;
+            const res = await fetch(`/api/health/corrupt?path=${encodeURIComponent(rel)}`);
+            if (!res.ok) {
+              const text = await res.text();
+              let msg = text;
+              try { msg = JSON.parse(text).error || text; } catch { /* 保持原文 */ }
+              throw new Error(msg);
+            }
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const aEl = el('a');
+            aEl.href = url;
+            const name = rel.replace(/[^\w.\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '') || 'corrupt.json';
+            aEl.download = `corrupt-${name}`;
+            document.body.append(aEl);
+            if (typeof aEl.click === 'function') aEl.click();
+            aEl.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
+            toast('已下载损坏文件原件');
+          } catch (err) {
+            toast(`下载失败：${err.message}`, true);
+          } finally {
+            dl.disabled = false;
+          }
+        };
+        row.append(dl);
+        list.append(row);
+      }
+      healthResult.append(list);
+    }
     if (report.orphanArtifacts.length) {
       const names = report.orphanArtifacts.slice(0, 3).map((a) => `${a.notebook}/${a.id}`).join('、');
       healthResult.append(el('div', 'health-list', `孤儿制品：${names}${report.orphanArtifacts.length > 3 ? '…' : ''}`));

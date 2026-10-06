@@ -2773,6 +2773,84 @@ check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据
     })(), '');
 }
 
+// ─────────────────────────────────────── 12j. 看不见的看得见：判定账本 / 损坏取证 / 回马枪候选
+
+{
+  // 12j-1 判定账本可读：JEV 留痕从盘上睡觉变成右栏审计视图。
+  // 红线是"判定全留痕"，readDecisions 是它的可读出口；但可见面只出词、不出数字——
+  // value / probability 是判定置信度不是学习量（Invariant 4 边界，见 store 注释）。
+  const decId = store.createNotebook({ topic: '判定账本', goal: null, pace: 'normal' }).id;
+  check('空账本读回空列表（没有判定就不摆节）', JSON.stringify(store.readDecisions(decId)) === '[]');
+  store.appendDecisionJournal(decId, {
+    at: '2026-10-07T01:00:00.000Z', kind: 'decision', mode: 'real', jev_called: true,
+    provider: 'typesafe', model: 'jev-1.13.0',
+    state: { goal: 'x', permissions: [], recent_steps: [], observations: ['作答原文'] },
+    questions: { q1: { type: 'noul', instructions: '判是否展示理解', criteria: '…' } },
+    decisions: [{ id: 'q1', status: 'selected', value: true, probability: 0.91, margin: 0.4 }],
+  });
+  store.appendDecisionJournal(decId, {
+    at: '2026-10-07T02:00:00.000Z', kind: 'decision', mode: 'faux', jev_called: false,
+    state: { goal: 'x', permissions: [], recent_steps: [], observations: [] },
+    questions: { q2: { type: 'noul', instructions: '…', criteria: '…' } },
+    decisions: [{ id: 'q2', status: 'needs_review', value: false, probability: 0.28 }],
+  });
+  store.appendDecisionJournal(decId, {
+    at: '2026-10-07T03:00:00.000Z', kind: 'error',
+    state: { goal: 'x', permissions: [], recent_steps: [], observations: [] },
+    questions: { q3: { type: 'noul', instructions: '…', criteria: '…' } },
+    error: { kind: 'timeout', message: '上游超时' },
+  });
+  const decs = store.readDecisions(decId);
+  check('判定账本按最近优先回摘要（error 在后、先出）', decs[0]?.kind === 'error' && decs[0]?.error === 'timeout', JSON.stringify(decs[0]));
+  check('真实判定摘要：模式 + 结论 + 题数', decs[1]?.kind === 'decision' && decs[1]?.mode === 'faux' && decs[1]?.verdict === 'needs_review' && decs[1]?.n === 1, JSON.stringify(decs[1]));
+  check('通过判定摘要：verdict=selected', decs[2]?.kind === 'decision' && decs[2]?.verdict === 'selected' && decs[2]?.mode === 'real', JSON.stringify(decs[2]));
+  check('摘要里没有判定置信度数字（value/probability 不进可见面）',
+    !JSON.stringify(decs).includes('probability') && !JSON.stringify(decs).includes('"value"') && !JSON.stringify(decs).includes('0.91'),
+    JSON.stringify(decs));
+  check('getNotebook 带判定摘要（前端渲染用它）', Array.isArray(store.getNotebook(decId).decisions) && store.getNotebook(decId).decisions.length === 3);
+
+  // 12j-2 损坏文件取证：体检点名之后原件拿得到；只允许报告里的路径。
+  const corruptId = store.createNotebook({ topic: '取证', goal: null, pace: 'normal' }).id;
+  const corruptGraph = path.join(tmpRoot, 'notebooks', corruptId, 'learning-graph.json');
+  const brokenBytes = Buffer.from('{ 这 是 半 截 JSON ← 原样取证');
+  fs.writeFileSync(corruptGraph, brokenBytes);
+  const corruptRel = `${corruptId}/learning-graph.json`;
+  check('损坏文件进了体检报告', store.healthCheck().corruptFiles.includes(corruptRel), store.healthCheck().corruptFiles.join(','));
+  const got = store.readCorruptFile(corruptRel);
+  check('取证下载返回原件字节（不重写）', got.buffer.equals(brokenBytes), got.buffer.toString('utf8'));
+  let rejected = null;
+  try { store.readCorruptFile(`${corruptId}/notebook.json`); } catch (err) { rejected = err; }
+  check('没损坏的文件不在取证白名单（拒绝，不是任意读取口）', rejected?.reason === 'not-in-report', rejected?.message);
+  let traversed = null;
+  try { store.readCorruptFile('../../credentials.json'); } catch (err) { traversed = err; }
+  check('路径越界/不在报告一律拒绝（防任意文件读取）', traversed?.reason === 'not-in-report', traversed?.message);
+  // 超大损坏文件：取证先拒绝，让人直接翻 data/ 目录（不把大块内存拖进下载）
+  const corruptChat = path.join(tmpRoot, 'notebooks', corruptId, 'chat.json');
+  fs.writeFileSync(corruptChat, 'x'.repeat(6 * 1024 * 1024));
+  let tooBig = null;
+  try { store.readCorruptFile(`${corruptId}/chat.json`); } catch (err) { tooBig = err; }
+  check('超过 5MB 的损坏文件取证被拒绝（说明直接翻目录）', tooBig?.reason === 'too-large', tooBig?.message);
+
+  // 12j-3 回马枪候选可见：同一份候选（prompt 快照与前端续学卡）从数据层出。
+  const retestId = store.createNotebook({ topic: '回马枪', goal: null, pace: 'normal' }).id;
+  const progress = {
+    version: 1, session_open: true, concepts: {},
+    artifact_evidence: [
+      { question_id: 'q-a', concept_id: 'closures', result: 'incorrect', attempts: 2, response: '答错了' },
+      { question_id: 'q-a', concept_id: 'closures', result: 'incorrect', attempts: 3, response: '又答错了' },
+      { question_id: 'q-b', concept_id: 'scope', result: 'correct', attempts: 1, response: '答对了' },
+    ],
+  };
+  fs.writeFileSync(path.join(tmpRoot, 'notebooks', retestId, 'progress.json'), JSON.stringify(progress));
+  const retests = store.getNotebook(retestId).retests;
+  check('getNotebook 带回马枪候选（前端续学卡的数据源）',
+    retests.length === 1 && retests[0].qid === 'q-a' && retests[0].concept === 'closures' && retests[0].attempts === 3,
+    JSON.stringify(retests));
+  check('最后一次判对的题不进候选（只留"最后仍判错、之后没判对"）',
+    !retests.some((r) => r.qid === 'q-b'), JSON.stringify(retests));
+  check('无判错证据时候选为空', store.getNotebook(store.createNotebook({ topic: '干净本', goal: null, pace: 'normal' }).id).retests.length === 0);
+}
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { RULES_DIR, MAX_DIALOGUE_MESSAGES } from './config.mjs';
 import { topoSortConcepts } from './graph.mjs';
-import { stateWord } from './store.mjs';
+import { stateWord, retestCandidates } from './store.mjs';
 import { renderSceneSnapshot } from './scene.mjs';
 
 const RULE_FILES = [
@@ -100,33 +100,11 @@ session 长度上限按 meta.learner_profile.pace 执行（runtime.md 的 pace �
 `;
 
 /**
- * 回马枪候选：按 question_id 分组，只留"最后一次仍判错、之后没有判对"的那些。
- *
+ * 回马枪候选：同一份候选只有一处实现（store.mjs 的 retestCandidates，数据层），
+ * prompt 快照与前端右栏续学卡都从它取——两种出口不会长出不同的事实。
  * 证据记录里没有时间戳（`agent.mjs` 归一化时就没这个字段），所以间隔只能按回合算：
  * 这一轮读到候选、下一轮重测，本身就隔着至少一次完整回合。别把它当成"隔了几天"的间隔重复。
  */
-function retestCandidates(evidence, cap = 3) {
-  const byQuestion = new Map();
-  for (const e of evidence) {
-    if (!e.question_id) continue;
-    const list = byQuestion.get(e.question_id) || [];
-    list.push(e);
-    byQuestion.set(e.question_id, list);
-  }
-  const out = [];
-  for (const [qid, list] of byQuestion) {
-    const last = list[list.length - 1];
-    if (last.result !== 'incorrect') continue;
-    out.push({
-      qid,
-      concept: list.find((e) => e.concept_id)?.concept_id || null,
-      attempts: Number(last.attempts) || 0,
-      response: String(last.response ?? '').slice(0, 80),
-      at: evidence.indexOf(last),
-    });
-  }
-  return out.sort((a, b) => b.at - a.at).slice(0, cap);
-}
 
 /** 每次回合注入的动态状态快照。 */
 export function renderStateSnapshot(notebook) {

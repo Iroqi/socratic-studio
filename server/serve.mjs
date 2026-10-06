@@ -593,6 +593,29 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/health/restore' && method === 'POST') {
       return sendJson(res, 200, store.restoreQuarantined());
     }
+    // ---------- 损坏文件取证下载：体检点名之后，原件拿得到。
+    // 只允许下载"体检此刻认定的损坏文件"（store.readCorruptFile 内部先跑一次 healthCheck
+    // 校验路径在报告里），不是任意文件读取口。原件字节原样发出去，文件名百分号编码。
+    if (pathname === '/api/health/corrupt' && method === 'GET') {
+      const url = new URL(req.url, 'http://localhost');
+      const rel = url.searchParams.get('path');
+      if (!rel) return sendJson(res, 400, { error: '缺 path 参数（体检报告里的相对路径）' });
+      try {
+        const { buffer } = store.readCorruptFile(rel);
+        const filename = rel.replace(/[^\w.\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '') || 'corrupt.json';
+        const encoded = encodeURIComponent(filename).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+        res.writeHead(200, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="corrupt.json"; filename*=UTF-8''${encoded}`,
+          'Content-Length': buffer.length,
+          'Cache-Control': 'no-store',
+        });
+        return res.end(buffer);
+      } catch (err) {
+        const status = err.status || (err.reason === 'not-in-report' || err.reason === 'outside-data-dir' ? 400 : 500);
+        return sendJson(res, status, { error: err.message || '下载失败' });
+      }
+    }
 
     // ---------- notebooks
     if (pathname === '/api/notebooks' && method === 'GET') {

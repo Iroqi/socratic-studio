@@ -545,6 +545,25 @@ try {
     convOut.data.markdown.split('\n').filter((l) => l.includes('**') || l.includes('题卡')).slice(0, 10).join(' | '));
   check('对话导出不出进度数字 / 比率 / 百分比（Invariant 4 守住）',
     !/%|掌握率|进度条|分数|\d+\s*个里/.test(convOut.data.markdown), '');
+
+  console.log('\n15. 看不见的看得见：判定账本 / 回马枪候选 / 损坏取证（真服务）');
+  const nbFull = (await jfetch(`${BASE}/api/notebooks/${id}`)).data.notebook;
+  check('GET /api/notebooks/:id 带回马枪候选字段（前端续学卡的数据源）',
+    Array.isArray(nbFull.retests) && nbFull.retests.length === 0 && Array.isArray(nbFull.decisions), JSON.stringify({ retests: nbFull.retests, decisions: nbFull.decisions }).slice(0, 120));
+  // 造一处损坏：chat.json 写坏，体检点名 → 取证下载原样字节
+  const corruptRel = `${id}/chat.json`;
+  const corruptBytes = Buffer.from('{ 半截 JSON ← 取证原样');
+  fs.writeFileSync(path.join(dataDir, 'notebooks', id, 'chat.json'), corruptBytes);
+  const healthAfter = (await jfetch(`${BASE}/api/health`)).data;
+  check('损坏文件被真服务体检点名', healthAfter.corruptFiles.includes(corruptRel), healthAfter.corruptFiles.join(','));
+  const dlRes = await fetch(`${BASE}/api/health/corrupt?path=${encodeURIComponent(corruptRel)}`);
+  const dlBody = dlRes.ok ? Buffer.from(await dlRes.arrayBuffer()) : null;
+  check('取证下载返回 200 且字节与原件一致（不重写）',
+    dlRes.status === 200 && dlBody?.equals(corruptBytes), `status=${dlRes.status} body=${dlBody?.toString('utf8').slice(0, 40)}`);
+  const badPath = await jfetch(`${BASE}/api/health/corrupt?path=${encodeURIComponent(`${id}/notebook.json`)}`);
+  check('没损坏的文件不在取证白名单（400，不是任意读取口）', badPath.status === 400, `status=${badPath.status}`);
+  const escape = await jfetch(`${BASE}/api/health/corrupt?path=${encodeURIComponent('../../credentials.json')}`);
+  check('路径越界一律拒绝（400）', escape.status === 400, `status=${escape.status}`);
 } finally {
   server.kill();
   await sleep(400);

@@ -3711,6 +3711,95 @@ console.log('\n32. 转场条：新场开头那行「接住第 1 场 ·「这件�
   check('导出对话这条链路无异常', errors.length === 0, errors.join(' | '));
 }
 
+// ─── 32. 看不见的看得见：回马枪候选卡 / 判定记录 / 损坏文件取证
+{
+  const { state: st, renderPanel: rp, setCamera: sc } = appModule.__hooks;
+
+  // 32a. 回马枪候选卡：上次判错、还没判对的题（模型每回合都读，前端从此看得见）
+  st.panelTab = 'learn';
+  st.notebook = {
+    ...sampleNotebook(),
+    retests: [
+      { qid: 'q-a', concept: 'closures', attempts: 3, response: '又答错了' },
+      { qid: 'q-b', concept: 'variable-scope', attempts: 1, response: '' },
+    ],
+  };
+  st.camera = null;
+  rp();
+  const retestCards = deepAll(doc.getElementById('panelBody'), 'retest-card');
+  check('有回马枪候选时右栏出现续学卡', retestCards.length === 1, String(retestCards.length));
+  const retestText = retestCards[0] ? retestCards[0].textContent : '';
+  check('续学卡显示概念名（不是题号，学习者看得懂）',
+    retestText.includes('闭包') && retestText.includes('作用域'), retestText);
+  check('续学卡里没有任何数字（次数/作答都不出，Invariant 4）', !/\d/.test(retestText), retestText);
+  check('续学卡不含作答原文（私人证据留在对话里）', !retestText.includes('又答错了'), retestText);
+  // 点击 = 取景：和概念卡同一套交互
+  const items = deepAll(doc.getElementById('panelBody'), 'retest-item');
+  if (items.length) items[0].onclick();
+  check('点续学卡某一项把镜头对准那个概念', st.camera?.conceptId === 'closures', JSON.stringify(st.camera));
+  // 没有候选：不摆卡（没有就不打扰）
+  st.notebook = { ...sampleNotebook(), retests: [] };
+  st.camera = null;
+  rp();
+  check('没有回马枪候选时不摆续学卡', deepAll(doc.getElementById('panelBody'), 'retest-card').length === 0);
+  check('续学卡这条链路无异常', errors.length === 0, errors.join(' | '));
+
+  // 32b. 判定记录：JEV 留痕的可读出口（审计视图，只出词不出数字）
+  st.notebook = {
+    ...sampleNotebook(),
+    decisions: [
+      { kind: 'error', at: '2026-10-07T03:00:00.000Z', error: 'timeout' },
+      { kind: 'decision', at: '2026-10-07T02:00:00.000Z', mode: 'faux', n: 1, verdict: 'needs_review' },
+      { kind: 'decision', at: '2026-10-07T01:00:00.000Z', mode: 'real', n: 1, verdict: 'selected' },
+    ],
+  };
+  rp();
+  const titlesD = deepAll(doc.getElementById('panelBody'), 'panel-section-title').map((t) => t.textContent);
+  check('有判定记录时出现「判定记录」节', titlesD.includes('判定记录'), titlesD.join(' | '));
+  const decText = (deepAll(doc.getElementById('panelBody'), 'state-note') || []).map((n) => n.textContent).join('\n');
+  check('判定记录节说明边界（审计视图，不是掌握度）', decText.includes('审计视图'), decText.slice(0, 120));
+  check('判定记录显示结论词：判定失败 / 有待复核 / 判定通过',
+    decText.includes('判定失败') && decText.includes('有待复核') && decText.includes('判定通过'), decText);
+  check('判定记录显示模式词：真实判定 / 测试桩', decText.includes('真实判定') && decText.includes('测试桩'), decText);
+  check('判定记录不渲染置信度数字（probability/value 不进可见面）',
+    !decText.includes('probability') && !/\b0\.\d+\b/.test(decText), decText);
+  // 没有记录：不摆节
+  st.notebook = { ...sampleNotebook(), decisions: [] };
+  rp();
+  check('没有判定记录时不摆「判定记录」节',
+    !deepAll(doc.getElementById('panelBody'), 'panel-section-title').some((t) => t.textContent === '判定记录'));
+  check('判定记录这条链路无异常', errors.length === 0, errors.join(' | '));
+
+  // 32c. 损坏文件取证：体检点名之后原件拿得到（只读下载，字节不重写）
+  responses.set('GET /api/health', () =>
+    json({
+      ok: false, dataDir: '/tmp/x', notebooks: 1,
+      corruptFiles: ['nb-test/chat.json'], orphanArtifacts: [], missingHtml: [], quarantined: 0,
+    }));
+  responses.set('GET /api/health/corrupt?path=nb-test%2Fchat.json', () =>
+    new Response('{ 半截 JSON ← 原样取证', { status: 200, headers: { 'Content-Type': 'application/octet-stream' } }));
+  st.notebook = { ...sampleNotebook(), decisions: [], retests: [] };
+  st.panelTab = 'learn';
+  rp();
+  const backupRow32 = deepAll(doc.getElementById('panelBody'), 'backup-row')
+    .find((r) => Array.from(r.children).some((b) => b.textContent === '体检数据'));
+  const healthBtn32 = Array.from(backupRow32.children).find((b) => b.textContent === '体检数据');
+  healthBtn32.onclick();
+  await new Promise((r) => setTimeout(r, 20));
+  const rows32 = deepAll(doc.getElementById('panelBody'), 'health-corrupt-row');
+  check('体检点名损坏文件后每行给「下载原件」键',
+    rows32.length === 1 && rows32[0].textContent.includes('nb-test/chat.json') && rows32[0].textContent.includes('下载原件'),
+    rows32.map((r) => r.textContent).join(' | '));
+  const reqBeforeCorrupt = requests.length;
+  const dlBtn = rows32[0] ? deepAll(rows32[0], 'btn')[0] : null;
+  dlBtn?.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  check('点「下载原件」真的请求了取证接口',
+    requests.slice(reqBeforeCorrupt).some((k) => k.startsWith('GET /api/health/corrupt?path=')), requests.slice(reqBeforeCorrupt).join(','));
+  check('下载损坏文件成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已下载损坏文件原件')));
+  check('损坏取证这条链路无异常', errors.length === 0, errors.join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);
