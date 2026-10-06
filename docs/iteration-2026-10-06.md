@@ -407,3 +407,16 @@ noul 判 `{status: needs_review, value: false, probability: 0.28}`——key 有�
 维持：对话压缩摘要 / 语义检索、TTS/PDF/鉴权、a11y 专项、损坏 JSON 处置、PS1 移植。
 待拍板：JEV 后续接哪些判定点（建议先接答案判定 noul 与制品证据支撑 claim-to-source）；
 key 由用户在本机环境变量/凭据里配（README「判定外包」一节有变量表），不贴聊天。
+
+## 26. 接线（按用户拍板）：两个判定点已接通
+
+用户回复「按你意见来」后，把两个典型场合接进使用指引（只动 prompt 与工具描述，底层零改动）：
+- **判对/判错**：作答回到模型手里、要判断是否真的展示了概念 X 的理解时，把题面/作答原文/该概念
+  判据放进 observations 调 noul；
+- **制品证据支撑**：判断「制品证据是否支撑他会了」时，先把 read_artifact_evidence 读回的具体记录
+  放进 observations 再调 noul；
+- 同时写死边界：**别把每个步骤都外包**（其余判定照旧自己来）；没配 key 时工具明说跳过、退回
+  模型自行判断——不假装判过。
+- run.mjs +4（13f：prompt 与工具描述都点名两场合 + 先读证据再判/缺证据判 unknown），
+  test:all = run 514 / unit 92 / contract 110 / web-smoke 619，全绿。
+- 回马枪候选选择（choice）留待需要时一行接上。

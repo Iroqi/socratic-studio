@@ -2578,6 +2578,17 @@ const badJudge = await noKeySession.execTool(TOOL_NAMES.JEV_JUDGE, {
 check('坏输入（空 instructions）→ ok:false + kind=validation',
   badJudge.ok === false && badJudge.decision_error === 'validation');
 
+// —— 13f. 使用指引接线：判对/判错 与 制品证据支撑 两个典型场合点名
+const jevDesc = jevTool.description;
+check('工具描述点名两个典型场合（判对/判错 + 证据支撑 + read_artifact_evidence 原料）',
+  /判对\/判错/.test(jevDesc) && /证据支撑/.test(jevDesc) && /read_artifact_evidence/.test(jevDesc));
+check('工具描述提醒别过度外包（其余判定照旧自己来）', /别把每个步骤都外包/.test(jevDesc));
+const jevPrompt = buildSystemPrompt({ topic: 't', chat: { messages: shortHistory } });
+check('system prompt 点名 jev_judge 两个场合（判对/判错、证据支撑）',
+  jevPrompt.includes('jev_judge') && jevPrompt.includes('判对/判错') && jevPrompt.includes('证据支撑'));
+check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据判 unknown」',
+  jevPrompt.includes('read_artifact_evidence') && jevPrompt.includes('缺证据就判 unknown'));
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

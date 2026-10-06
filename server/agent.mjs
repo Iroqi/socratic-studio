@@ -526,7 +526,7 @@ export function buildTools() {
     {
       name: TOOL_NAMES.JEV_JUDGE,
       description:
-        '把「判定类」决策外包给专用决策模型（JEV）：判对/判错、证据是否支撑某个主张、在候选中选下一步。你负责**提供证据和标准**，它负责**只做判断**：给它目标（goal）、边界（permissions）、证据（observations / recent_steps，作答原文、制品内容、工具回执都算）、和逐题的判定标准（instructions + criteria），拿回 value + probability。三条纪律：① probability 只是置信度、不是正确率也不是 confidence，它把题判成 needs_review 时不要硬拗、要补证据或问学习者；② 证据不足就如实 unknown/needs_review，低概率硬凑比不判更糟；③ 每次判定都会留痕（输入输出与模式进笔记本的 decision-journal）。**手续类决策绝不外包**：状态转移合法性、证据归一化、自报未验证打标、一次一级，这些还是你自己的活。没有配置 key 时工具会明说并跳过，你退回自行判断，不假装判过。',
+        '把「判定类」决策外包给专用决策模型（JEV）：判对/判错、证据是否支撑某个主张、在候选中选下一步。你负责**提供证据和标准**，它负责**只做判断**：给它目标（goal）、边界（permissions）、证据（observations / recent_steps，作答原文、制品内容、工具回执都算）、和逐题的判定标准（instructions + criteria），拿回 value + probability。**两个典型场合**：① 判对/判错——作答回到你手里、要判断它是否真的展示了概念 X 的理解时，把题面/作答原文/该概念的判据放进 observations，调 noul；② 证据支撑——要判断「制品证据是否支撑他会了」的主张时，先把 read_artifact_evidence 读回来的具体记录放进 observations，再调 noul。**别把每个步骤都外包**，其余判定照旧自己来。三条纪律：① probability 只是置信度、不是正确率也不是 confidence，它把题判成 needs_review 时不要硬拗、要补证据或问学习者；② 证据不足就如实 unknown/needs_review，低概率硬凑比不判更糟；③ 每次判定都会留痕（输入输出与模式进笔记本的 decision-journal）。**手续类决策绝不外包**：状态转移合法性、证据归一化、自报未验证打标、一次一级，这些还是你自己的活。没有配置 key 时工具会明说并跳过，你退回自行判断，不假装判过。',
       parameters: Type.Object({
         state: Type.Object({
           goal: Type.String({ description: '这次判定要支持的目标/主张' }),

@@ -112,6 +112,12 @@ auth 解析顺序：显式 `apiKey` → 已存的 credential → 环境变量。
 比不判更糟；**判定全留痕**——每次调用（含失败）写进 `data/notebooks/<id>/decision-journal.json`
 （完整输入 + 输出 + 模式，key 绝不进账本；export 白名单里没有它，账本是本地审计）。
 
+**已接线的两个典型场合**（prompt 与工具描述点名，模型在对应环节调 `jev_judge`，底层无需再动）：
+① **判对/判错**——学习者作答回到模型手里、要判断是否真的展示了概念 X 的理解时，把题面/作答原文/
+该概念判据放进 `observations` 调 noul；② **制品证据支撑**——要判断「制品证据是否支撑他会了」时，
+先把 `read_artifact_evidence` 读回的具体记录放进 `observations` 再调 noul。没配 key 时工具明说并跳过、
+退回模型自行判断。回马枪候选选择（choice）留待需要时一行接上。
+
 ---
 
 > 模型层的上游文档看 `node_modules/@earendil-works/pi-ai/README.md`（随依赖一起装，永远和实际
