@@ -244,6 +244,21 @@ html, body {
 #exportNotesBtn { margin-left: auto; }
 #togglePanel { margin-left: auto; }
 #exportNotesBtn:not(.hidden) ~ #togglePanel { margin-left: 0; }
+/* 流内搜索：藏在顶栏一角，词一多才显眼。清词用各浏览器原生 search 的 ✕。 */
+.desk-search {
+  flex: 0 1 150px; min-width: 90px;
+  height: 28px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-soft); color: var(--ink);
+  font: inherit; font-size: 12.5px;
+  margin-left: 6px;
+}
+.desk-search::placeholder { color: var(--ink-3); }
+.desk-search-none {
+  flex: 0 0 auto;
+  color: var(--ink-3); font-size: 12px;
+  white-space: nowrap; margin-left: 6px;
+}
 /* 回看那一条：只有镜头被钉住时才出现，说清停在哪儿 + 一个回到最新。
    min-width:0 + 省略号：窄屏顶栏就 300 多 px，这行宁可截尾也不许把两个键挤出屏幕。 */
 .desk-watch {

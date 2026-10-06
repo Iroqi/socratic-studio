@@ -66,6 +66,9 @@
               <button class="btn btn-ghost btn-sm" id="deskWatchRelease" type="button">回到最新</button>
             </span>
             <button class="btn btn-ghost btn-sm hidden" id="exportNotesBtn" type="button">导出笔记</button>
+            <!-- 流内搜索：长本子回找旧轮用的。只过滤这一本对话流里的拍，不动任何数据。 -->
+            <input type="search" id="deskSearch" class="desk-search" placeholder="在这本里找…" aria-label="在对话流里搜索" autocomplete="off" />
+            <span class="desk-search-none hidden" id="deskSearchNone">没有匹配的内容</span>
             <!-- 面板收起/展开：放右上角，收起后按钮本身不消失 -->
             <button class="icon-btn" id="togglePanel" title="展开 / 收起右栏" aria-label="展开 / 收起右栏">◧</button>
           </nav>

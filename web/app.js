@@ -1174,9 +1174,15 @@ function resetDesk() {
   for (const n of [...kids(deskRootEl())]) {
     if (n.dataset?.sceneId) n.remove();
   }
-  // 顶栏那两个键跟着台面走：上一份讲义的导出键不许漂到这一份上。
+  // 顶栏那几个键跟着台面走：上一份讲义的导出键不许漂到这一份上。
   // 放在这里而不是每个调用点各写一遍——清台就是回到"什么都没有"。
   updateDeskChrome();
+  // 搜索词也是台面的一部分：新开场不是"继续找旧轮的词"
+  const ds = $('deskSearch');
+  if (ds) {
+    ds.value = '';
+    applyDeskFilter();
+  }
 }
 
 /**
@@ -1553,6 +1559,8 @@ function appendChatTurn(turn, msg, sceneId = null) {
     const target = narrationFlow(flow);
     target.append(proseBlock(msg.content, undefined, proseClassFor(target, flow)));
   }
+  // 搜索开着的时候，新落进来的拍也要过同一道过滤，不能"漏网显示"
+  if ($('deskSearch')?.value?.trim()) applyDeskFilter();
   return flow;
 }
 
@@ -2373,6 +2381,26 @@ function deepByClass(node, cls) {
   };
   walk(node);
   return out;
+}
+
+/**
+ * 流内搜索：把不含这个词的拍藏起来（display:none），不动任何数据。
+ * 空词 = 全显。搜索结果不计数——"找到几条"这种数字既不是掌握度也不是进度，
+ * 但没必要给（搜索是找东西，不是计量）；只在不匹配时给一句说明。
+ */
+function applyDeskFilter() {
+  const box = $('deskSearch');
+  if (!box) return;
+  const q = box.value.trim().toLowerCase();
+  const root = deskRootEl();
+  if (!root) return;
+  let visible = 0;
+  for (const beat of deepByClass(root, 'beat')) {
+    const hit = !q || (beat.textContent || '').toLowerCase().includes(q);
+    beat.style.display = hit ? '' : 'none';
+    if (hit) visible += 1;
+  }
+  $('deskSearchNone')?.classList.toggle('hidden', !q || visible > 0);
 }
 
 // ─────────────────────────────────────────────── 待办 / 后台任务面板
@@ -4211,6 +4239,10 @@ function bindEvents() {
     }
   };
 
+  // 流内搜索：长本子回找旧轮。纯过滤——把不含这个词的拍藏起来，不动任何数据。
+  // 用 oninput 属性绑定，桩测试可以直接调 handler；真浏览器里两者等价。
+  $('deskSearch').oninput = () => applyDeskFilter();
+
   const ta = $('input');
   ta.addEventListener('input', autosize);
   ta.addEventListener('keydown', (e) => {
@@ -4286,6 +4318,12 @@ function bindEvents() {
     if (e.key === 'Escape') {
       $('configModal')?.classList.add('hidden');
       $('simpleModal')?.classList.add('hidden');
+      // 搜索框里按 Esc = 清词回全显（搜索态也归 Esc 管，同一个键同一个语义）
+      const ds = $('deskSearch');
+      if (ds && ds.value) {
+        ds.value = '';
+        applyDeskFilter();
+      }
       return;
     }
     if (e.key !== 'Tab') return;

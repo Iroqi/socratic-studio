@@ -850,6 +850,30 @@ check('工具卡在流里恰好两张（实时阶段无重影）', deepAll(desk(
 check('本轮道具上台，两件都在流里', deepAll(desk(), 'artifact').length === 2, `${deepAll(desk(), 'artifact').length} 件`);
 check('实时出题不再复制题干上下文', deepAll(desk(), 'ask-context').length === 0);
 
+// --- 流内搜索：长本子回找旧轮（只藏拍，不动任何数据） ---
+console.log('3b2. 流内搜索：把不含这个词的拍藏起来，清空就全显');
+const searchBox = doc.getElementById('deskSearch');
+check('顶栏有流内搜索框（type=search；占位文案钉在 index.html 源码）',
+  Boolean(searchBox) && searchBox.type === 'search' && html.includes('在这本里找'), searchBox ? searchBox.type : '没有这个元素');
+const beatsVisibleBefore = deepAll(doc.getElementById('deskInner'), 'beat').filter((b) => b.style?.display !== 'none');
+searchBox.value = '外层 return';
+searchBox.oninput();
+const visibleAfter = deepAll(doc.getElementById('deskInner'), 'beat').filter((b) => b.style?.display !== 'none');
+check('搜索把不含词的拍藏起来（可见的都是命中拍）',
+  visibleAfter.length > 0 && visibleAfter.length < beatsVisibleBefore.length && visibleAfter.every((b) => b.textContent.includes('外层 return')),
+  `${visibleAfter.length}/${beatsVisibleBefore.length} 拍可见`);
+searchBox.value = '这个绝对不在的串';
+searchBox.oninput();
+check('搜不到时给一句说明（文案钉在源码，桩不解析文本节点）',
+  !doc.getElementById('deskSearchNone').classList.contains('hidden') && html.includes('没有匹配的内容'), '说明没亮或文案丢了');
+check('搜不到时所有拍都藏起来', deepAll(doc.getElementById('deskInner'), 'beat').every((b) => b.style?.display === 'none'), '还有漏网的');
+searchBox.value = '';
+searchBox.oninput();
+check('清空词 = 全显（搜索可退出、不留残影）',
+  deepAll(doc.getElementById('deskInner'), 'beat').every((b) => b.style?.display !== 'none') && doc.getElementById('deskSearchNone').classList.contains('hidden'),
+  '没恢复全显');
+check('搜索这一节无异常', errors.length === 0, errors.join(' | '));
+
 // --- 收尾回归：turn_end 不许抹掉已插入的卡片 ---
 // 旧 bug：done/turn_end 里 prose.innerHTML = … 把 t.blocks 里已插入的节点全清了，
 // 表现是"一轮结束后道具不见了""前面几步连工具卡都不留"。

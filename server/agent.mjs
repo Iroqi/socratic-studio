@@ -9,6 +9,7 @@
 import { validateToolCall, Type } from '@earendil-works/pi-ai';
 import { topoSortConcepts, GraphValidationError, validateGraph } from './graph.mjs';
 import { appendPatch, applyPatchToGraph, patchError, stateWord, saveSceneState } from './store.mjs';
+import { MAX_DIALOGUE_MESSAGES } from './config.mjs';
 import { saveNote } from './notes.mjs';
 import {
   PHASE_LABELS,
@@ -1575,6 +1576,29 @@ function answerText(payload) {
 }
 
 /**
+ * 对话治理：长命笔记本的对话只保留"开头一句 + 最近一段"喂给模型。
+ *
+ * 为什么：对话是**最近发生的事**，不是模型的工作记忆——工作记忆是 Learning Graph +
+ * Progress + 笔记（prompt.mjs 每回合注入）。全量历史一次喂给模型，长笔记本会越背越重，
+ * 违背 runtime.md「抗上下文漂移靠缩短上下文，不靠加强记忆」；会话长度上限只约束单轮，
+ * 跨会话的旧对话要靠这一刀收住。窗口只作用于模型输入，**落盘的对话一字不少**。
+ *
+ * 锚点：开头第一条用户消息（学习目标/起点）。别的旧消息都可以让位，它不能让——
+ * 模型得知道自己这一本在学什么，哪怕翻了场。
+ */
+export function windowHistory(history, cap = MAX_DIALOGUE_MESSAGES) {
+  if (!history || !history.length) return [];
+  if (history.length <= cap) return history;
+  const firstUser = history.find((m) => m.role === 'user');
+  const rest = history.slice(-(cap - (firstUser ? 1 : 0)));
+  const out = firstUser ? [firstUser] : [];
+  for (const m of rest) {
+    if (m !== firstUser) out.push(m); // 锚点已经在窗口里了就别重复
+  }
+  return out;
+}
+
+/**
  * 把落盘的对话还原成模型看得懂的样子。
  *
  * 题卡必须还原成 assistant 的 toolCall + toolResult：以前这里只回放正文，于是
@@ -1686,7 +1710,7 @@ export async function runTurn({
   onSession?.(session);
   const tools = buildTools();
 
-  const messages = historyToModelMessages(history, model);
+  const messages = historyToModelMessages(windowHistory(history), model);
 
   const newMessages = [];
   const runOptions = {

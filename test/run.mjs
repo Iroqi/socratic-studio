@@ -2351,6 +2351,49 @@ const rr2 = store.restoreQuarantined();
 check('原位已有新文件时放回让路（不覆盖，留在隔离区）', rr2.kept.some((m) => m.id === 'orphan-art' && m.reason?.includes('让路')), JSON.stringify(rr2.kept));
 check('让路后新文件原样还在', fs.existsSync(path.join(orphanDir, 'index.html')));
 
+// ─────────────────────────────────────── 12e. 对话治理：模型输入的上下文窗口
+
+section('12e. 对话治理：模型输入只保留开头 + 最近一段，落盘一字不少');
+
+const { windowHistory } = await import('../server/agent.mjs');
+const { MAX_DIALOGUE_MESSAGES } = await import('../server/config.mjs');
+// buildSystemPrompt 已在第 7b 节正名导入（同一模块同一份缓存），这里直接用
+
+// 窗口只在历史超长时启用
+const shortHistory = [
+  { role: 'user', content: '我要学闭包', timestamp: 1 },
+  { role: 'assistant', content: '好，先讲作用域', timestamp: 2 },
+  { role: 'user', content: '懂', timestamp: 3 },
+];
+check('短历史原样通过（窗口不动它）', windowHistory(shortHistory) === shortHistory, 'window 返回了别的对象');
+
+// 超长历史：保留开头第一条用户消息（锚点）+ 最近一段
+const longHistory = [];
+for (let i = 0; i < 60; i += 1) {
+  longHistory.push(i % 2 === 0 ? { role: 'user', content: `第 ${i} 句`, timestamp: i } : { role: 'assistant', content: `答 ${i}`, timestamp: i });
+}
+const windowed = windowHistory(longHistory);
+check('超长历史被收到窗口上限', windowed.length === MAX_DIALOGUE_MESSAGES, `${windowed.length}/${MAX_DIALOGUE_MESSAGES}`);
+check('锚点保留：开头那条用户消息一定在窗口里', windowed[0] === longHistory[0], windowed[0]?.content);
+check('最近的对话在窗口里', windowed[windowed.length - 1] === longHistory[longHistory.length - 1], windowed[windowed.length - 1]?.content);
+check('锚点不重复（窗口里没有两条"第 0 句"）', windowed.filter((m) => m === longHistory[0]).length === 1, '重复了');
+check('窗口里没有中间那些旧轮', !windowed.some((m) => m === longHistory[10]), '中间轮溜进来了');
+
+// 锚点恰好也在最近一段里时不重复
+const overlapHistory = [];
+for (let i = 0; i < 45; i += 1) {
+  overlapHistory.push({ role: i === 0 ? 'user' : (i % 2 ? 'assistant' : 'user'), content: `m${i}`, timestamp: i });
+}
+const w2 = windowHistory(overlapHistory);
+check('锚点与最近段重叠时不重复计', w2.length === MAX_DIALOGUE_MESSAGES && w2.filter((m) => m === overlapHistory[0]).length === 1, String(w2.length));
+
+// 窗口化是模型输入侧的事：buildSystemPrompt 只在窗口启用时明说，模型不会假装记得窗口外的旧轮
+const slimPrompt = buildSystemPrompt({ topic: 't', chat: { messages: shortHistory } });
+check('短对话时 prompt 不出现窗口说明（不吓模型）', !slimPrompt.includes('对话窗口说明'), '短对话也带了窗口说明');
+const fatPrompt = buildSystemPrompt({ topic: 't', chat: { messages: longHistory } });
+check('窗口启用时 prompt 明说旧轮不在上下文（报告诚实）', fatPrompt.includes('对话窗口说明') && fatPrompt.includes('不要凭印象编造'), '没说明');
+check('窗口说明是"去笔记/图谱找"，不是让模型硬想', fatPrompt.includes('笔记') && fatPrompt.includes('图谱'), '没指向持久记忆');
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

@@ -6,7 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { RULES_DIR } from './config.mjs';
+import { RULES_DIR, MAX_DIALOGUE_MESSAGES } from './config.mjs';
 import { topoSortConcepts } from './graph.mjs';
 import { stateWord } from './store.mjs';
 import { renderSceneSnapshot } from './scene.mjs';
@@ -283,5 +283,16 @@ export function renderStateSnapshot(notebook) {
 }
 
 export function buildSystemPrompt(notebook) {
-  return `${loadRulesText()}\n\n${APP_ADAPTER}\n${renderStateSnapshot(notebook)}`;
+  const parts = [loadRulesText(), APP_ADAPTER, renderStateSnapshot(notebook)];
+  // 对话治理必须明说：窗口只作用于模型输入，落盘的对话一字不少，但**模型读不到窗口外的旧轮**。
+  // 不说明白，模型可能凭印象编造学习者早先说过的话；要回想，先读「笔记」页与图谱。
+  if ((notebook.chat?.messages?.length || 0) > MAX_DIALOGUE_MESSAGES) {
+    parts.push(
+      '\n===== 对话窗口说明 =====\n\n' +
+        '本会话的对话在模型输入侧做了窗口化：只保留开头一句（学习起点）与最近一段，' +
+        '更早的旧轮不在你的上下文里。那些内容**一字未删**，都在「笔记」页与概念图谱里。' +
+        '需要回想早先说过的话时，先读笔记/图谱，不要凭印象编造。',
+    );
+  }
+  return parts.join('\n\n');
 }
