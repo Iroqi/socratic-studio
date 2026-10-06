@@ -1194,3 +1194,91 @@ function buildSummarySections(id) {
 
   return { title, goal, topic, background, concepts: conceptRows, notes, artifacts };
 }
+
+// ---------------------------------------------------------------- 对话记录导出（带走过程）
+
+/**
+ * 把这一本从头到尾的对话导出成一份人可读的 Markdown——带走的是**过程**。
+ *
+ * 和既有带走物分工：整本导出是 JSON（完整备份）、小结是结论、笔记是结构化讲义、
+ * 制品是作品——唯独"当时是怎么聊的"没有可读出口。这份文件补上那一环：
+ * 按时间线合并对话消息与笔记（与 renderThread 同序，讲义落在讲到它的那一段），
+ * 场头在 sceneId 变化处插入（场名取自 scene.current / scene.log，找不到就「第 n 场」）。
+ * 消息按场内的拍号排（和台面上的拍号同一套计数），题卡还原题干 / 选项 / 你的作答。
+ *
+ * Invariant 4：这里只有过程，没有进度——状态、比率、百分比一律不出现；
+ * 拍号与时间戳是导航与元数据，不是学习量。
+ */
+export function exportConversationMarkdown(id) {
+  const nb = getNotebook(id);
+  const title = String(nb.title || '学习笔记');
+  const messages = Array.isArray(nb.chat?.messages) ? nb.chat.messages : [];
+  const notes = Array.isArray(nb.notes) ? nb.notes : [];
+  const lines = [`# ${title} — 对话记录`, '', `> 导出于 ${fmtDateTime(Date.now())}`, ''];
+  if (!messages.length && !notes.length) {
+    lines.push('（这一本还没有对话。）');
+    return lines.join('\n');
+  }
+
+  const sceneNames = new Map();
+  for (const s of [nb.scene?.current, ...(nb.scene?.log || [])]) {
+    if (s?.id) sceneNames.set(s.id, String(s.title || '').trim() || null);
+  }
+
+  const items = [
+    ...messages.map((m) => ({ ts: Number(m.timestamp) || 0, kind: 'msg', m })),
+    ...notes.map((n) => ({ ts: Date.parse(n.createdAt || '') || 0, kind: 'note', n })),
+  ].sort((a, b) => a.ts - b.ts);
+
+  const retired = new Map((nb.artifacts || []).filter((a) => a.retiredAt).map((a) => [a.id, true]));
+
+  let currentSceneId = null;
+  let sceneNo = 0;
+  let beat = 0;
+  for (const item of items) {
+    const sceneId = item.kind === 'msg' ? item.m.sceneId || null : item.n.sceneId || null;
+    // 场头只在场切换处插入；拍号是整份时间线的全局序号（不是台面上按场重置的那套），
+    // 这样导出文档里不会有第二个「第 1 拍」，按时间往回翻永远找得到唯一位置。
+    if (sceneId && sceneId !== currentSceneId) {
+      sceneNo += 1;
+      currentSceneId = sceneId;
+      lines.push('', `## 第 ${sceneNo} 场：${sceneNames.get(sceneId) || `第 ${sceneNo} 场`}`, '');
+    }
+    if (item.kind === 'note') {
+      const n = item.n;
+      lines.push('', `> 笔记：${n.title || '未命名笔记'}`, '');
+      if (n.summary) lines.push(`> ${n.summary}`);
+      continue;
+    }
+    beat += 1;
+    const m = item.m;
+    const ts = Number(m.timestamp) || 0;
+    const head = ts ? `（${fmtDateTime(ts)}）` : '';
+    const role = m.role === 'assistant' ? '老师' : '我';
+    const content = String(m.content || '').trim();
+    lines.push('', `### 第 ${beat} 拍${head}`.trim(), '', `**${role}**：${content || '（这条没有正文）'}`);
+    for (const q of Array.isArray(m.questions) ? m.questions : []) {
+      lines.push('', `> 题卡（${q.header || '提问'}）：${q.question}`);
+      if (q.options?.length) lines.push(`> 选项：${q.options.map((o) => o.label).join(' · ')}`);
+      const ans = q.answer;
+      if (ans?.skipped) lines.push('> 你的回答：跳过');
+      else if (ans?.selected?.length) {
+        const text = String(ans.text || '').trim();
+        lines.push(`> 你的回答：${ans.selected.join('、')}${text ? ` —— ${text}` : ''}`);
+      } else lines.push('> 你的回答：（未作答）');
+    }
+    for (const a of Array.isArray(m.artifacts) ? m.artifacts : []) {
+      const status = retired.has(a.id) ? '已收起' : '在台上';
+      lines.push(`> 制品：${a.title || '未命名制品'}（${ARTIFACT_KIND_WORDS[a.kind] || '制品'}）—— ${status}`);
+    }
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+function fmtDateTime(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}

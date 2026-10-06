@@ -2713,6 +2713,66 @@ check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据
     })(), '');
 }
 
+// ─────────────────────────────────────── 12i. 对话记录导出（带走过程）
+{
+  // 与小结的分工：小结是结论，对话是过程。过程 = 消息 + 题卡（题干/选项/作答）+ 制品 + 笔记，
+  // 按时间线还原，场头在 sceneId 变化处插入。
+  const convId = store.createNotebook({ title: '闭包学习', topic: '闭包', goal: null, pace: 'normal' }).id;
+  const t0 = new Date('2026-10-06T12:00:00+08:00').getTime();
+  // 开场：场景带场名（openScene 来自 scene.mjs，store.saveSceneState 落盘）
+  const { openScene } = await import('../server/scene.mjs');
+  store.saveSceneState(convId, openScene(store.readSceneState(convId), { title: '作用域实战', conceptId: null }));
+  store.appendChat(convId, [{ role: 'user', content: '我想弄明白闭包', timestamp: t0, attachments: [] }]);
+  store.appendChat(convId, [{
+    role: 'assistant',
+    content: '先看作用域：函数记得它出生的环境。',
+    timestamp: t0 + 60000,
+    sceneId: 'scene-01',
+    attachments: [],
+    questions: [{
+      questionId: 'q1', header: '探针', question: '外层函数 return 之后，里层还能读到它当时的变量吗？',
+      options: [{ label: '能读到', description: '里层握着绑定' }, { label: '读不到' }],
+      answer: { selected: ['能读到'], text: '函数记住了环境', skipped: false },
+    }],
+    artifacts: [{ id: 'art-x', title: '闭包小剧场', kind: 'interactive', rel: 'artifacts/art-x/index.html' }],
+  }]);
+  // saveNote 强制 createdAt=now（会排到对话末尾），这里直接写盘控制时间戳：
+  // 笔记落在第 1 拍与第 2 拍之间，验证"按时间线插入，不单独堆到末尾"。
+  fs.writeFileSync(path.join(tmpRoot, 'notebooks', convId, 'notes.json'),
+    JSON.stringify({ version: 1, notes: [{ id: 'note-1', title: '闭包', summary: '函数带着词法环境跑', key_points: [], example: '', concepts: [], createdAt: new Date(t0 + 45000).toISOString() }], updated_at: new Date().toISOString() }));
+  const convMd = store.exportConversationMarkdown(convId);
+  check('对话导出带标题与导出时间、按场分节',
+    convMd.includes('# 闭包学习 — 对话记录') && convMd.includes('> 导出于 ') && convMd.includes('## 第 1 场：作用域实战'),
+    convMd.split('\n').filter((l) => l.startsWith('#')).join(' | '));
+  check('角色标签：我 / 老师，消息按拍号排、带时间',
+    convMd.includes('**我**：我想弄明白闭包') && convMd.includes('**老师**：先看作用域') &&
+    convMd.includes('### 第 1 拍（2026-10-06 12:00') && convMd.includes('### 第 2 拍（2026-10-06 12:01'),
+    convMd.split('\n').filter((l) => l.includes('拍')).join(' | '));
+  check('题卡还原题干 / 选项 / 作答（含补充文字），未作答要如实说',
+    convMd.includes('> 题卡（探针）：外层函数 return 之后，里层还能读到它当时的变量吗？') &&
+    convMd.includes('> 选项：能读到 · 读不到') &&
+    convMd.includes('> 你的回答：能读到 —— 函数记住了环境'),
+    convMd.split('\n').filter((l) => l.includes('题卡') || l.includes('选项') || l.includes('回答')).join(' | '));
+  check('制品按在台上/已收起标注（软退役语义不变）',
+    convMd.includes('> 制品：闭包小剧场（交互物件）—— 在台上'),
+    convMd.split('\n').filter((l) => l.includes('制品')).join(' | '));
+  check('笔记落在时间线上（与对话同序，不单独堆到末尾）',
+    (() => {
+      const noteLine = convMd.indexOf('> 笔记：闭包');
+      const beat1 = convMd.indexOf('### 第 1 拍');
+      const beat2 = convMd.indexOf('### 第 2 拍');
+      return noteLine > beat1 && noteLine < beat2;
+    })(), '');
+  check('对话导出没有进度数字 / 比率 / 百分比指纹（Invariant 4）',
+    !/%|掌握率|进度条|分数|星级|\d+\s*个里/.test(convMd), convMd.split('\n').filter((l) => l.includes('拍')).join(' / '));
+  check('空对话只给标题与一句说明，不摆空架子',
+    (() => {
+      const bareMd = store.exportConversationMarkdown(
+        store.createNotebook({ title: '空白本', topic: '', goal: null, pace: 'normal' }).id);
+      return bareMd.includes('（这一本还没有对话。）') && !bareMd.includes('### 第 ');
+    })(), '');
+}
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

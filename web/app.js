@@ -3270,16 +3270,26 @@ function renderNotesPanel(body) {
 function renderBackupPanel(body) {
   if (!state.notebook) return;
   body.append(el('div', 'panel-section-title', '整本备份'));
-  const row = el('div', 'backup-row');
+  // 两行各有各的语义：上行是数据（导出/导入/体检），下行是带走物（小结 / 对话）。
+  // 都复用 backup-row（flex-wrap），测试按内容定位，不按行号。
+  const dataRow = el('div', 'backup-row');
   const exportBtn = el('button', 'btn btn-ghost btn-sm', '导出整本');
-  const summaryBtn = el('button', 'btn btn-ghost btn-sm', '导出小结');
-  const summaryHtmlBtn = el('button', 'btn btn-ghost btn-sm', '小结网页版');
   const importBtn = el('button', 'btn btn-ghost btn-sm', '导入整本');
   const healthBtn = el('button', 'btn btn-ghost btn-sm', '体检数据');
-  row.append(exportBtn, summaryBtn, summaryHtmlBtn, importBtn, healthBtn);
-  body.append(row);
+  dataRow.append(exportBtn, importBtn, healthBtn);
+  body.append(dataRow);
   body.append(
     el('div', 'backup-hint', '导出把这一整本打包成一个 JSON 文件；导入把备份还原成一本新学习，原来的学习不动。'),
+  );
+
+  const takeawayRow = el('div', 'backup-row');
+  const summaryBtn = el('button', 'btn btn-ghost btn-sm', '导出小结');
+  const summaryHtmlBtn = el('button', 'btn btn-ghost btn-sm', '小结网页版');
+  const conversationBtn = el('button', 'btn btn-ghost btn-sm', '导出对话');
+  takeawayRow.append(summaryBtn, summaryHtmlBtn, conversationBtn);
+  body.append(takeawayRow);
+  body.append(
+    el('div', 'backup-hint', '小结是这一本的结论，对话是这一本的过程——都能带走。'),
   );
   const healthResult = el('div', 'health-result hidden');
   body.append(healthResult);
@@ -3351,6 +3361,30 @@ function renderBackupPanel(body) {
       toast(`导出小结网页版失败：${err.message}`, true);
     } finally {
       summaryHtmlBtn.disabled = false;
+    }
+  };
+
+  // 导出对话：把这一本从头到尾的对话（题卡 / 作答 / 制品 / 笔记按时间线还原）导出成 Markdown。
+  // 与小结的分工：小结是结论，对话是过程。这里只有过程与时间戳，没有状态数字（Invariant 4）。
+  conversationBtn.onclick = async () => {
+    try {
+      conversationBtn.disabled = true;
+      const { markdown } = await api('GET', `/api/notebooks/${state.notebook.id}/conversation`);
+      const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = el('a');
+      a.href = url;
+      const slug = String(state.notebook.title || '学习').replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'notebook';
+      a.download = `socratic-${slug}-对话.md`;
+      document.body.append(a);
+      if (typeof a.click === 'function') a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast('已导出对话');
+    } catch (err) {
+      toast(`导出对话失败：${err.message}`, true);
+    } finally {
+      conversationBtn.disabled = false;
     }
   };
 

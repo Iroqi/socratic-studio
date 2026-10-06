@@ -666,6 +666,15 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { markdown: store.summaryMarkdown(id) });
     }
 
+    // 对话记录：把这一本从头到尾的对话导出成可读的 Markdown——带走的是过程。
+    // 与小结的分工：小结是结论，对话是过程（题卡 / 作答 / 制品 / 笔记按时间线还原）。
+    // Invariant 4 在服务端就守住：只有过程与时间戳，没有状态数字、比率、百分比。
+    m = /^\/api\/notebooks\/([^/]+)\/conversation$/.exec(pathname);
+    if (m && method === 'GET') {
+      const id = decodeURIComponent(m[1]);
+      return sendJson(res, 200, { markdown: store.exportConversationMarkdown(id) });
+    }
+
     // ---------- 上传素材
     m = /^\/api\/notebooks\/([^/]+)\/uploads$/.exec(pathname);
     if (m && method === 'POST') {

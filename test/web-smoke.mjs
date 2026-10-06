@@ -3683,6 +3683,34 @@ console.log('\n32. 转场条：新场开头那行「接住第 1 场 ·「这件�
   check('小结网页版这条链路无异常', errors.length === 0, errors.join(' | '));
 }
 
+// ─── 31. 带走的是过程：导出对话（备份行那颗键，真发 /conversation）
+{
+  const { state: st, renderPanel: rp } = appModule.__hooks;
+  st.panelTab = 'learn';
+  st.notebook = { ...sampleNotebook(), id: 'nb-test' };
+  rp();
+  // 备份区拆成两行：上行是数据（导出/导入/体检），下行是带走物（小结/对话）。按内容定位。
+  const rows = deepAll(doc.getElementById('panelBody'), 'backup-row');
+  const dataRow = rows.find((r) => Array.from(r.children).some((b) => b.textContent === '导出整本'));
+  const takeawayRow = rows.find((r) => Array.from(r.children).some((b) => b.textContent === '导出小结'));
+  check('数据行只放数据键（导出整本/导入整本/体检数据）',
+    Boolean(dataRow) && ['导出整本', '导入整本', '体检数据'].every((k) => Array.from(dataRow.children).some((b) => b.textContent === k)),
+    dataRow ? Array.from(dataRow.children).map((b) => b.textContent).join('/') : '没有数据行');
+  check('带走行放小结与对话（导出小结/小结网页版/导出对话），不再挤在数据行',
+    Boolean(takeawayRow) && ['导出小结', '小结网页版', '导出对话'].every((k) => Array.from(takeawayRow.children).some((b) => b.textContent === k)),
+    takeawayRow ? Array.from(takeawayRow.children).map((b) => b.textContent).join('/') : '没有带走行');
+  const convBtn = Array.from(takeawayRow.children).find((b) => b.textContent === '导出对话');
+  responses.set('GET /api/notebooks/nb-test/conversation', () =>
+    json({ markdown: '# 测试本 — 对话记录\n\n## 第 1 场：开场\n\n**我**：你好' }));
+  const reqBeforeConv = requests.length;
+  convBtn.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  check('点「导出对话」真的请求了 /conversation',
+    requests.slice(reqBeforeConv).some((k) => k === 'GET /api/notebooks/nb-test/conversation'), requests.slice(reqBeforeConv).join(','));
+  check('导出对话成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出对话')));
+  check('导出对话这条链路无异常', errors.length === 0, errors.join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

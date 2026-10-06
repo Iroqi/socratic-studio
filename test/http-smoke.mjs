@@ -531,6 +531,20 @@ try {
   const bareMd = (await jfetch(`${BASE}/api/notebooks/${bare}/summary`)).data.markdown;
   check('还没有图的书：小结只有标题，不摆空的「目标 / 概念」节',
     bareMd.startsWith('# 还没谈目标') && !bareMd.includes('## 目标') && !bareMd.includes('## 概念结构'), bareMd);
+
+  console.log('\n14. 对话记录：真服务把这一本的过程还原成 Markdown');
+  const convOut = await jfetch(`${BASE}/api/notebooks/${id}/conversation`);
+  check('对话导出给 Markdown（# 标题 — 对话记录 + 拍结构）',
+    convOut.data?.markdown?.startsWith('# ') && convOut.data.markdown.includes('— 对话记录') && convOut.data.markdown.includes('### 第 1 拍'),
+    JSON.stringify(convOut.data).slice(0, 160));
+  // 这一本没开过场（faux 回合不开场），消息不带 sceneId——导出如实不给场头，不编场名；
+  // 场头行为由 run.mjs 12i 用开过场的书钉住。
+  check('对话里有我 / 老师双方、题卡与作答（过程是还原，不是总结）',
+    convOut.data.markdown.includes('**我**') && convOut.data.markdown.includes('**老师**') &&
+    convOut.data.markdown.includes('题卡') && convOut.data.markdown.includes('你的回答：'),
+    convOut.data.markdown.split('\n').filter((l) => l.includes('**') || l.includes('题卡')).slice(0, 10).join(' | '));
+  check('对话导出不出进度数字 / 比率 / 百分比（Invariant 4 守住）',
+    !/%|掌握率|进度条|分数|\d+\s*个里/.test(convOut.data.markdown), '');
 } finally {
   server.kill();
   await sleep(400);
