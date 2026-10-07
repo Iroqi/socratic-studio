@@ -1419,6 +1419,38 @@ check('停掉的任务再停一次会说明原因', session.execStopBackground({
 // 分身改动不到学习状态（隔离性）
 check('分身没碰主会话的 learning 状态', session.progress.concepts['closures'].state === 'seen');
 
+/*
+ * ── 第十八轮：分身读配置必须走**那个**读取口。
+ * tasks.mjs 原来自带一份局部 readJsonSafe（同名遮蔽 config.mjs 的那一份）：坏 JSON 直接兜成
+ * 默认值，不留 `.corrupt-` 副本、不喊话。settings.json / credentials.json 只有走分身这条路时
+ * 会经过它——于是"配置坏了"这件事在日志和盘上都不留痕迹（全仓其他 JSON 读取都有证据纪律）。
+ * 这条钉子做的事：把 settings.json 写坏 → 派一个真分身（它内部要读设置取 Decision 选项）→
+ * 断言证据留下了、话也喊出来了。删掉 config 里的留证据逻辑，或把它调回局部版本，这里就红。
+ */
+{
+  const settingsProbe = path.join(process.env.SOCRATIC_DATA_DIR, 'settings.json');
+  const settingsWas = fs.existsSync(settingsProbe) ? fs.readFileSync(settingsProbe) : null;
+  const shout = [];
+  const realErr = console.error;
+  console.error = (...args) => { shout.push(args.join(' ')); };
+  try {
+    fs.writeFileSync(settingsProbe, '{ "decision": 半截配置 ← 分身读取口探针');
+    faux.setResponses([fauxAssistantMessage([fauxText('分身结论：证据应该留下。')])]);
+    const probed = await session.execSpawnSubagent({ title: '读取口探针', instructions: '说一句话' });
+    check('settings 坏成分身照样跑得完（降级不炸）', probed.status === 'done', `status=${probed.status}`);
+  } finally {
+    console.error = realErr;
+  }
+  const dirOfSettings = path.dirname(settingsProbe);
+  const settingsCopies = fs.readdirSync(dirOfSettings).filter((f) => f.startsWith('settings.json.corrupt-'));
+  check('分身读坏 settings.json 也留证据副本（走的是统一读取口，不是局部兜底）',
+    settingsCopies.length === 1, settingsCopies.join(','));
+  check('损坏喊话里点名 settings.json（不静默降级）',
+    shout.some((s) => s.includes('[数据损坏]') && s.includes('settings.json')), shout.join(' | ').slice(0, 200));
+  if (settingsWas === null) fs.rmSync(settingsProbe, { force: true }); else fs.writeFileSync(settingsProbe, settingsWas);
+  for (const f of settingsCopies) fs.rmSync(path.join(dirOfSettings, f), { force: true });
+}
+
 // ─────────────────────────────────────── 7g. 结构化笔记（compile_notes）
 
 section('7g. 结构化笔记：compile_notes 落 notes.json');
@@ -2364,6 +2396,37 @@ check('换一种坏法必须再留一份（旧证据不顶新损坏）', backupL
   check('两种坏法各有一份字节一致的副本（谁都没被顶掉）', bothContents, collideBackups.join(','));
   // 把它修回合法，别拖累后面 12c 的「健康目录体检报告 ok」前提（副本留着无妨，体检不点名副本）
   saveNote(collideId, { title: '撞名测试恢复', summary: '', key_points: [] });
+  // ── 第十八轮：治好了，证据不许跟着变孤儿。
+  // 上面的场景就是那条死路的标本：notes.json 坏过两种、副本都在盘上，现在原件已经好了——
+  // 旧口径里 corruptFiles 清空、取证下载口只认当下清单，这两份副本从此查无实据。
+  {
+    const evList = () => store.healthCheck().corruptEvidence || [];
+    const evRels = () => evList()
+      .filter((e) => e.rel.startsWith(`notebooks/${collideId}/notes.json.corrupt-`))
+      .map((e) => e.rel)
+      .sort();
+    const evItems = () => evList()
+      .filter((e) => e.rel.startsWith(`notebooks/${collideId}/notes.json.corrupt-`));
+    check('修好之后证据台账还在案（两份副本都列得出）', evRels().length === 2, evRels().join(','));
+    check('台账说清原件已康复（sourceCorrupt=false 才叫"已修复的存证"）',
+      evItems().length === 2 && evItems().every((e) => e.sourceCorrupt === false),
+      JSON.stringify(evItems()));
+    check('台账的 rel 相对 DATA_DIR（取证口认得这个基准）',
+      evRels().every((r) => r.startsWith('notebooks/')), evRels().join(','));
+    // 真正要钉的是"拿得到"：以前这条路 400「这个文件不在体检报告的损坏清单里」
+    // （用 try 包住：取证口退回旧行为时这条钉子要报 FAIL，不能把整套撞成 CRASH）
+    const oneEv = evRels()[0];
+    let evGot = null, evErr = null;
+    try { evGot = store.readCorruptFile(oneEv); } catch (err) { evErr = err; }
+    check('治好了的副本照样能取证（字节原样，不重写）',
+      !evErr && ['[ 第一种坏法', '{ 第二种坏法'].includes(evGot.buffer.toString('utf8')),
+      evErr ? `抛了 ${evErr.reason || evErr.message}` : `${oneEv} → ${evGot.buffer.toString('utf8')}`);
+    // 台账不是任意读取口的口子：原件（此刻是好的）依旧不在任何白名单里
+    let evReject = null;
+    try { store.readCorruptFile(`notebooks/${collideId}/notes.json`); } catch (err) { evReject = err; }
+    try { store.readCorruptFile(`notebooks/${collideId}/notebook.json`); } catch (err) { evReject = evReject || err; }
+    check('扩展白名单只认台账里的名字：好的原件仍被拒', evReject?.reason === 'not-in-report', evReject?.message);
+  }
 }
 const afterCrash = saveNote(crashId, { title: '恢复后新增', summary: '写入正常', key_points: [] });
 check('损坏后写入正常（原子写）', afterCrash.title === '恢复后新增');
@@ -2967,6 +3030,62 @@ check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据
   let tooBig = null;
   try { store.readCorruptFile(`${corruptId}/chat.json`); } catch (err) { tooBig = err; }
   check('超过 5MB 的损坏文件取证被拒绝（说明直接翻目录）', tooBig?.reason === 'too-large', tooBig?.message);
+
+  // 12j-2b 数据根目录的存证（第十八轮）：settings.json 坏过之后，过去体检根本不扫这一层
+  // （HEALTH_FILES 只遍历 notebooks/），证据副本躺在 data/ 根上没人认领。台账把它捞回来，
+  // 并且**哪怕原件已经治好了**也还能取证——这正是旧取证口做不到的那一段。
+  {
+    const settingsFile = path.join(tmpRoot, 'settings.json');
+    const settingsBackup = fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile, 'utf8') : null;
+    const badSettings = '{ "activeModel": 半截设置 ← 根目录取证';
+    fs.writeFileSync(settingsFile, badSettings);
+    const { readJsonSafe: configRead } = await import('../server/config.mjs');
+    check('根目录 settings.json 读坏时降级不抛（留证据由 config 的统一读取口负责）',
+      JSON.stringify(configRead(settingsFile, {})) === '{}');
+    let rootRep = store.healthCheck();
+    const rootRel = () => (rootRep.corruptEvidence || []).find((e) => e.rel.startsWith('settings.json.corrupt-'))?.rel;
+    check('坏着的 settings 副本进了证据台账（体检扫得到 data/ 根了）',
+      Boolean(rootRel()), JSON.stringify(rootRep.corruptEvidence || []));
+    check('原件还坏着时台账如实标 sourceCorrupt=true',
+      rootRep.corruptEvidence && rootRep.corruptEvidence.find((e) => e.rel === rootRel())?.sourceCorrupt === true, rootRel());
+    // 治它：写回一份合法设置（模拟下一次正常保存）
+    fs.writeFileSync(settingsFile, JSON.stringify({ activeModel: { provider: 'faux', model: '钉' }, version: 1 }, null, 2));
+    rootRep = store.healthCheck();
+    const healedRel = rootRel();
+    check('settings 治好之后根目录副本仍在案（台账不看当下坏不坏）', Boolean(healedRel), healedRel);
+    check('治好后台账改口 sourceCorrupt=false',
+      rootRep.corruptEvidence && rootRep.corruptEvidence.find((e) => e.rel === healedRel)?.sourceCorrupt === false, healedRel);
+    let healedGot = null, healedErr = null;
+    try { healedGot = store.readCorruptFile(healedRel); } catch (err) { healedErr = err; }
+    check('治好了的 settings 副本照样能取证（字节原样）',
+      !healedErr && healedGot.buffer.toString('utf8') === badSettings,
+      healedErr ? `抛了 ${healedErr.reason || healedErr.message}` : healedGot.buffer.toString('utf8').slice(0, 40));
+    // 台账不是后门：data/ 根上没登记的凭据文件，即使名字撞形状也不认领
+    const creds = path.join(tmpRoot, 'credentials.json');
+    const credsBackup = fs.existsSync(creds) ? fs.readFileSync(creds, 'utf8') : null;
+    fs.writeFileSync(creds, 'sk-别把凭据经这条路漏出去');
+    let shapeSneak = null;
+    try { shapeSneak = store.readCorruptFile('credentials.json'); } catch (err) { shapeSneak = err; }
+    check('台账不认领没登记的原件（好的/坏的凭据原件都不在口上）', shapeSneak?.reason === 'not-in-report', String(shapeSneak?.reason));
+    fs.writeFileSync(creds, 'x'.repeat(9) + '\n'); // 非法 JSON，但证据副本名要撞台账形状
+    const { readJsonSafe: peekRead } = await import('../server/config.mjs');
+    peekRead(creds, {}); // 让它自己留一份 credentials.json.corrupt-<ms>
+    rootRep = store.healthCheck();
+    check('credentials 的证据也被台账认领（登记过的文件名才认）',
+      rootRep.corruptEvidence && rootRep.corruptEvidence.some((e) => e.rel.startsWith('credentials.json.corrupt-')),
+      (rootRep.corruptEvidence || []).map((e) => e.rel).join(','));
+    // 收尾：把这两个根文件恢复成探针前的样子，别拖累后面的套件
+    if (settingsBackup === null) fs.rmSync(settingsFile, { force: true }); else fs.writeFileSync(settingsFile, settingsBackup);
+    if (credsBackup === null) fs.rmSync(creds, { force: true }); else fs.writeFileSync(creds, credsBackup);
+    // 探针留下的根副本也扫掉：后面的套件不该被一次测试探针的痕迹扰动
+    for (const f of fs.readdirSync(tmpRoot)) {
+      if (/^(settings|credentials)\.json\.corrupt-/.test(f)) fs.rmSync(path.join(tmpRoot, f), { force: true });
+    }
+    const after = store.healthCheck();
+    check('探针撤干净后根目录台账归零（测试不给自己留赃）',
+      !(after.corruptEvidence || []).some((e) => e.rel === 'settings.json.corrupt-x' || /^(settings|credentials)\.json\.corrupt-/.test(e.rel)),
+      (after.corruptEvidence || []).map((e) => e.rel).join(','));
+  }
 
   // 12j-3 回马枪候选可见：同一份候选（prompt 快照与前端续学卡）从数据层出。
   const retestId = store.createNotebook({ topic: '回马枪', goal: null, pace: 'normal' }).id;

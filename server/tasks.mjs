@@ -13,19 +13,17 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR, SETTINGS_FILE, CREDENTIALS_FILE } from './config.mjs';
+import { DATA_DIR, SETTINGS_FILE, CREDENTIALS_FILE, readJsonSafe } from './config.mjs';
 import { runTurn } from './agent.mjs';
 import { panelDecisionOpts } from './decision.mjs';
 
-/** 分身任务也用面板配置的 Decision 选项（没有就走环境变量，跟主回合一致）。 */
-function readJsonSafe(file, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return fallback;
-  }
-}
-
+/*
+ * 这里原来有一份**局部的** readJsonSafe（同名遮蔽了 config.mjs 导出的那一份）：
+ * try/parse/catch 回去就完事。全仓其他读 JSON 的地方（store/notes/providers）用的都是
+ * config.mjs 那一份——解析失败会留 `.corrupt-` 副本并喊话。settings.json / credentials.json
+ * 走分身这条路读坏时，旧的局部版本静默兜成默认值：没证据、没喊话，坏了查无实据（第十八轮）。
+ * 删掉局部版本，用唯一的那个读取口。
+ */
 function decisionOptsForTasks() {
   return panelDecisionOpts({
     settings: readJsonSafe(SETTINGS_FILE, {}),

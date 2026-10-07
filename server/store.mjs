@@ -13,6 +13,8 @@ import { buildZip } from './zip.mjs';
 import {
   DATA_DIR,
   NOTEBOOKS_DIR,
+  SETTINGS_FILE,
+  CREDENTIALS_FILE,
   writeJsonAtomic,
   readJsonSafe,
   safeId,
@@ -1010,8 +1012,72 @@ const HEALTH_FILES = [
   NOTEBOOK_FILE, GRAPH_FILE, PROGRESS_FILE, PATCH_FILE, CHAT_FILE, TODOS_FILE, SCENE_FILE, NOTES_FILE,
 ];
 
+/**
+ * 损坏证据台账（第十八轮）。
+ *
+ * 为什么要它：`readJsonSafe` 坏一次留一份 `.corrupt-<毫秒>` 副本，可**原件被下一次原子写治好之后**，
+ * `corruptFiles` 清空、`ok` 回到 true，副本却永远躺在盘上——取证口（readCorruptFile）只认
+ * "体检此刻认定的损坏文件"，于是这份证据变成盘上孤儿：人最想看"当时坏成什么样"的时刻，
+ * 恰恰是它已经修好之后。实测（2026-10-07）：写坏 chat.json → 体检点名 → 正常写回 →
+ * `corruptFiles = [] ok = true`，盘上副本还在，下载口 400「这个文件不在体检报告的损坏清单里」。
+ *
+ * 台账只看盘上事实（文件名形状），不看原件当下坏不坏，所以治好了也还在案。
+ * 扫描范围两处：每本学习的八份 JSON，以及数据根目录的 settings.json / credentials.json——
+ * 后两者过去的体检根本看不见（HEALTH_FILES 只遍历 notebooks/），它们的损坏证据同样没人认领。
+ *
+ * rel 相对 **DATA_DIR**（`corruptFiles` 相对 NOTEBOOKS_DIR，两份清单基准不同，取证口自己认得）。
+ */
+const ROOT_EVIDENCE_FILES = [path.basename(SETTINGS_FILE), path.basename(CREDENTIALS_FILE)];
+
+function collectCorruptEvidence(dirAbs, relPrefix, bases) {
+  const out = [];
+  let names;
+  try {
+    names = fs.readdirSync(dirAbs);
+  } catch {
+    return out;
+  }
+  for (const name of names) {
+    if (!name.includes('.corrupt-')) continue;
+    const base = bases.find((b) => name.startsWith(`${b}.corrupt-`));
+    if (!base) continue; // 不是登记文件名的证据（比如目录里别的杂物），不认领
+    const abs = path.join(dirAbs, name);
+    let stat;
+    try {
+      stat = fs.statSync(abs);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    out.push({
+      rel: `${relPrefix}${name}`,
+      // 原件此刻坏没坏：治好了就 false——台账要说的正是"曾经坏过、证据还在"
+      sourceCorrupt: corruptNow(path.join(dirAbs, base)),
+      bytes: stat.size,
+    });
+  }
+  return out;
+}
+
+/** 这个文件此刻是不是**坏 JSON**（不存在不算坏，算"没这回事"）。 */
+function corruptNow(file) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch {
+    return false;
+  }
+  try {
+    JSON.parse(raw);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 export function healthCheck() {
   const corruptFiles = [];
+  const corruptEvidence = [];
   const orphanArtifacts = [];
   const missingHtml = [];
   let notebooks = 0;
@@ -1036,6 +1102,8 @@ export function healthCheck() {
           corruptFiles.push(`${id}/${name}`);
         }
       }
+      // 证据台账（rel 相对 DATA_DIR）：治好了也还在案
+      corruptEvidence.push(...collectCorruptEvidence(dir, `notebooks/${id}/`, HEALTH_FILES));
 
       const artifactsDir = path.join(dir, ARTIFACTS_DIR);
       if (!fs.existsSync(artifactsDir)) continue;
@@ -1066,6 +1134,9 @@ export function healthCheck() {
       }
     }
   }
+  // 数据根目录的两个配置 JSON：它们的损坏证据过去没人认领（体检不扫这里）
+  corruptEvidence.push(...collectCorruptEvidence(DATA_DIR, '', ROOT_EVIDENCE_FILES));
+
   let quarantined = 0;
   if (fs.existsSync(QUARANTINE_DIR)) {
     for (const entry of fs.readdirSync(QUARANTINE_DIR)) {
@@ -1082,28 +1153,39 @@ export function healthCheck() {
     dataDir: DATA_DIR,
     notebooks,
     corruptFiles,
+    corruptEvidence,
     orphanArtifacts,
     missingHtml,
     quarantined,
   };
 }
 
-// 损坏文件取证下载：体检点名之后，原件拿得到。只允许下载"体检此刻认定的损坏文件"
-// （七份 notebook JSON 之一，路径就是 healthCheck 报告里的相对路径）——不是任意
-// 文件读取口。损坏文件可能正是"待诊断现场"，原件原样发出去（字节不重写），
-// 太大就先拒绝、让人直接翻 data/ 目录，不把整块内存拖进下载。
+// 损坏文件取证下载：体检点名之后，原件拿得到。允许两类路径——
+//   1. `corruptFiles` 里的（此刻正坏着的原件，rel 相对 NOTEBOOKS_DIR）；
+//   2. `corruptEvidence` 里的（盘上的 `.corrupt-*` 副本，rel 相对 DATA_DIR）——
+//      第十八轮补的：原件被治好后副本曾查无实据，下载口只认当下报告。
+// 都在 healthCheck 的扫描范围内、由登记文件名白名单认领，不是任意文件读取口。
+// 原件原样发出去（字节不重写），太大就先拒绝、让人直接翻 data/ 目录，不把整块内存拖进下载。
 const CORRUPT_DOWNLOAD_MAX_BYTES = 5 * 1024 * 1024;
 
 export function readCorruptFile(relPath) {
   const report = healthCheck();
-  if (!report.corruptFiles.includes(relPath)) {
-    const err = new BadRequestError('这个文件不在体检报告的损坏清单里');
-    err.reason = 'not-in-report';
-    throw err;
+  if (report.corruptFiles.includes(relPath)) {
+    // 兼容旧口径：正坏着的原件按 NOTEBOOKS_DIR 解析
+    return serveWhitelisted(NOTEBOOKS_DIR, relPath);
   }
-  // 体检报告的路径是相对 NOTEBOOKS_DIR 的（`<id>/<file>`），取证同样以它为基准
-  const abs = path.join(NOTEBOOKS_DIR, relPath);
-  if (!isWithin(NOTEBOOKS_DIR, abs)) {
+  const evidence = report.corruptEvidence.find((e) => e.rel === relPath);
+  if (evidence) {
+    return serveWhitelisted(DATA_DIR, relPath);
+  }
+  const err = new BadRequestError('这个文件不在体检报告的损坏清单或证据台账里');
+  err.reason = 'not-in-report';
+  throw err;
+}
+
+function serveWhitelisted(baseDir, relPath) {
+  const abs = path.join(baseDir, relPath);
+  if (!isWithin(baseDir, abs)) {
     const err = new BadRequestError('路径越界，拒绝下载');
     err.reason = 'outside-data-dir';
     throw err;

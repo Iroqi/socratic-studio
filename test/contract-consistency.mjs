@@ -470,6 +470,87 @@ for (const m of readmeDoc.matchAll(/\/api\/[^\s"'，。；）】、`]+/g)) {
 check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由文档静默过期"）`,
   readmeApiRefs >= 20, `只找到 ${readmeApiRefs} 处 /api/ 引用，排查节的那几条应该在`);
 
+// ──────────────────────────────────────────────── 承诺的兑现位置：文档说的守卫必须在删数据那一侧
+//
+// 第十八轮的元教训：README「删除会话」写着"会话有进行中的回合时拒绝删除"，这句**只在浏览器里**兑
+// （前端看当前标签页有没有 state.turn）。服务端 DELETE 路由不看 activeTurns，实测回合进行中照删 200，
+// 于是"文档有这句话"与"真在服务端兑"被文档测试当成同一件事放过了。这一节把文档那句话与
+// serve.mjs 里 DELETE 分支的真实守卫绑死：谁把守卫从服务端摘掉，这条就红。
+{
+  const delSectionMatch = /### 删除会话[\s\S]{0,900}?###/.exec(readmeDoc);
+  check('README「删除会话」一节仍在承诺回合中不许删（并写明兑在哪一侧）',
+    Boolean(delSectionMatch) && /进行中的回合/.test(delSectionMatch[0])
+    && /409/.test(delSectionMatch[0]) && /turn-active/.test(delSectionMatch[0]),
+    delSectionMatch ? delSectionMatch[0].replace(/\n+/g, ' ').slice(0, 200) : '找不到该节');
+  // serve.mjs 里有好几条 DELETE 分支（providers / endpoints / notes / notebook），
+  // 要盯的是删整本那一条——用 store.deleteNotebook 认出它，再检查守卫在不在它身体里。
+  const delBranches = [...serveSrc.matchAll(/if \(m && method === 'DELETE'\) \{[\s\S]*?\n {4}\}/g)]
+    .map((mm) => mm[0]);
+  const notebookDel = delBranches.find((b) => b.includes('store.deleteNotebook'));
+  check('DELETE /api/notebooks/:id 的路由分支里真的有 activeTurns 守卫（承诺兑在服务端）',
+    Boolean(notebookDel) && /activeTurns\.get\(/.test(notebookDel) && /turn\.done/.test(notebookDel)
+    && /sendJson\(res, 409/.test(notebookDel),
+    notebookDel ? notebookDel.replace(/\n\s*/g, ' ').slice(0, 260) : `找不到删整本的分支（共 ${delBranches.length} 条 DELETE 分支）`);
+  check('守卫给的错误带 reason=turn-active（前端能分流，不靠猜文案）',
+    Boolean(notebookDel) && notebookDel.includes('turn-active'), notebookDel ? notebookDel.slice(0, 200) : '');
+}
+
+// ──────────────────────────────────────────────── 唯一的 JSON 读取口：不许有第二份 readJsonSafe
+//
+// config.mjs 那份 readJsonSafe 带着第十一轮起的证据纪律（坏 JSON 留 `.corrupt-` 副本 + 喊话）。
+// 第十八轮抓到 tasks.mjs 自带一份**同名的局部函数**遮蔽它：settings.json / credentials.json
+// 走分身这条路读坏时静默兜成默认值，盘上没证据、日志没喊话。局部遮蔽这种东西改一次就复发，
+// 所以钉住形状：server/ 下除 config.mjs 自己，任何模块都不许再定义 readJsonSafe。
+{
+  const serverDir = path.join(app, 'server');
+  const offenders = [];
+  for (const name of fs.readdirSync(serverDir)) {
+    if (!name.endsWith('.mjs') || name === 'config.mjs') continue;
+    const src = fs.readFileSync(path.join(serverDir, name), 'utf8');
+    if (/function readJsonSafe\s*\(/.test(src) || /const readJsonSafe\s*=/.test(src)) offenders.push(name);
+  }
+  check('server/ 里没有第二份 readJsonSafe（读取口唯一，证据纪律不可绕）',
+    offenders.length === 0, offenders.join(','));
+  // tasks.mjs 用得着 settings/credentials，必须从 config.mjs 把它 import 进来
+  const tasksSrc = fs.readFileSync(path.join(serverDir, 'tasks.mjs'), 'utf8');
+  check('tasks.mjs 用 config.mjs 的读取口（import 里带 readJsonSafe）',
+    /import \{[^}]*readJsonSafe[^}]*\} from '\.\/config\.mjs'/.test(tasksSrc),
+    tasksSrc.split('\n').filter((l) => l.includes('config.mjs')).join(' | '));
+}
+
+// ──────────────────────────────────────────────── 体检报告字段：文档、服务端、前端三处口径一致
+//
+// corruptEvidence 是第十八轮加的台账（治好的文件副本仍在案）。三份文件都得认它：
+// store 产出它、README 描述它、前端读它——任何一处漂移都会让取证出口静默变瞎。
+{
+  const storeSrc = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8');
+  check('store 的体检报告产出 corruptEvidence 台账',
+    /corruptEvidence/.test(storeSrc) && /sourceCorrupt/.test(storeSrc), '报告里没有台账字段');
+  {
+    // 文档守护要钉"那句话"而不是那个字段名：光 includes('corruptEvidence') 时，
+    // 把台账一节的实质内容全删、只在别处留一次词，照样绿（M15 实测撞出的弱钉子）。
+    const ledgerDoc = /治好了也要查得着[\s\S]{0,900}/.exec(readmeDoc);
+    check('README 写清台账的实质：治好了仍在案 + rel 相对 DATA_DIR + sourceCorrupt',
+      Boolean(ledgerDoc) && ledgerDoc[0].includes('corruptEvidence')
+      && /查无实据|仍在案|治好/.test(ledgerDoc[0]) && /DATA_DIR/.test(ledgerDoc[0])
+      && ledgerDoc[0].includes('sourceCorrupt'),
+      ledgerDoc ? ledgerDoc[0].replace(/\n+/g, ' ').slice(0, 200) : '找不到台账一节');
+  }
+  check('README 写到取证口两条清单都认（原件与副本）',
+    /取证下载两条清单都认|两条清单都认/.test(readmeDoc), 'README 没跟上第十八轮口径');
+  const webAppSrc = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+  check('前端渲染 corruptEvidence 并给"已修复"存证下载口',
+    webAppSrc.includes('corruptEvidence') && webAppSrc.includes('下载存证副本'), '面板没有台账出口');
+  check('前端读取台账带兜底（老服务没这字段不许炸面板）',
+    /Array\.isArray\(report\.corruptEvidence\)/.test(webAppSrc), '直接当数组用了');
+  // 台账的 rel 基准必须和 corruptFiles 不同且被 readCorruptFile 认得——两处基准搞混就是 404 现场
+  check('readCorruptFile 明确分辨两份清单（原件走 NOTEBOOKS_DIR，副本走 DATA_DIR）',
+    /report\.corruptFiles\.includes/.test(storeSrc) && /corruptEvidence\.find/.test(storeSrc)
+    && /serveWhitelisted\(NOTEBOOKS_DIR/.test(storeSrc) && /serveWhitelisted\(DATA_DIR/.test(storeSrc),
+    '白名单没分基准');
+}
+
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;

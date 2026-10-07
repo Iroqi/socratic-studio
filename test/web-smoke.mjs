@@ -4001,6 +4001,51 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     requests.slice(reqBeforeCorrupt).some((k) => k.startsWith('GET /api/health/corrupt?path=')), requests.slice(reqBeforeCorrupt).join(','));
   check('下载损坏文件成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已下载损坏文件原件')));
   check('损坏取证这条链路无异常', errors.length === 0, errors.join(' | '));
+
+  // 32c-2（第十八轮）：原件治好了，盘上的 `.corrupt-*` 存证也要有出口。
+  // 旧 UI 只渲染 corruptFiles；体检把 corruptFiles 清空、corruptEvidence 里留着 sourceCorrupt=false
+  // 的副本时，面板必须仍给一行「下载存证副本」——否则修好之后想回看"当时坏成什么样"就查无实据。
+  responses.set('GET /api/health', () =>
+    json({
+      ok: true, dataDir: '/tmp/x', notebooks: 1,
+      corruptFiles: [], orphanArtifacts: [], missingHtml: [], quarantined: 0,
+      corruptEvidence: [
+        { rel: 'notebooks/nb-test/chat.json.corrupt-1700000000000', sourceCorrupt: false, bytes: 21 },
+        { rel: 'notebooks/nb-test/notes.json.corrupt-1700000000001', sourceCorrupt: true, bytes: 8 },
+      ],
+    }));
+  responses.set('GET /api/health/corrupt?path=notebooks%2Fnb-test%2Fchat.json.corrupt-1700000000000', () =>
+    new Response('{ 治好前的半截 ← 存证', { status: 200, headers: { 'Content-Type': 'application/octet-stream' } }));
+  healthBtn32.onclick();
+  await new Promise((r) => setTimeout(r, 20));
+  const healthResult32 = () => deepAll(doc.getElementById('panelBody'), 'health-result')[0];
+  const eRows = healthResult32() ? deepAll(healthResult32(), 'health-corrupt-row') : [];
+  const healedRow = eRows.find((r) => r.textContent.includes('chat.json.corrupt-1700000000000'));
+  check('已修复文件的存证单独成行（不再跟着 corruptFiles 一起消失）',
+    Boolean(healedRow) && healedRow.textContent.includes('下载存证副本'),
+    eRows.map((r) => r.textContent).join(' | '));
+  check('还坏着的原件不进"已修复"清单（sourceCorrupt=true 的归损坏清单管）',
+    !deepAll(doc.getElementById('panelBody'), 'health-corrupt-row').some((r) =>
+      r.textContent.includes('notes.json.corrupt-1700000000001') && r.textContent.includes('下载存证副本')),
+    'sourceCorrupt=true 的副本不该出现在已修复存证里');
+  const reqBeforeHealed = requests.length;
+  const healedBtn = healedRow ? deepAll(healedRow, 'btn')[0] : null;
+  healedBtn?.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  check('点「下载存证副本」真的打取证接口（台账 rel 原样送出去）',
+    requests.slice(reqBeforeHealed).some((k) => k.startsWith('GET /api/health/corrupt?path=notebooks%2Fnb-test%2Fchat.json.corrupt-')),
+    requests.slice(reqBeforeHealed).join(','));
+  check('存证下载成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已下载损坏存证副本')));
+  check('已修复存证这条链路无异常', errors.length === 0, errors.join(' | '));
+
+  // 老服务（报告里根本没有 corruptEvidence 这个键）不许把面板炸掉
+  responses.set('GET /api/health', () =>
+    json({ ok: true, dataDir: '/tmp/x', notebooks: 1, corruptFiles: [], orphanArtifacts: [], missingHtml: [], quarantined: 0 }));
+  healthBtn32.onclick();
+  await new Promise((r) => setTimeout(r, 20));
+  check('老服务没带 corruptEvidence 时面板正常出"一切正常"（新字段读取要兜住）',
+    healthResult32().textContent.includes('一切正常') && errors.length === 0,
+    `${healthResult32().textContent} | ${errors.join(' | ')}`);
 }
 
 // ─── 33. 键盘走得通：模态焦点归还 / 题卡播报 / `/` 快捷键

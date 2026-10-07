@@ -735,6 +735,115 @@ try {
   check('重新保存（faux 开）为测试桩分支做准备', dput2.data?.configured === true && dput2.data?.faux === true, JSON.stringify(dput2.data));
   const tFaux = (await jfetch(`${BASE}/api/config/decision/test`, { method: 'POST', headers: H, body: '{}' })).data;
   check('测试连接：faux → 桩分支（不联网，明说不验证 key）', tFaux.ok === true && tFaux.mode === 'faux', JSON.stringify(tFaux));
+
+  console.log('\n19. 回合进行中删除：README 的承诺由服务端兑（真服务）');
+  /*
+   * README「删除会话」写着"会话有进行中的回合时拒绝删除"，第十八轮实测这句**只在浏览器里**兑：
+   * DELETE 路由不看 activeTurns，回合进行中照删 200——目录没了、回合还在跑、落盘全 404、
+   * SSE 永远等不到终止事件（delturn 探针：turn-state active:true → DELETE 200 → 流上无 turn_end/done/closed）。
+   * 这一节把承诺钉回服务端：阻塞题卡 + 并发 DELETE。自建一本，不动 §2 的主 notebook（§17 还要用它的 zip）。
+   */
+  {
+    const delNb = await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '删不掉的回合', goal: null }) });
+    const delId = delNb.data?.notebook?.id;
+    check('删除探针用的本子建好了', Boolean(delId), String(delId));
+    const hangScript = [[
+      { type: 'text', text: '先问一句，然后等你作答。' },
+      { type: 'toolCall', name: 'ask_user_question', arguments: { id: 'del:hang', concept_id: 'none', header: '探针', question: '这道题没人答，回合就一直等。', options: [{ label: '等' }, { label: '继续等' }] } },
+    ]];
+    await jfetch(`${BASE}/api/__faux`, { method: 'POST', headers: H, body: scriptBody(hangScript) });
+    const turnRes19 = await fetch(`${BASE}/api/notebooks/${delId}/turn`, {
+      method: 'POST', headers: H,
+      body: JSON.stringify({ message: '开个会就卡住', model: { provider: 'faux', model: fauxModelId } }),
+    });
+    let sawAsk19 = false;
+    let delAttempt = null;
+    let stateDuring = null;
+    const checks19 = []; // 流回调里跑不了的断言先攒着，流收尾后统一记账（check 会动 failed 计数）
+    const events19 = await readSSE(turnRes19, {
+      deadlineMs: 30000,
+      onEvent: async (evt) => {
+        if (evt.type === 'ask' && evt.questionId === 'del:hang') {
+          sawAsk19 = true;
+          // 等 turn-state 认账 active=true 再动手删：守卫与状态探针必须是同一口径
+          for (let i = 0; i < 20 && !stateDuring?.active; i += 1) {
+            stateDuring = (await jfetch(`${BASE}/api/notebooks/${delId}/turn-state`)).data;
+            if (!stateDuring?.active) await sleep(100);
+          }
+          delAttempt = await jfetch(`${BASE}/api/notebooks/${delId}`, { method: 'DELETE' });
+          const stillThere = await jfetch(`${BASE}/api/notebooks/${delId}`);
+          checks19.push({
+            name: '被拒的删除没吃掉数据（整本还在）',
+            ok: stillThere.status === 200 && stillThere.data?.notebook?.id === delId,
+            detail: `status=${stillThere.status}`,
+          });
+          // 就在这条流还开着的时候中断：中断让 runTurn 走 abort 路径，finally 发
+          // turn_end + closed，readSSE 这才返回（顺序很要紧——终止事件必须落进 events19）。
+          await jfetch(`${BASE}/api/notebooks/${delId}/interrupt`, { method: 'POST' });
+        }
+      },
+    });
+    check('阻塞题卡真的阻塞了（ask 到达、turn-state active）',
+      sawAsk19 === true && stateDuring?.active === true, JSON.stringify({ sawAsk19, stateDuring }));
+    check('回合进行中 DELETE 被服务端拒（409，README 的承诺这次兑得了）',
+      delAttempt?.status === 409, `status=${delAttempt?.status} body=${JSON.stringify(delAttempt?.data)}`);
+    check('409 带 reason=turn-active 与人话（前端能分流处理）',
+      delAttempt?.data?.reason === 'turn-active' && String(delAttempt?.data?.error || '').includes('回合'),
+      JSON.stringify(delAttempt?.data));
+    for (const c of checks19) check(c.name, c.ok, c.detail);
+    const types19 = events19.map((e) => e.type);
+    check('中断后这条流拿到终止事件（不再无限转圈）',
+      types19.includes('turn_end') && types19.includes('closed'), types19.join(','));
+    const delOk = await jfetch(`${BASE}/api/notebooks/${delId}`, { method: 'DELETE' });
+    check('回合结束后 DELETE 成功（200 ok）', delOk.status === 200 && delOk.data?.ok === true, `status=${delOk.status}`);
+    check('删完 GET 404（目录真没了）', (await jfetch(`${BASE}/api/notebooks/${delId}`)).status === 404);
+    check('删除不留鬼目录（盘上查无此本）',
+      !fs.existsSync(path.join(dataDir, 'notebooks', delId)), path.join(dataDir, 'notebooks', delId));
+    const delGhost = await jfetch(`${BASE}/api/notebooks/ne-ne-ne`, { method: 'DELETE' });
+    check('删一本不存在的书走 404 而不是 409（守卫不冤枉空 id）', delGhost.status === 404, `status=${delGhost.status}`);
+  }
+
+  console.log('\n20. 治好之后的损坏存证：取证口不再查无实据（真服务）');
+  /*
+   * 第十一轮起的取证口只认"体检此刻认定的损坏文件"：原件被下一次写治好后 corruptFiles 清空，
+   * 盘上的 `.corrupt-*` 副本就再也下载不到（400）——人最想看"当时坏成什么样"的时刻，
+   * 恰恰是修好之后。第十八轮给体检加了证据台账（corruptEvidence），下载白名单两条清单都认。
+   */
+  {
+    const evNb = await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '存证往返', goal: null }) });
+    const evId = evNb.data?.notebook?.id;
+    const badBytes19 = '{ 半截台账 ← 真服务取证';
+    fs.writeFileSync(path.join(dataDir, 'notebooks', evId, 'chat.json'), badBytes19);
+    // 让统一读取口撞见它（GET 整本会 readJsonSafe chat.json）→ 盘上留证据副本
+    const seen20 = await jfetch(`${BASE}/api/notebooks/${evId}`);
+    check('写坏的书还能打开（降级不炸，证据纪律负责留痕）', seen20.status === 200, `status=${seen20.status}`);
+    const repDuring = (await jfetch(`${BASE}/api/health`)).data;
+    const evRel = (repDuring.corruptEvidence || []).find((e) => e.rel.startsWith(`notebooks/${evId}/chat.json.corrupt-`))?.rel;
+    check('证据台账在案（真服务 /api/health 带 corruptEvidence）',
+      Boolean(evRel) && repDuring.corruptFiles.includes(`${evId}/chat.json`), JSON.stringify(repDuring.corruptEvidence));
+    check('原件还坏着时台账标 sourceCorrupt=true',
+      repDuring.corruptEvidence.find((e) => e.rel === evRel)?.sourceCorrupt === true, evRel);
+    const evDl1 = await fetch(`${BASE}/api/health/corrupt?path=${encodeURIComponent(evRel)}`);
+    const evBody1 = evDl1.ok ? Buffer.from(await evDl1.arrayBuffer()) : null;
+    check('副本经真 HTTP 口下载 200、字节原样',
+      evDl1.status === 200 && evBody1?.toString('utf8') === badBytes19, `status=${evDl1.status}`);
+    // 治它：下一次正常写回（这里直接以合法 JSON 覆盖，等价于回合落盘/replaceChat 的效果）
+    fs.writeFileSync(path.join(dataDir, 'notebooks', evId, 'chat.json'), JSON.stringify({ version: 1, messages: [] }));
+    const repAfter = (await jfetch(`${BASE}/api/health`)).data;
+    check('治好之后 corruptFiles 不再点名（旧口径回到 ok）',
+      repAfter.corruptFiles.every((f) => !f.startsWith(`${evId}/`)), repAfter.corruptFiles.join(','));
+    const evAfter = repAfter.corruptEvidence.find((e) => e.rel === evRel);
+    check('治好之后台账仍在案、改口 sourceCorrupt=false',
+      Boolean(evAfter) && evAfter.sourceCorrupt === false, JSON.stringify(evAfter));
+    const evDl2 = await fetch(`${BASE}/api/health/corrupt?path=${encodeURIComponent(evRel)}`);
+    const evBody2 = evDl2.ok ? Buffer.from(await evDl2.arrayBuffer()) : null;
+    check('治好了的副本照样下载得到（第十八轮要修的就是这一口）',
+      evDl2.status === 200 && evBody2?.toString('utf8') === badBytes19, `status=${evDl2.status}`);
+    const notOnList = await jfetch(`${BASE}/api/health/corrupt?path=settings.json`);
+    check('没留过证据的路径照旧 400（台账不是任意读取口）', notOnList.status === 400, `status=${notOnList.status}`);
+    const escape20 = await jfetch(`${BASE}/api/health/corrupt?path=${encodeURIComponent('notebooks/../credentials.json')}`);
+    check('借台账形状的穿越照旧被拒（白名单先于路径解析）', escape20.status === 400, `status=${escape20.status}`);
+  }
 } finally {
   server.kill();
   await sleep(400);

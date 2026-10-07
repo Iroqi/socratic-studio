@@ -738,8 +738,9 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, store.restoreQuarantined());
     }
     // ---------- 损坏文件取证下载：体检点名之后，原件拿得到。
-    // 只允许下载"体检此刻认定的损坏文件"（store.readCorruptFile 内部先跑一次 healthCheck
-    // 校验路径在报告里），不是任意文件读取口。原件字节原样发出去，文件名百分号编码。
+    // 允许两条清单（store.readCorruptFile 内部先跑一次 healthCheck 校验）：正坏着的原件
+    // （corruptFiles，相对 notebooks/）与盘上的 `.corrupt-*` 证据副本（corruptEvidence，相对 data/，
+    // 第十八轮补——原件治好之后证据也要拿得到）。不是任意文件读取口。字节原样发出去，文件名百分号编码。
     if (pathname === '/api/health/corrupt' && method === 'GET') {
       const url = new URL(req.url, 'http://localhost');
       const rel = url.searchParams.get('path');
@@ -803,7 +804,24 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { notebook: store.getNotebook(id) });
     }
     if (m && method === 'DELETE') {
-      return sendJson(res, 200, store.deleteNotebook(decodeURIComponent(m[1])));
+      const id = decodeURIComponent(m[1]);
+      /*
+       * README「删除会话」一节承诺：会话有进行中的回合时拒绝删除。过去这一条**只在浏览器里**
+       * 兑（`web/app.js` 看当前标签页有没有 `state.turn`），服务端照删不误。实测（第十八轮）：
+       * 回合进行中发 DELETE → 200，目录没了，回合还在跑——落盘全 404、SSE 永远等不到终止事件，
+       * 前端那条回合一直转圈。守卫必须站在删数据的那一侧，不是站在按钮的那一侧。
+       * 只认 `activeTurns`（服务端权威），不看请求来自哪个标签页：别的标签页、别的窗口
+       * 派出来的回合同样拦得住。
+       */
+      const turn = activeTurns.get(id);
+      if (turn && !turn.done) {
+        return sendJson(res, 409, {
+          error: '这个学习有正在进行的回合，先中断或等它结束再删除。',
+          reason: 'turn-active',
+          active: true,
+        });
+      }
+      return sendJson(res, 200, store.deleteNotebook(id));
     }
 
     // 整本导出：打包下载。只读盘，不动任何状态；前端把它当文件存下来。
