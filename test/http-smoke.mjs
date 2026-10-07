@@ -590,6 +590,38 @@ try {
   check('空词不给结果', Array.isArray(s4.results) && s4.results.length === 0, JSON.stringify(s4.results));
   const s5 = (await jfetch(`${BASE}/api/search`)).data;
   check('缺 q 参数兜成空词', Array.isArray(s5.results) && s5.results.length === 0, JSON.stringify(s5.results));
+
+  console.log('\n17. 搬家：制品 zip 打包 / 配置备份（真服务）');
+  const zipRes = await fetch(`${BASE}/api/notebooks/${id}/artifacts.zip`);
+  const zipBuf = zipRes.ok ? Buffer.from(await zipRes.arrayBuffer()) : null;
+  const zipErrBody = zipRes.ok ? '' : String(await zipRes.clone().text()).slice(0, 160);
+  check('制品 zip 返回 200、application/zip、PK 头（真 zip）',
+    zipRes.status === 200 && (zipRes.headers.get('content-type') || '').includes('application/zip')
+    && zipBuf?.[0] === 0x50 && zipBuf?.[1] === 0x4b,
+    `status=${zipRes.status} ct=${zipRes.headers.get('content-type')} body=${zipErrBody}`);
+  const cfgExportRes = await fetch(`${BASE}/api/config/export`);
+  const cfgBundle = cfgExportRes.ok ? JSON.parse(await cfgExportRes.text()) : null;
+  check('配置导出带 kind/version/settings/credentials（设置 + 端点 + 凭据一次带走）',
+    cfgBundle?.kind === 'socratic-config' && cfgBundle?.version === 1
+    && cfgBundle?.settings && typeof cfgBundle.settings === 'object'
+    && cfgBundle?.credentials && typeof cfgBundle.credentials === 'object',
+    JSON.stringify(cfgBundle).slice(0, 160));
+  const cfgImport = await jfetch(`${BASE}/api/config/import`, {
+    method: 'POST', headers: H, body: JSON.stringify(cfgBundle),
+  });
+  check('配置导入原样往返成功（导出的包导回来自洽）', cfgImport.data?.ok === true, `status=${cfgImport.status} ${JSON.stringify(cfgImport.data).slice(0, 120)}`);
+  const badImport = await jfetch(`${BASE}/api/config/import`, {
+    method: 'POST', headers: H, body: JSON.stringify({ kind: 'socratic-config', version: 1, settings: null }),
+  });
+  check('缺 settings 的导入被拒（不落任何盘）', badImport.status === 400, `status=${badImport.status}`);
+  const nonBundle = await jfetch(`${BASE}/api/config/import`, {
+    method: 'POST', headers: H, body: JSON.stringify({ hello: 'world' }),
+  });
+  check('不是本应用备份的导入被拒', nonBundle.status === 400, `status=${nonBundle.status}`);
+  const wrongKind = await jfetch(`${BASE}/api/config/import`, {
+    method: 'POST', headers: H, body: JSON.stringify({ kind: 'other-bundle', version: 1, settings: {}, credentials: {} }),
+  });
+  check('kind 不对的包即使带 settings 也被拒（防止清空现有配置）', wrongKind.status === 400, `status=${wrongKind.status}`);
 } finally {
   server.kill();
   await sleep(400);

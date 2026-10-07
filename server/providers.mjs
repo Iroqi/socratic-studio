@@ -53,6 +53,28 @@ class FileCredentialStore {
     }));
   }
 
+  /** 配置备份：整份凭据原样导出（含密钥——这是备份的本意，调用方标注"勿外传"）。 */
+  async exportAll() {
+    return structuredClone(this.#load());
+  }
+
+  /**
+   * 配置备份：整份凭据一次性替换。只接受普通对象（值是任意 JSON），
+   * 写进固定的 CREDENTIALS_FILE，无路径注入面。走同一把串行写链，不打断并发读写。
+   */
+  async replaceAll(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('凭据必须是对象');
+    const run = this.#chain.then(async () => {
+      writeJsonAtomic(this.#file, data);
+      return structuredClone(data);
+    });
+    this.#chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
   /** 唯一写路径：串行的 read-modify-write。 */
   modify(providerId, fn) {
     const run = this.#chain.then(async () => {

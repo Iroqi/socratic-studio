@@ -3755,6 +3755,45 @@ console.log('\n32. 转场条：新场开头那行「接住第 1 场 ·「这件�
     requests.slice(reqBeforeConv).some((k) => k === 'GET /api/notebooks/nb-test/conversation'), requests.slice(reqBeforeConv).join(','));
   check('导出对话成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出对话')));
   check('导出对话这条链路无异常', errors.length === 0, errors.join(' | '));
+  const zipBtn = Array.from(takeawayRow.children).find((b) => b.textContent === '打包全部制品 (.zip)');
+  check('带走行有制品打包按钮（zip 打包入口）', Boolean(zipBtn), '没有 zip 按钮');
+  responses.set('GET /api/notebooks/nb-test/artifacts.zip', () =>
+    new Response('PK\x03\x04stubzip', { status: 200, headers: { 'Content-Type': 'application/zip' } }));
+  const reqBeforeZip = requests.length;
+  zipBtn.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  check('点「打包全部制品」真的请求了 zip 接口（二进制裸取，不走 JSON 解析）',
+    requests.slice(reqBeforeZip).some((k) => k === 'GET /api/notebooks/nb-test/artifacts.zip'), requests.slice(reqBeforeZip).join(','));
+  check('打包成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已打包全部制品')));
+  check('制品打包这条链路无异常', errors.length === 0, errors.join(' | '));
+}
+
+// ─── 33. 搬家（二）：设置面板里的配置备份（导出设置 / 导入设置）
+{
+  const { state: st, renderConfig, refreshConfig, toast } = appModule.__hooks;
+  st.settings = { activeModel: null, custom: null, customEndpoints: [], recent: [] };
+  st.config = { availableModels: [], subscriptions: [], endpoints: [] };
+  renderConfig();
+  const cfgBody = doc.getElementById('configBody');
+  const blocks = cfgBody.findByClass('cfg-block');
+  const backupBlock = blocks.find((b) => Array.from(b.children).some((c) => c.textContent === '配置备份'));
+  check('设置面板有「配置备份」块（设置/端点/凭据一次带走）', Boolean(backupBlock), '没有配置备份块');
+  const cfgBtns = backupBlock ? Array.from(backupBlock.findByTag('button')).map((b) => b.textContent) : [];
+  check('备份块里有导出设置 / 导入设置两个入口', cfgBtns.includes('导出设置') && cfgBtns.includes('导入设置'), cfgBtns.join('/'));
+  const exportCfgBtn = backupBlock ? backupBlock.findByTag('button').find((b) => b.textContent === '导出设置') : null;
+  responses.set('GET /api/config/export', () =>
+    new Response(JSON.stringify({ kind: 'socratic-config', version: 1, settings: {}, credentials: {} }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+  const reqBeforeCfg = requests.length;
+  exportCfgBtn.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  check('点「导出设置」真的请求了 /api/config/export',
+    requests.slice(reqBeforeCfg).some((k) => k === 'GET /api/config/export'), requests.slice(reqBeforeCfg).join(','));
+  check('导出设置成功有提示（含密钥的提醒也在）',
+    Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出设置')));
+  check('配置备份这条链路无异常', errors.length === 0, errors.join(' | '));
 }
 
 // ─── 32. 看不见的看得见：回马枪候选卡 / 判定记录 / 损坏文件取证

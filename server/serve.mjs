@@ -582,6 +582,61 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, saveSettings(patch));
     }
 
+    // ---------- 配置备份：设置 + 端点 + 凭据一次带走（换机器不用重配）。
+    // 导出 = 带密钥的 JSON（备份的本意；README 标注勿外传）。
+    // 导入 = 校验形状后整份写回（settings 走白名单，凭据整份替换进固定文件，无注入面）。
+    if (pathname === '/api/config/export' && method === 'GET') {
+      const bundle = {
+        kind: 'socratic-config',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        settings: loadSettings(),
+        credentials: await registry.credentials.exportAll(),
+      };
+      const blob = JSON.stringify(bundle, null, 2);
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Disposition': `attachment; filename="socratic-config-${new Date().toISOString().slice(0, 10)}.json"`,
+        'Content-Length': Buffer.byteLength(blob),
+        'Cache-Control': 'no-store',
+      });
+      return res.end(blob);
+    }
+    if (pathname === '/api/config/import' && method === 'POST') {
+      const body = await readBody(req);
+      if (body?.kind !== 'socratic-config' || body?.version !== 1) {
+        return sendJson(res, 400, { error: '这不是本应用的配置备份（缺 kind/version）' });
+      }
+      const settings = body?.settings;
+      if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+        return sendJson(res, 400, { error: '配置备份里没有 settings' });
+      }
+      const patch = {};
+      for (const key of ['activeModel', 'custom', 'customEndpoints', 'recent']) {
+        if (key in settings) patch[key] = settings[key];
+      }
+      if (Array.isArray(patch.customEndpoints)) {
+        // 端点本体仍走白名单校验：只收认得的字段，堵住"任意 JSON 原样写进 settings"
+        // （槽位可以是 null——端点删掉时数组里留空位，这是既有数据格式，原样保留）
+        patch.customEndpoints = patch.customEndpoints.map((e) => {
+          if (!e) return null;
+          const clean = {};
+          for (const key of ['label', 'baseUrl', 'modelId', 'modelName', 'contextWindow', 'maxTokens', 'reasoning', 'supportsReasoningEffort', 'supportsDeveloperRole']) {
+            if (key in e) clean[key] = e[key];
+          }
+          return clean;
+        });
+        // 注册进运行时（跟 PUT/DELETE /api/custom-endpoints/:id 同一套），导入即刻可用、不用重启
+        patch.customEndpoints.forEach((cfg, i) => {
+          const index = i + 1;
+          registry.ensureCustom(cfg ? normalizeCustomEndpoint(cfg, index) : null, index);
+        });
+      }
+      saveSettings(patch);
+      await registry.credentials.replaceAll(body?.credentials);
+      return sendJson(res, 200, { ok: true, settings: loadSettings() });
+    }
+
     // ---------- 数据体检：只读扫一遍 data/，报告损坏 / 孤儿 / 空壳（只报告不修）
     if (pathname === '/api/health' && method === 'GET') {
       return sendJson(res, 200, store.healthCheck());
@@ -749,6 +804,25 @@ const server = http.createServer(async (req, res) => {
         'Cache-Control': 'no-store',
       });
       return res.end(html);
+    }
+
+    // 制品打包：这一本的全部制品一个 zip 带走（可解压、可双击打开；不是数据备份）。
+    m = /^\/api\/notebooks\/([^/]+)\/artifacts\.zip$/.exec(pathname);
+    if (m && method === 'GET') {
+      const id = decodeURIComponent(m[1]);
+      const buffer = store.exportNotebookArtifactsZip(id);
+      const meta = store.getNotebook(id);
+      const slug = String(meta.title || '学习').replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'notebook';
+      // filename* 必须是百分号编码（RFC 5987）：slug 可能带中文，原始字节进不了响应头
+      const filename = `socratic-${slug}-artifacts.zip`;
+      const encoded = encodeURIComponent(filename).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+      res.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': `attachment; filename="socratic-notebook-artifacts.zip"; filename*=UTF-8''${encoded}`,
+        'Content-Length': buffer.length,
+        'Cache-Control': 'no-store',
+      });
+      return res.end(buffer);
     }
 
     // 道具的寿命：学习者把这一件从工作集里撤下来（或拿回去）。

@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { buildZip } from './zip.mjs';
 import {
   DATA_DIR,
   NOTEBOOKS_DIR,
@@ -648,6 +649,67 @@ export function readArtifact(id, artifactId) {
   const file = path.join(dir, ARTIFACTS_DIR, safe, 'index.html');
   if (!fs.existsSync(file)) throw new NotFoundError('制品不存在');
   return fs.readFileSync(file, 'utf8');
+}
+
+// ---------------------------------------------------------------- 制品打包（zip）
+
+/**
+ * 把这一本的全部制品打成一个可解压、可双击打开的 zip（第十四轮「搬家」）。
+ *
+ * 与 /export 的分工：导出是完整 JSON 备份（要导入才能看）；zip 是**可打开的 HTML 集合**——
+ * 解压后直接点 index.html 就能看，不用经过本应用。不压缩（STORED），确定性输出，
+ * 同一本每次打包字节一致（server/zip.mjs 注释里写了为什么不做压缩）。
+ * 每件制品的整目录都收（index.html + 它可能引用的本地素材），manifest 上的
+ * 已退役标记（retiredAt）写进根 README，不丢"这是收起来的"这个事实。
+ */
+export function exportNotebookArtifactsZip(id) {
+  const dir = assertExists(id);
+  const items = listArtifacts(id);
+  const entries = [];
+  const zipRoot = 'socratic-artifacts';
+  for (const a of items) {
+    const folder = path.join(dir, ARTIFACTS_DIR, a.id);
+    if (!fs.existsSync(folder)) continue; // manifest 有记录但文件夹丢了：打包时不假装有
+    for (const rel of walkFiles(folder)) {
+      const data = fs.readFileSync(path.join(folder, rel));
+      entries.push({ name: `${zipRoot}/${a.id}/${rel}`, data });
+    }
+  }
+  const retired = items.filter((a) => a.retiredAt).map((a) => `- ${a.title}（已收起，${a.retiredAt}）`);
+  const readme = [
+    `Socratic Studio 制品打包（${new Date().toISOString().slice(0, 10)}）`,
+    `学习：${readNotebookTitle(id)}`,
+    `制品：${items.length} 件`,
+    '',
+    '每一件是一个文件夹，打开里面的 index.html 就能看（制品是页面型 HTML）。',
+    ...(retired.length ? ['', '以下已由学习者收起（软退役，文件还在）：', ...retired] : []),
+    '',
+    '这不是学习数据备份；要整本（对话/进度/笔记/素材）请用「导出整本」。',
+    '',
+  ].join('\n');
+  entries.push({ name: `${zipRoot}/README.txt`, data: readme });
+  return buildZip(entries);
+}
+
+function walkFiles(dir) {
+  const out = [];
+  const stack = [''];
+  while (stack.length) {
+    const rel = stack.pop();
+    const abs = path.join(dir, rel);
+    for (const name of fs.readdirSync(abs)) {
+      const full = path.join(abs, name);
+      const stat = fs.statSync(full);
+      if (stat.isDirectory()) stack.push(path.join(rel, name));
+      else out.push(path.join(rel, name).replace(/\\/g, '/'));
+    }
+  }
+  return out.sort();
+}
+
+function readNotebookTitle(id) {
+  const meta = readJsonSafe(path.join(NOTEBOOKS_DIR, id, NOTEBOOK_FILE), {});
+  return meta.title || meta.topic || '未命名';
 }
 
 // ---------------------------------------------------------------- 本轮待办

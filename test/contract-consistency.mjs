@@ -331,6 +331,7 @@ function normalizeRouteTemplate(p) {
   let t = p.replace(/\?.*$/, ''); // 查询串不是路由的一部分（/api/health/corrupt?path=<rel>）
   t = t.replace(/<[^/]*>|\$[A-Za-z0-9]+|:[A-Za-z0-9]+|\([^)]+\)/g, ':id');
   t = t.replace(/\\\//g, '/'); // serve 正则的转义斜杠（\/）摊平
+  t = t.replace(/\\\./g, '.'); // serve 正则的转义点（\.zip 之类）摊平——README 里写的就是字面点
   return t.replace(/\/+$/, ''); // 末尾斜杠（`GET /api/notebooks 里有` 那种）不算数
 }
 

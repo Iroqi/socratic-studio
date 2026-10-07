@@ -186,7 +186,8 @@ value / probability 是判定置信度不是学习量（Invariant 4），完整�
 │  ├─ providers-catalog.mjs 哪些 provider 可选、各自的环境变量与 key 提示
 │  ├─ providers.mjs        CredentialStore、Models 集合、订阅列表、模型解析
 │  ├─ graph.mjs            Learning Graph 严格校验 + 拓扑排序
-│  ├─ store.mjs            每个 notebook 的落盘（graph / progress / patches / chat / uploads / artifacts / todos / jobs）+ 整本导出 / 导入 + 学习小结编译（Markdown / HTML 双出口）+ 对话导出（过程时间线，同一数据源）
+│  ├─ store.mjs            每个 notebook 的落盘（graph / progress / patches / chat / uploads / artifacts / todos / jobs）+ 整本导出 / 导入 + 制品打包（zip，第十四轮）+ 学习小结编译（Markdown / HTML 双出口）+ 对话导出（过程时间线，同一数据源）
+  ├─ zip.mjs              极简 STORED zip（CRC32 自算、时间戳固定、确定性输出；第十四轮）
 │  ├─ tasks.mjs            后台任务与子 agent：任务记录、隔离执行、落盘、事件外发
 │  ├─ agent.mjs            18 个工具、状态转移守卫、agentic 循环（SSE 事件源）
 │  ├─ prompt.mjs           读 rules/ 编译 system prompt + 宿主能力映射 + 状态快照
@@ -348,6 +349,11 @@ curl -X POST http://127.0.0.1:8787/api/notebooks/$ID/answer \
 （回马枪候选）——模型每回合都读，学习者以前看不见。现在目标卡下方有一张「上次还差这些」：
 概念名 + 一句状态，点一下取景那张概念卡。无候选不摆卡；不显示错过次数、不显示作答原文
 （Invariant 4 不出数字；作答是私人证据）。
+
+**「备份区」两行（2026-10-07 第十四轮扩充）。** 「学习」页签底部：数据行（导出整本 / 导入整本 /
+体检数据）+ 带走行（导出小结 / 小结网页版 / 导出对话 / **打包全部制品 (.zip)**）。
+设置面板底部另有「配置备份」块（导出设置 / 导入设置）——那是整机配置，不属于任何一本，
+所以放在设置里而不是学习页签。
 
 **「判定记录」是右栏的审计视图（2026-10-07 第十一轮）。** JEV 判定的留痕以前在盘上睡觉——
 红线承诺"判定全留痕"，却没有入口看。现在事件节下方有一节「判定记录（审计视图）——不是你的
@@ -1089,6 +1095,19 @@ agent 调 `read_artifact_evidence` 就能拿到。反过来 agent 下发的指�
   同一份数据编译，不各自发明事实。备份区因此拆成两行：数据行（导出整本 / 导入整本 / 体检数据）
   + 带走行（导出小结 / 小结网页版 / 导出对话）。Invariant 4 同样在服务端守住：
   只有过程与时间戳，状态数字 / 比率 / 百分比一律不出现。
+- **打包全部制品 (.zip)**（2026-10-07 第十四轮）：`GET /api/notebooks/<id>/artifacts.zip` 把这一本的
+  全部制品打成一个 zip 下载——**zip 是「可打开的 HTML 集合」**，解压后直接双击 `index.html` 就能看，
+  不用经过本应用（整本 JSON 备份要导入才能看，两者互补）。与 `server/zip.mjs` 的分工：
+  极简 STORED zip（不压缩、无外部依赖、CRC32 自算、时间戳固定）——同一本每次打包字节一致，
+  正确性由测试用自带迷你 zip 读取器逐字节验证。每件制品的整目录都收（`index.html` + 它引用的本地
+  素材），manifest 上已收起的制品也在包里（软退役=文件还在，打包不丢），根上放 `README.txt`
+  记本标题 / 件数 / 已收起清单。备份区带走行多一个入口。
+- **配置备份（导出设置 / 导入设置）**（2026-10-07 第十四轮）：`GET /api/config/export` 把**整机配置**
+  （设置 + 自建端点 + 全部模型凭据，含密钥——备份的本意，页面提示「别外传」）下载成一个 JSON；
+  `POST /api/config/import` 校验 `kind='socratic-config'` + `version=1` 后整份写回——
+  settings 走白名单键（`activeModel/custom/customEndpoints/recent`），端点逐条白名单清洗字段并
+  **当场注册进运行时**（导入即刻可用、不用重启），凭据整份替换进固定文件（无路径注入面）。
+  入口在设置面板「配置备份」块。与「导出整本」的分工：那是**这一本**的数据，这是**这台机器**的配置。
 
 ## 已知边界
 

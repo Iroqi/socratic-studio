@@ -21,6 +21,7 @@ const { validateGraph, topoSortConcepts, GraphValidationError } = await import('
 const { checkTransition, runTurn, buildTools, TOOL_NAMES, seedArtifacts, normalizeAskOptions, unwrapStructuredArgs, historyToModelMessages, carryOverConcept, TeachingSession } =
   await import('../server/agent.mjs');
 const store = await import('../server/store.mjs');
+const { crc32 } = await import('../server/zip.mjs');
 const { ensureDirs, NOTEBOOKS_DIR } = await import('../server/config.mjs');
 const { jevDecide, normalizeAnswers, validateQuestions, DecisionError } = await import('../server/decision.mjs');
 
@@ -2894,6 +2895,65 @@ check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据
   check('12k-8 总量 cap 生效', capped.length <= 2, `cap=2 实际 ${capped.length}`);
   check('12k-9 命中都带本标题（前端结果行可以直接显示是哪本）',
     chatHit.every((h) => h.notebookId && h.notebookTitle), JSON.stringify(chatHit.slice(0, 2)));
+}
+
+// ─────────────────────────────────────── 12l. 制品打包（zip）：全部作品一个包带走
+{
+  // 迷你 zip 读取器：只走中央目录 + 本地头，够验"条目全、CRC 对、字节可解"
+  function readZip(buf) {
+    let off = buf.length - 22;
+    while (off >= 0 && buf.readUInt32LE(off) !== 0x06054b50) off -= 1;
+    if (off < 0) throw new Error('no EOCD');
+    const count = buf.readUInt16LE(off + 10);
+    const cdOff = buf.readUInt32LE(off + 16);
+    const entries = [];
+    let p = cdOff;
+    for (let i = 0; i < count; i += 1) {
+      if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error('bad CD signature');
+      const nameLen = buf.readUInt16LE(p + 28);
+      const extraLen = buf.readUInt16LE(p + 30);
+      const commentLen = buf.readUInt16LE(p + 32);
+      const localOff = buf.readUInt32LE(p + 42);
+      const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+      const lnameLen = buf.readUInt16LE(localOff + 26);
+      const lextraLen = buf.readUInt16LE(localOff + 28);
+      const crc = buf.readUInt32LE(localOff + 14);
+      const size = buf.readUInt32LE(localOff + 18);
+      const start = localOff + 30 + lnameLen + lextraLen;
+      entries.push({ name, data: Buffer.from(buf.subarray(start, start + size)), crc });
+      p += 46 + nameLen + extraLen + commentLen;
+    }
+    return entries;
+  }
+  const zipId = store.createNotebook({ topic: '打包探针', goal: null, pace: 'normal' }).id;
+  const artDir = path.join(tmpRoot, 'notebooks', zipId, 'artifacts');
+  fs.mkdirSync(path.join(artDir, 'art-1', 'assets'), { recursive: true });
+  fs.mkdirSync(path.join(artDir, 'art-2'), { recursive: true });
+  fs.writeFileSync(path.join(artDir, 'art-1', 'index.html'), '<html>制品一</html>');
+  fs.writeFileSync(path.join(artDir, 'art-1', 'assets', 'x.js'), 'const a=1;');
+  fs.writeFileSync(path.join(artDir, 'art-2', 'index.html'), '<html>已收起的二</html>');
+  fs.writeFileSync(path.join(artDir, 'manifest.json'), JSON.stringify({
+    version: 1,
+    items: [
+      { id: 'art-1', title: '制品一', kind: 'artifact', rel: 'artifacts/art-1/index.html', createdAt: new Date().toISOString() },
+      { id: 'art-2', title: '制品二', kind: 'artifact', rel: 'artifacts/art-2/index.html', createdAt: new Date().toISOString(), retiredAt: '2026-10-01T00:00:00.000Z' },
+      { id: 'art-ghost', title: '文件夹丢了', kind: 'artifact', rel: 'artifacts/art-ghost/index.html', createdAt: new Date().toISOString() },
+    ],
+  }));
+  const zip1 = store.exportNotebookArtifactsZip(zipId);
+  const zip2 = store.exportNotebookArtifactsZip(zipId);
+  check('12l-1 zip 以 PK 本地头开头（真 zip，不是文本）', zip1[0] === 0x50 && zip1[1] === 0x4b && zip1[2] === 0x03 && zip1[3] === 0x04, zip1.slice(0, 4).toString('hex'));
+  check('12l-2 同一本两次打包字节一致（确定性输出）', zip1.equals(zip2));
+  const zipEntries = readZip(zip1);
+  const names = zipEntries.map((e) => e.name);
+  check('12l-3 制品 index.html 和它的素材都进包', names.includes('socratic-artifacts/art-1/index.html') && names.includes('socratic-artifacts/art-1/assets/x.js'), names.join(' | '));
+  check('12l-4 已收起的制品也在包里（软退役=文件还在，打包不丢）', names.includes('socratic-artifacts/art-2/index.html'), names.join(' | '));
+  check('12l-5 manifest 有记录但文件夹丢了的不假装有（art-ghost 不进包）', !names.includes('socratic-artifacts/art-ghost/index.html'), names.join(' | '));
+  check('12l-6 根上有 README.txt（说明这是什么包、谁收起来过）',
+    names.includes('socratic-artifacts/README.txt') && zipEntries.find((e) => e.name.endsWith('README.txt')).data.toString('utf8').includes('制品二'),
+    names.join(' | '));
+  check('12l-7 每个条目的 CRC32 与数据对得上（字节没写歪）',
+    zipEntries.every((e) => e.crc === crc32(e.data)), zipEntries.map((e) => `${e.name}:${e.crc.toString(16)}`).join(' '));
 }
 
 // ─────────────────────────────────────── 收尾

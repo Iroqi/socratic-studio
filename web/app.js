@@ -3419,10 +3419,11 @@ function renderBackupPanel(body) {
   const summaryBtn = el('button', 'btn btn-ghost btn-sm', '导出小结');
   const summaryHtmlBtn = el('button', 'btn btn-ghost btn-sm', '小结网页版');
   const conversationBtn = el('button', 'btn btn-ghost btn-sm', '导出对话');
-  takeawayRow.append(summaryBtn, summaryHtmlBtn, conversationBtn);
+  const artifactsZipBtn = el('button', 'btn btn-ghost btn-sm', '打包全部制品 (.zip)');
+  takeawayRow.append(summaryBtn, summaryHtmlBtn, conversationBtn, artifactsZipBtn);
   body.append(takeawayRow);
   body.append(
-    el('div', 'backup-hint', '小结是这一本的结论，对话是这一本的过程——都能带走。'),
+    el('div', 'backup-hint', '小结是这一本的结论，对话是这一本的过程，zip 是全部制品的可打开集合——都能带走。'),
   );
   const healthResult = el('div', 'health-result hidden');
   body.append(healthResult);
@@ -3518,6 +3519,31 @@ function renderBackupPanel(body) {
       toast(`导出对话失败：${err.message}`, true);
     } finally {
       conversationBtn.disabled = false;
+    }
+  };
+
+  // 制品 zip：全部制品一个包带走，解压后双击 index.html 直接看（第十四轮）。
+  // 二进制走裸 fetch 拿 blob，不经 api() 的 JSON 解析。
+  artifactsZipBtn.onclick = async () => {
+    try {
+      artifactsZipBtn.disabled = true;
+      const res = await fetch(`/api/notebooks/${state.notebook.id}/artifacts.zip`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = el('a');
+      a.href = url;
+      const slug = String(state.notebook.title || '学习').replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'notebook';
+      a.download = `socratic-${slug}-artifacts.zip`;
+      document.body.append(a);
+      if (typeof a.click === 'function') a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast('已打包全部制品');
+    } catch (err) {
+      toast(`打包失败：${err.message}`, true);
+    } finally {
+      artifactsZipBtn.disabled = false;
     }
   };
 
@@ -4028,6 +4054,71 @@ function renderConfig() {
 
   // ── 4. 自建端点（可添加多个，每个一行） ──
   body.append(buildCustomEndpointsBlock());
+
+  // ── 5. 配置备份：设置 + 端点 + 凭据一次带走（换机器不用重配） ──
+  body.append(buildConfigBackupBlock());
+}
+
+function buildConfigBackupBlock() {
+  const block = el('div', 'cfg-block');
+  block.append(el('h3', 'cfg-block-title', '配置备份'));
+  const row = el('div', 'backup-row');
+  const exportBtn = el('button', 'btn btn-ghost btn-sm', '导出设置');
+  const importBtn = el('button', 'btn btn-ghost btn-sm', '导入设置');
+  row.append(exportBtn, importBtn);
+  block.append(row);
+  block.append(
+    el('div', 'cfg-hint', '设置、自建端点和模型密钥都在里面（含密钥，别外传）。导入会把当前配置整个换成备份里的。'),
+  );
+  exportBtn.onclick = async () => {
+    try {
+      exportBtn.disabled = true;
+      const res = await fetch('/api/config/export');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = el('a');
+      a.href = url;
+      a.download = `socratic-config-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.append(a);
+      if (typeof a.click === 'function') a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast('已导出设置（含密钥，请妥善保存）');
+    } catch (err) {
+      toast(`导出设置失败：${err.message}`, true);
+    } finally {
+      exportBtn.disabled = false;
+    }
+  };
+  importBtn.onclick = () => {
+    const input = el('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        const res = await fetch('/api/config/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(parsed),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+        await refreshConfig();
+        renderConfig();
+        renderModelChip();
+        toast('已导入配置');
+      } catch (err) {
+        toast(`导入配置失败：${err.message}`, true);
+      }
+    };
+    input.click();
+  };
+  return block;
 }
 
 function buildActiveBlock() {
@@ -4865,4 +4956,7 @@ export const __hooks = {
   closeModal,
   handleGlobalKeydown,
   announce,
+  // 配置备份（第十四轮）：设置面板里的导出/导入设置块
+  renderConfig,
+  refreshConfig,
 };
