@@ -2076,8 +2076,30 @@ check('Progress 落盘后可读回', reloaded.progress.concepts['closures'].stat
 check('对话落盘后可读回', reloaded.chat.messages.length === result.messages.length);
 check('列表页能看到这个学习', store.listNotebooks().some((n) => n.id === meta.id));
 
+// 「上次聊到」的数据出口：lastAt 必须是**最后一条消息**的时间，不是 meta.updatedAt。
+// 区别在改名：改名走 touchNotebook，会刷 updatedAt，但一个字也没聊——
+// 用 updatedAt 冒充的话，"上次聊到：今天"就在改名那一刻说谎。
+{
+  const listed = store.listNotebooks().find((n) => n.id === meta.id);
+  const lastMsgTs = Math.max(...store.getNotebook(meta.id).chat.messages.map((m) => Number(m.timestamp) || 0));
+  check('lastAt = 最后一条消息的时间戳', listed.lastAt === lastMsgTs, `lastAt=${listed.lastAt} lastMsg=${lastMsgTs}`);
+  const before = listed.lastAt;
+  const updatedBefore = listed.updatedAt;
+  store.touchNotebook(meta.id, { title: '只是改了个名' });
+  const after = store.listNotebooks().find((n) => n.id === meta.id);
+  check('改名会刷 updatedAt（前提成立）', after.updatedAt !== updatedBefore, `${updatedBefore} → ${after.updatedAt}`);
+  check('改名不刷 lastAt（没聊就是没聊，上次聊到不许跟着改名走）',
+    after.lastAt === before, `before=${before} after=${after.lastAt}`);
+  // 空本：一条消息都没有 → null，前端据此显示「还没聊过」，不许是 0 或当前时间。
+  const bareId = store.createNotebook({ title: '空本', topic: '', goal: null, pace: 'normal' }).id;
+  const bare = store.listNotebooks().find((n) => n.id === bareId);
+  check('没聊过的本 lastAt 为 null（不是 0、不是现在）', bare.lastAt === null, String(bare.lastAt));
+}
+
 section('10. 列表摘要不泄漏数值');
-const summary = store.listNotebooks()[0];
+// 按 id 取，不拿 [0]：列表按 updatedAt 排序，上面「上次聊到」那节又新建了本子，
+// 谁排第一取决于建本时序——断言不该依赖这个。
+const summary = store.listNotebooks().find((n) => n.id === meta.id);
 check('摘要含文字视图', Boolean(summary.learnerView?.counts));
 
 section('11. 开局引导：现编的候选、缓存与兜底');
@@ -2299,8 +2321,50 @@ const notesFile = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', crashId,
 fs.writeFileSync(notesFile, '{ 半截 JSON');
 const readBack = readNotes(crashId);
 check('损坏的 notes.json 读回空默认（不抛）', Array.isArray(readBack) && readBack.length === 0);
-const backups = fs.readdirSync(path.dirname(notesFile)).filter((f) => f.startsWith('notes.json.corrupt-'));
-check('损坏文件留了副本（不静默覆盖可抢救数据）', backups.length === 1, backups.join(','));
+const backupList = () => fs.readdirSync(path.dirname(notesFile)).filter((f) => f.startsWith('notes.json.corrupt-'));
+check('损坏文件留了副本（不静默覆盖可抢救数据）', backupList().length === 1, backupList().join(','));
+// 同一份坏内容被反复读时，副本不许增殖：坏文件每刷新一次、每回合落盘都被读一遍，
+// 过去每读一次就写一份 *.corrupt-<毫秒>（实测坏一个 chat.json 读 6 次堆 4 份相同副本）——
+// "留证据"变成造垃圾山。同一份坏内容只留一份、只喊一次。
+readNotes(crashId); readNotes(crashId); readNotes(crashId);
+check('同一份坏内容再读三次不增殖（证据只留一份）', backupList().length === 1, backupList().join(','));
+// 反向边界：坏法换了一种，旧证据顶不了新损坏，必须再留一份。
+fs.writeFileSync(notesFile, '[ 另一种坏法');
+readNotes(crashId);
+check('换一种坏法必须再留一份（旧证据不顶新损坏）', backupList().length === 2, backupList().join(','));
+// 副本必须是逐字节原件（不是 utf8 往返重写）：损坏取证的意义就在"字节不重写"。
+{
+  const dir = path.dirname(notesFile);
+  const same = backupList().some((n) => fs.readFileSync(path.join(dir, n), 'utf8') === '[ 另一种坏法');
+  check('留下的副本内容与原件一致（取证不重写）', same, backupList().join(','));
+}
+// 撞名钉子（把偶发压成必然）：过去副本名只有 `${file}.corrupt-${Date.now()}`，毫秒不是计数器。
+// 同一毫秒里坏出两种**不同**内容时，第二份 copyFileSync 直接把第一份覆盖掉——前一种坏法查无实据。
+// 实测这个碰撞约每 5 次跑撞中 1 次（上面那条 ==2 时红时绿），所以这里钉死 Date.now 逼它必然撞。
+{
+  const collideId = store.createNotebook({ topic: '撞名测试', goal: null, pace: 'normal' }).id;
+  const collideNotes = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', collideId, 'notes.json');
+  fs.writeFileSync(collideNotes, JSON.stringify([{ title: '本来好的', summary: '', key_points: [] }]));
+  const realNow = Date.now;
+  Date.now = () => 1700000000000; // 冻结：两次损坏落在同一毫秒
+  try {
+    fs.writeFileSync(collideNotes, '[ 第一种坏法');
+    readNotes(collideId);
+    fs.writeFileSync(collideNotes, '{ 第二种坏法');
+    readNotes(collideId);
+  } finally {
+    Date.now = realNow;
+  }
+  const collideDir = path.dirname(collideNotes);
+  const collideBackups = fs.readdirSync(collideDir).filter((f) => f.startsWith('notes.json.corrupt-'));
+  check('同一毫秒坏出两种坏法：两份证据都留下（撞名不覆盖）',
+    collideBackups.length === 2, collideBackups.join(','));
+  const bothContents = ['[ 第一种坏法', '{ 第二种坏法'].every((bad) =>
+    collideBackups.some((n) => fs.readFileSync(path.join(collideDir, n), 'utf8') === bad));
+  check('两种坏法各有一份字节一致的副本（谁都没被顶掉）', bothContents, collideBackups.join(','));
+  // 把它修回合法，别拖累后面 12c 的「健康目录体检报告 ok」前提（副本留着无妨，体检不点名副本）
+  saveNote(collideId, { title: '撞名测试恢复', summary: '', key_points: [] });
+}
 const afterCrash = saveNote(crashId, { title: '恢复后新增', summary: '写入正常', key_points: [] });
 check('损坏后写入正常（原子写）', afterCrash.title === '恢复后新增');
 const tmpLeft = fs.readdirSync(path.dirname(notesFile)).filter((f) => f.endsWith('.tmp'));
@@ -2767,7 +2831,13 @@ check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据
   // 与小结的分工：小结是结论，对话是过程。过程 = 消息 + 题卡（题干/选项/作答）+ 制品 + 笔记，
   // 按时间线还原，场头在 sceneId 变化处插入。
   const convId = store.createNotebook({ title: '闭包学习', topic: '闭包', goal: null, pace: 'normal' }).id;
-  const t0 = new Date('2026-10-06T12:00:00+08:00').getTime();
+  // fixture 必须和断言**同一个坐标系**：下面断言的是导出里的本地墙钟字符串（fmtDateTime 走
+  // getHours 那一族），所以时刻也得按本地墙钟构造。写死 '...T12:00:00+08:00' 是绝对时刻，
+  // 只有在 UTC+8 才和断言相遇——换个时区（UTC / 纽约 / 加尔各答）这条必红，而红的是测试的
+  // 坐标系对不上，不是应用坏。用本地分量构造，任何时区都是 12:00。
+  // 时分都取个位数（09:05 / 09:06）：这样补零丢了对不上——12:00 那种整十位
+  // 把 padStart 删了断言照样绿，等于没钉。
+  const t0 = new Date(2026, 9, 6, 9, 5, 0).getTime();
   // 开场：场景带场名（openScene 来自 scene.mjs，store.saveSceneState 落盘）
   const { openScene } = await import('../server/scene.mjs');
   store.saveSceneState(convId, openScene(store.readSceneState(convId), { title: '作用域实战', conceptId: null }));
@@ -2795,8 +2865,26 @@ check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据
     convMd.split('\n').filter((l) => l.startsWith('#')).join(' | '));
   check('角色标签：我 / 老师，消息按拍号排、带时间',
     convMd.includes('**我**：我想弄明白闭包') && convMd.includes('**老师**：先看作用域') &&
-    convMd.includes('### 第 1 拍（2026-10-06 12:00') && convMd.includes('### 第 2 拍（2026-10-06 12:01'),
+    convMd.includes('### 第 1 拍（2026-10-06 09:05') && convMd.includes('### 第 2 拍（2026-10-06 09:06'),
     convMd.split('\n').filter((l) => l.includes('拍')).join(' | '));
+  // 钉住"这是本地墙钟不是 UTC"这条语义（与 contract-consistency 那节配对）：
+  // 用独立算法（UTC getter）算出同一时刻的 UTC 字符串——只有当本机就在 UTC 时，两者才相等；
+  // 非 UTC 时区必须能在导出里找到本地那串、找不到 UTC 那串。谁把 fmtDateTime 改成 UTC 口径，
+  // 这台机器上就红（UTC 机器上两者天然相等，所以另一头由 contract-consistency 钉住 getUTC 不许出现）。
+  {
+    const d = new Date(t0);
+    const pu = (n) => String(n).padStart(2, '0');
+    const utcStr = `${d.getUTCFullYear()}-${pu(d.getUTCMonth() + 1)}-${pu(d.getUTCDate())} ${pu(d.getUTCHours())}:${pu(d.getUTCMinutes())}`;
+    const localStr = `${d.getFullYear()}-${pu(d.getMonth() + 1)}-${pu(d.getDate())} ${pu(d.getHours())}:${pu(d.getMinutes())}`;
+    if (utcStr === localStr) {
+      check('本地墙钟恰等于 UTC（本机在 UTC 时区）时导出仍取该串',
+        convMd.includes(`### 第 1 拍（${localStr}`), 'UTC 机器上这条与上一条同串，检查 fixture 是否还在今天历');
+    } else {
+      check('导出的时间戳是本地墙钟而不是 UTC（两个坐标系不许混用）',
+        convMd.includes(`### 第 1 拍（${localStr}`) && !convMd.includes(`### 第 1 拍（${utcStr}`),
+        `local=${localStr} utc=${utcStr}`);
+    }
+  }
   check('题卡还原题干 / 选项 / 作答（含补充文字），未作答要如实说',
     convMd.includes('> 题卡（探针）：外层函数 return 之后，里层还能读到它当时的变量吗？') &&
     convMd.includes('> 选项：能读到 · 读不到') &&

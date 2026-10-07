@@ -129,8 +129,17 @@ export function listNotebooks() {
     const graph = readJsonSafe(path.join(NOTEBOOKS_DIR, name, GRAPH_FILE), null);
     let messageCount = 0;
     const chat = readJsonSafe(path.join(NOTEBOOKS_DIR, name, CHAT_FILE), null);
+    // lastAt = 这一本**最后一条消息**的时间戳（"上次聊到"就靠它）。
+    // 不能用 meta.updatedAt：改名也刷那个时间，那不是"聊到"，是"动过目录"。
+    // 取所有带合法时间戳的消息里最新的一个（消息按追加序存，倒着找第一个合法的最省，
+    // 但历史里曾有无时间戳的条目——用 max 兜住，别让一条坏数据把"上次聊到"顶成 1970）。
+    let lastAt = null;
     if (Array.isArray(chat?.messages)) {
       messageCount = chat.messages.filter((m) => m.role === 'user').length;
+      for (const m of chat.messages) {
+        const ts = Number(m.timestamp);
+        if (Number.isFinite(ts) && ts > 0 && (lastAt === null || ts > lastAt)) lastAt = ts;
+      }
     }
     out.push({
       id: meta.id,
@@ -138,6 +147,7 @@ export function listNotebooks() {
       topic: graph?.meta?.topic || meta.topic || '',
       createdAt: meta.createdAt,
       updatedAt: meta.updatedAt,
+      lastAt,
       conceptCount: Array.isArray(graph?.concepts) ? graph.concepts.length : 0,
       learnerView: summariseLearnerView(progress),
       messageCount,

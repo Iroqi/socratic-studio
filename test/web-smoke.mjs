@@ -1722,14 +1722,21 @@ check('草稿轮无异常', errors.length === 0, errors.join(' | '));
 
 // --- 16 会话时间轴：每一天开头一条分隔线，跨天再加一条 ---
 console.log('\n16. 会话时间轴分隔线');
-const DAY = 86400000;
-const t0 = new Date('2026-03-04T09:00:00Z').getTime();
+// 分隔线按**本地日历天**切（daySep 用 toDateString），所以 fixture 也必须按本地墙钟构造：
+// 写死 '2026-03-04T09:00:00Z' 是绝对时刻，在 UTC+13/+14（汤加 / Kiritimati）当地已经是
+// 3 月 5 日 22:00，再加一小时就跨天——"同一天只有一条开头线"当场红。红的是坐标系，不是应用。
+// 用本地分量 + 真实"明天同一时刻"（+24h 后按本地再取日界）来构造，任何时区都成立。
+const localDay = (y, m, d, hh, mm) => new Date(y, m, d, hh, mm).getTime();
+const t0 = localDay(2026, 2, 4, 9, 0);
+// 跨天那条必须落在**下一个本地日历天**：+24h 在 DST 切换日可能是同一天或跳两天，
+// 所以取"当天 00:00 + 36h"这种一定越过次日日界的时刻，再用 09:00 分量摆正。
+const nextDay = localDay(2026, 2, 5, 9, 0);
 const nbTimeline = sampleNotebook();
 nbTimeline.chat.messages = [
   { role: 'user', content: '第一天开工', attachments: [], timestamp: t0 },
   { role: 'assistant', content: '先接地', thinking: '', timestamp: t0 + 60000, artifacts: [], questions: [] },
-  { role: 'user', content: '第二天来了', attachments: [], timestamp: t0 + DAY },
-  { role: 'assistant', content: '继续', thinking: '', timestamp: t0 + DAY + 60000, artifacts: [], questions: [] },
+  { role: 'user', content: '第二天来了', attachments: [], timestamp: nextDay },
+  { role: 'assistant', content: '继续', thinking: '', timestamp: nextDay + 60000, artifacts: [], questions: [] },
 ];
 state.notebook = nbTimeline;
 replayThread();
@@ -3586,6 +3593,53 @@ console.log('\n32. 转场条：新场开头那行「接住第 1 场 ·「这件�
     /var\(--ink-3\)/.test(ghostCss) && /cursor: default/.test(ghostCss), ghostCss.replace(/\s+/g, ' ').trim());
 
   check('这一节无异常', errors.length === errsBefore, errors.slice(errsBefore).join(' | '));
+}
+
+// --- 34 「上次聊到」：列表行上那句时间话（第十一轮挂到第十六轮的候选，数据早就齐了）---
+console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数字越界');
+{
+  const H34 = appModule.__hooks;
+  const errsBefore34 = errors.length;
+  const { lastChatWords } = H34;
+  // fixture 用本地日历分量构造：拿 Date.now() - N*86400000 在 DST 切换日会差出一个日历天
+  // ——本轮 I1 刚钉过这条教训，这里别再埋一遍。
+  const now34 = new Date();
+  const dayAgo = (n) => new Date(now34.getFullYear(), now34.getMonth(), now34.getDate() - n, 9, 0).getTime();
+
+  check('没聊过（null）说「还没聊过」，不摆空也不冒充今天', lastChatWords(null) === '还没聊过', lastChatWords(null));
+  check('坏时间戳也说「还没聊过」（不渲染 NaN-NaN）',
+    lastChatWords('abc') === '还没聊过' && lastChatWords(0) === '还没聊过');
+  check('今天', lastChatWords(dayAgo(0)) === '今天', lastChatWords(dayAgo(0)));
+  check('昨天', lastChatWords(dayAgo(1)) === '昨天', lastChatWords(dayAgo(1)));
+  check('六天内给「N 天前」', lastChatWords(dayAgo(3)) === '3 天前' && lastChatWords(dayAgo(6)) === '6 天前',
+    `${lastChatWords(dayAgo(3))} / ${lastChatWords(dayAgo(6))}`);
+  check('超一周退到「M 月 D 日」（今年内不写年）',
+    /月.*日/.test(lastChatWords(dayAgo(40))) && !/年/.test(lastChatWords(dayAgo(40))), lastChatWords(dayAgo(40)));
+  check('跨年只写年份（旧本子不假装在近期）', /^\d{4} 年$/.test(lastChatWords(dayAgo(400))), lastChatWords(dayAgo(400)));
+
+  // 渲染接线：列表行里那颗 span 的文本来自 lastAt，不是 messageCount / updatedAt。
+  state.notebooks = [
+    { id: 'nb-a', title: '聊过的', topic: '', conceptCount: 0, messageCount: 2, lastAt: dayAgo(2), learnerView: { counts: {} } },
+    { id: 'nb-b', title: '空本', topic: '', conceptCount: 0, messageCount: 0, lastAt: null, learnerView: { counts: {} } },
+  ];
+  H34.renderNotebookList();
+  const rows34 = deepAll(domRoot, 'nb-item').filter((r) => r.dataset.notebookId);
+  const lastOf = (id) => {
+    const row = rows34.find((r) => r.dataset.notebookId === id);
+    return row ? (deepAll(row, 'nb-item-last')[0]?.textContent || '') : '';
+  };
+  check('聊过的行显示「上次聊到：2 天前」', lastOf('nb-a').includes('上次聊到：2 天前'), lastOf('nb-a'));
+  check('空本行显示「上次聊到：还没聊过」（不显示 1970 / 今天）', lastOf('nb-b').includes('上次聊到：还没聊过'), lastOf('nb-b'));
+  // 这一行不许夹带学习量：时间词里除了「N 天前」不许出现别的数字口径。
+  check('「上次聊到」里没有掌握度数字（Invariant 4：时间是时间，学习量不在这行）',
+    !/掌握|百分比|%|正确率|完成度/.test(lastOf('nb-a') + lastOf('nb-b')), lastOf('nb-a') + ' | ' + lastOf('nb-b'));
+  const lastCss = /^\.nb-item-last \{([^}]*)\}/m.exec(cssText)?.[1] || '';
+  check('样式只许用继承色（沿用列表 meta 那套小字，不新造配色）',
+    !/#[0-9a-f]{3,6}/i.test(lastCss) && !/color:/.test(lastCss), lastCss.replace(/\s+/g, ' ').trim());
+
+  state.notebooks = sampleList();
+  H34.renderNotebookList();
+  check('这一节无异常', errors.length === errsBefore34, errors.slice(errsBefore34).join(' | '));
 }
 
 // ─── 回看点击验证（放在收尾前：它真的把一句用户消息送进 /turn，会多出一拍，

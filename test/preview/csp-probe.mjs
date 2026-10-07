@@ -1,4 +1,4 @@
-// 一次性前置测量（不进 npm run test:all，要本机 Edge）：
+// 一次性前置测量（不进 npm run test:all，要本机有真浏览器，路径由 browser.mjs 发现）：
 // 制品的真实投递路径是 iframe srcdoc + sandbox="allow-scripts allow-forms allow-modals allow-popups"
 // （无 allow-same-origin）。这里量的是**那条路径**上，宿主注入的 CSP 字符串到底禁了什么、又留了什么。
 //
@@ -14,6 +14,7 @@ import os from 'node:os';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { ARTIFACT_CSP } from '../../server/artifact.mjs';
+import { findBrowser, browserBaseArgs } from './browser.mjs';
 
 const SRV_PORT = 8899;
 const GIF = Buffer.from(
@@ -86,20 +87,13 @@ function hostDoc(withCsp) {
 }
 
 const port = 8811 + Math.floor(Math.random() * 40);
-const edge =
-  process.env.EDGE_PATH || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const proc = spawn(
-  edge,
-  [
-    '--headless=new',
-    '--disable-gpu',
-    `--remote-debugging-port=${port}`,
-    '--no-first-run',
-    '--no-default-browser-check',
-    `--user-data-dir=${path.join(tmp, 'profile')}`,
-  ],
-  { stdio: 'ignore' },
-);
+const edge = findBrowser();
+if (!edge) {
+  console.error('找不到可用的浏览器（chromium / chrome / edge 都不在 PATH 或已知安装位置）。');
+  console.error('可用 BROWSER_PATH 环境变量指路；这个探针没有浏览器臂就量不到 enforcement。');
+  process.exit(2);
+}
+const proc = spawn(edge, browserBaseArgs(path.join(tmp, 'profile'), [`--remote-debugging-port=${port}`]), { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let wsUrl = null;
@@ -114,7 +108,7 @@ for (let i = 0; i < 60 && !wsUrl; i += 1) {
 if (!wsUrl) {
   proc.kill();
   srv.close();
-  throw new Error('Edge 没起来');
+  throw new Error('浏览器没起来（CDP 端口没答话）');
 }
 
 const ws = new WebSocket(wsUrl);

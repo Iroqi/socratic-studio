@@ -328,6 +328,10 @@ function renderNotebookList() {
     if (learning) meta.append(el('span', null, `${learning} 个在学`));
     if (done) meta.append(el('span', null, `${done} 个已掌握`));
     if (nb.messageCount) meta.append(el('span', null, `${nb.messageCount} 轮对话`));
+    // 「上次聊到」：学了多本以后，"上次聊到哪儿了"比"有几轮对话"更能指路。
+    // 数据取 chat 最后一条消息的时间（store.listNotebooks 的 lastAt），不是 meta.updatedAt
+    // ——改名也会刷 updatedAt，那不是"聊到"。
+    meta.append(el('span', 'nb-item-last', `上次聊到：${lastChatWords(nb.lastAt)}`));
     main.append(meta);
     main.onclick = () => openNotebook(nb.id);
     row.append(main);
@@ -1505,6 +1509,28 @@ function formatTime(ts) {
   if (Number.isNaN(d.getTime())) return '';
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
+ * 「上次聊到」的日期词：把列表里那本学习压成一句人话。
+ * 只说**时间**（今天 / 昨天 / N 天前 / 某月某日 / 某年），不说数量、不碰学习量——
+ * Invariant 4 管的是"不把学习量化成数字给学习者看"，时间戳不是学习量，
+ * 但这里也刻意不显示"几轮对话"之类的新数字（列表行上本来有，重复堆数字反而成噪音）。
+ * 日历天差按**本地**日历算（与 formatTime 同一坐标系）：用 UTC 日界会在极东/极西时区
+ * 把"昨天"显示成"今天"——这条教训本轮刚在测试里钉过，应用侧别再埋一遍。
+ */
+function lastChatWords(lastAt) {
+  if (!lastAt) return '还没聊过';
+  const then = new Date(Number(lastAt));
+  if (Number.isNaN(then.getTime())) return '还没聊过';
+  const now = new Date();
+  const dayStart = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((dayStart(now) - dayStart(then)) / 86400000);
+  if (days <= 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
+  if (then.getFullYear() === now.getFullYear()) return `${then.getMonth() + 1} 月 ${then.getDate()} 日`;
+  return `${then.getFullYear()} 年`;
 }
 
 /**
@@ -5095,6 +5121,7 @@ export const __hooks = {
   currentTheme,
   timelineSep,
   formatTime,
+  lastChatWords,
   // 草稿会话（侧栏占位 → 发消息转正 / ✕ 丢弃；切会话停靠不丢）
   discardDraft,
   commitDraft,

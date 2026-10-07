@@ -312,6 +312,112 @@ check('顺排时可视区先扣掉旁白那一截（"一屏看全"包括讲它�
 check('摘掉摊开不许顺手把讲稿删了（服务端说过的话，落哪儿都不能消失）',
   !/releaseStageNotes\(/.test(stageBody), stageBody.replace(/\s+/g, ' ').slice(0, 200));
 
+// ──────────────────────────────────────────────── 两份本地墙钟格式化不许漂移
+//
+// 同一个"年-月-日 时:分"在两个文件里各写了一遍：server/store.mjs 的 fmtDateTime
+// （导出 Markdown 的拍号时间、"导出于"那行）与 web/app.js 的 formatTime
+// （会话流分隔线的时间戳、笔记"你改过 · 时间"、判定记录那行时间）。
+// 两边都用本地 getter（本机工具渲本地墙钟是对的），但没有任何钉子说它们必须一致——
+// 改其中一份（换个分隔符、少个补零、或"顺手改成 UTC"），同一件事在页面上和导出里
+// 就是两个时间，而没人会当场发现。这一节把"必须逐字符同格式"变成可失败的。
+const storeSrc = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8');
+
+/**
+ * 取出一个格式化函数的"模板"：把补零助手的名字归一掉（一份叫 p、一份叫 pad），
+ * 只留结构本身。这样改分隔符、改字段顺序、丢补零、换 UTC getter 都会让两份模板对不上。
+ */
+function clockTemplate(src, fnName) {
+  const start = src.indexOf(`function ${fnName}(`);
+  if (start < 0) return null;
+  const body = src.slice(start, src.indexOf('\n}', start));
+  const ret = /\n\s*return `([^`]*)`;/.exec(body);
+  if (!ret) return null;
+  const helper = /const (\w+) = \(n\) => String\(n\)\.padStart\(2, '0'\);/.exec(body);
+  let tpl = ret[1];
+  if (helper) tpl = tpl.split(`${helper[1]}(`).join('PAD(');
+  return { tpl, hasPad: !!helper };
+}
+
+const serverClock = clockTemplate(storeSrc, 'fmtDateTime');
+const hostClock = clockTemplate(hostSrc, 'formatTime');
+check('两份墙钟格式化都在（服务端 fmtDateTime / 前端 formatTime）',
+  !!serverClock && !!hostClock, `server=${!!serverClock} host=${!!hostClock}`);
+check('两份墙钟格式逐字符一致（改一份忘另一份，页面与导出就是两个时间）',
+  serverClock?.tpl === hostClock?.tpl,
+  `server="${serverClock?.tpl}" host="${hostClock?.tpl}"`);
+check('两份都带补零助手（少一处 padStart 就出现 2026-3-4 这种对不齐的日期）',
+  serverClock?.hasPad && hostClock?.hasPad, `server=${serverClock?.hasPad} host=${hostClock?.hasPad}`);
+// 本地墙钟这条语义也要钉：谁"顺手改成 UTC"就会让同一时刻在导出与页面上差几个小时。
+const clockFields = (tpl) => ['getFullYear', 'getMonth', 'getDate', 'getHours', 'getMinutes']
+  .every((g) => tpl.includes(`${g}()`));
+check('两份都用本地 getter 取年月日时分（不许出现 getUTC*——那是另一个坐标系）',
+  clockFields(serverClock?.tpl || '') && clockFields(hostClock?.tpl || '')
+  && !/getUTC/.test(serverClock?.tpl || '') && !/getUTC/.test(hostClock?.tpl || ''),
+  `server="${serverClock?.tpl}" host="${hostClock?.tpl}"`);
+
+// ──────────────────────────────────────────────── 预览脚本的浏览器发现不许再写死一台机器
+//
+// test/preview/* 这三条臂过去各自写着 `C:/Program Files (x86)/Microsoft/Edge/...msedge.exe`
+// ——那是一台 Windows 机器的安装目录。换到 Linux / macOS / Edge 装在 Program Files 的机器上，
+// 脚本第一句就"找不到 Edge"，整条浏览器臂静默消失，探针退化成"什么都没量过"却看着像跑完了。
+// 现在发现逻辑收在 test/preview/browser.mjs 一处，脚本只许通过它拿浏览器。这一节钉三件事：
+// 写死的机器路径不许回来、三个脚本都得走公共发现、容器里必须的 shm 参数不许被删。
+{
+  const previewDir = path.join(app, 'test', 'preview');
+  const browserSrc = fs.readFileSync(path.join(previewDir, 'browser.mjs'), 'utf8');
+  check('公共发现模块在（findBrowser / browserBaseArgs 两个出口）',
+    /export function findBrowser\(/.test(browserSrc) && /export function browserBaseArgs\(/.test(browserSrc));
+  check('它按 PATH 轮询 chromium / chrome / edge 家族（不认某一个发行版的叫法）',
+    ['chromium', 'chromium-browser', 'google-chrome', 'msedge'].every((n) => browserSrc.includes(n)));
+  check('EDGE_PATH / BROWSER_PATH 显式指路仍是第一优先（探针要能手工换浏览器）',
+    browserSrc.includes('BROWSER_PATH') && browserSrc.includes('EDGE_PATH'));
+  // 容器里 /dev/shm 常常只有 64MB（本沙箱实测），缺这条 chromium 跑几次就崩——这是环境事实不是玄学
+  check('公共参数带 --disable-dev-shm-usage（容器里没这条浏览器随机崩）',
+    browserSrc.includes("'--disable-dev-shm-usage'"));
+  // --no-sandbox 只许"root 才加"，不许无条件加：普通机器上浏览器沙箱是安全边界，不能替所有人拆
+  check('--no-sandbox 只在 uid=0 时加（不无条件拆掉浏览器沙箱）',
+    /getuid\(\) === 0/.test(browserSrc) && !/args = \[[\s\S]*'--no-sandbox'[\s\S]*\];/.test(
+      browserSrc.split('function browserBaseArgs')[1]?.split('*/')?.[0] || ''),
+    '要么丢了 root 判定，要么把它写进了无条件参数');
+  const probeScripts = ['csp-probe.mjs', 'legacy-artifact-csp.mjs', 'slot-cut-probe.mjs'];
+  for (const name of probeScripts) {
+    const src = fs.readFileSync(path.join(previewDir, name), 'utf8');
+    check(`${name} 不再写死某台机器的安装路径`,
+      !/(^|["'(\s])[A-Za-z]:[\\/]/.test(src) && !/Program Files|msedge\.exe/.test(src),
+      '源码里还有 Windows 盘符路径或 Edge 安装目录');
+    check(`${name} 走公共发现（import ./browser.mjs）`, src.includes("from './browser.mjs'"));
+  }
+
+  // measure-layout.py 这一条本轮抓到的是**假绿**：它量的靶子（#stage-chat / #chatInner /
+  // .stage-tabs）在「会话单列」改版后就不存在了，注入的脚本第一行就抛，dump 里从来没有读数；
+  // 而"脚本跑过了"的判据是"dump 里搜得到标记字样"——搜到的是注入的源码本身。三条一起钉：
+  // 靶子必须对得上今天的页面、读数标记必须"不执行就凑不出"、浏览器路径不许再写死。
+  const pySrc = fs.readFileSync(path.join(previewDir, 'measure-layout.py'), 'utf8');
+  const indexHtml = fs.readFileSync(path.join(app, 'web', 'index.html'), 'utf8');
+  const probeBlock = pySrc.slice(pySrc.indexOf('SETUP = r"""'), pySrc.indexOf('def measure('));
+  // 探针自己造的节点不算锚点（样题是脚本 append 进 #deskInner 的）
+  const SELF_MADE = new Set(['deskInner']);
+  const anchors = [...new Set([
+    ...[...probeBlock.matchAll(/getElementById\('([^']+)'\)/g)].map((m) => m[1]),
+    ...[...probeBlock.matchAll(/box\('#([A-Za-z][\w-]*)/g)].map((m) => m[1]),
+  ])];
+  const missingAnchors = anchors.filter((id) => !SELF_MADE.has(id) && !indexHtml.includes(`id="${id}"`));
+  check('量几何探针的锚点 id 都在今天的 index.html 里（改版了这条会红，不会再静默量空）',
+    anchors.length >= 2 && missingAnchors.length === 0,
+    `锚点=${anchors.join(',')} 缺=${missingAnchors.join(',') || '（无）'}`);
+  // 读数标记不许以"成品"形式出现在探针源码里：那样"搜到标记"就只是搜到了源码本身
+  const codeLines = probeBlock.split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n');
+  check('量几何的读数标记由两段拼出（源码里不许出现成品标记：否则"搜到标记"=搜到源码，就是那条假绿）',
+    !codeLines.includes('PROBE#') && /const M = 'PR' \+ 'OBE';/.test(codeLines)
+    && pySrc.includes('re.search(r"PROBE#(\\{.*?\\})PROBE#"'),
+    `源码含成品标记=${codeLines.includes('PROBE#')} 拼装式=${/const M = 'PR' \+ 'OBE';/.test(codeLines)}`);
+  // 钉的不是"文件里不许出现 Program Files 这几个字"（Windows 那档候选路径本来就得写着），
+  // 而是"不许把它当成唯一的浏览器直接赋给一个常量"——必须走发现流程。
+  check('量几何不再写死某台机器的安装路径，且带容器 shm 参数',
+    !/^EDGE\s*=/m.test(pySrc) && /BROWSER = find_browser\(\)/.test(pySrc)
+    && pySrc.includes('--disable-dev-shm-usage'));
+}
+
 // ──────────────────────────────────────────────── README 排查命令的 API 路由守护
 //
 // README「排查"卡住不回话"」手写了一条 curl 排查流程，README 自己承认过这段债务：

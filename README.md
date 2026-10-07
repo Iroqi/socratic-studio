@@ -53,12 +53,20 @@ npm start                      # → http://127.0.0.1:8787
 | 变量 | 作用 | 默认 |
 |---|---|---|
 | `SOCRATIC_PORT` | 监听端口 | `8787` |
+
+> `SOCRATIC_PORT=0` = 让系统发一个空闲端口，服务起来后在 stdout 打一行机器可读的
+> `LISTENING <port>`。测试套件（`http-smoke` / `artifact-evidence`）就靠这一行握手，
+> 所以与开发服务并存、或两个套件同时跑，都不会再撞 `EADDRINUSE`。手动起也能用：
+> 端口被占用时服务不再抛未捕获异常栈，而是打
+> `[启动失败] 端口 N 已经被占用…换一个：SOCRATIC_PORT=…` 后非零退出。
 | `SOCRATIC_HOST` | 监听地址 | `127.0.0.1`（只对本机开放） |
 | `SOCRATIC_DATA_DIR` | 数据目录 | `data/` |
 | `SOCRATIC_MAX_STEPS` | 一个回合最多几步工具调用 | `24` |
 | `SOCRATIC_STREAM_IDLE_TIMEOUT_MS` | 模型流多久没输出就判定上游卡死（毫秒） | `120000` |
 | `SOCRATIC_ENABLE_FAUX` | `1` 时注册测试桩 provider（无需 key） | 关 |
 | `SOCRATIC_DEBUG` | `1` 时把服务端异常栈也推给前端 | 关 |
+| `BROWSER_PATH` / `EDGE_PATH` | 手跑探针（`test/preview/*`）用的浏览器可执行文件；不给就自动发现 | 自动发现 |
+| `BROWSER_TIMEOUT` | `measure-layout.py` 单次调用浏览器给多少秒 | `60` |
 
 ---
 
@@ -216,7 +224,9 @@ value / probability 是判定置信度不是学习量（Invariant 4），完整�
 │  ├─ runtime-unit.mjs     制品运行时的契约语义（DOM 桩驱动真的运行时）
 │  ├─ contract-consistency.mjs  契约一致性：artifact.md §13.1 与运行时不许漂移
 │  ├─ artifact-evidence-smoke.ps1  制品证据从制品内 → HTTP → 落盘 → 下一回合读回
-│  └─ web-smoke.mjs        前端逻辑测试（最小 DOM 桩）
+│  ├─ web-smoke.mjs        前端逻辑测试（最小 DOM 桩）
+│  └─ preview/             手跑探针（真浏览器量几何 / 量 CSP / 量转场条），不进 test:all。
+│                          浏览器可执行文件由 preview/browser.mjs 发现，四个脚本共用
 └─ data/                   运行时生成（已 gitignore）
 ```
 
@@ -231,8 +241,22 @@ npm run test:all   # 一条命令跑完 6 个套件：各自打「通过 N 项�
 
 > 全部套件都是 Node（跨平台，不需要 PowerShell / pwsh）。第七轮把两个 `*.ps1` 端到端套件
 > 移植成了 `http-smoke.mjs` / `artifact-evidence.mjs`：以前 Linux/macOS 缺 pwsh 时它们如实
-> `SKIP`，现在任何机器 `npm run test:all` 都是 6/6 全绿，汇总口径不再有"没跑"的格子。
+> `SKIP`，汇总口径不再有"没跑"的格子。
 > PS1 原件仍留在 `test/` 下，Windows 上想用 pwsh 跑可以直接 `pwsh -File test/*.ps1`。
+>
+> **"换台机器就红"这一类账，第十七轮起被钉成断言**（此前这句"任何机器 6/6 全绿"是文档口径，
+> 不是测出来的——实测 UTC 时区下就红）：
+> - **时区**：墙钟断言的 fixture 一律本地构造，与断言同坐标系；另有 UTC / Asia/Shanghai /
+>   America/New_York / Pacific/Kiritimati 四档验过的钉子（`run.mjs` 的导出拍号时间、
+>   `web-smoke.mjs` 的"同一天"分隔线、`contract-consistency.mjs` 的两份格式化函数逐字符对齐）。
+>   以后谁把 fixture 写回 `+08:00`/`Z` 这类绝对时刻去断言墙钟字符串，当场红。
+> - **端口**：起真服务的两个套件（`http-smoke` / `artifact-evidence`）用 `SOCRATIC_PORT=0`
+>   拿临时端口，从服务 stdout 的 `LISTENING <port>` 机器可读行握手——与开发服务并存、
+>   或两个套件并发跑，都不会再 `EADDRINUSE`。`serve.mjs` 撞上占用端口时打一句
+>   `[启动失败] 端口 N 已经被占用…` 后非零退出，不再抛未捕获异常栈。
+> - **崩了的套件说实话**：`all.mjs` 里"退出码非 0 且一条『通过 N 项』都没抓到"报 `CRASH`
+>   （带 stderr 尾巴），与"断言变少"的 `FAIL` 分开——套件中途死了不许看起来像只少跑了几项。
+
 
 单个套件（`npm test` 只含前三个，`test:http` / `test:artifact` / `test:web` 各自单跑）：
 
@@ -269,8 +293,17 @@ npm run test:all   # 一条命令跑完 6 个套件：各自打「通过 N 项�
   否则这条会红。
 - `web-smoke.mjs`：用最小 DOM 桩在 Node 里跑 `app.js`，抓"只有真在浏览器里跑才会炸"的错误。
 - `preview/measure-layout.py`：界面观感的度量。把**真** `web/index.html`（内联真 `styles.css`、摘掉 `app.js`）
-  在无头 Edge 里逐页签量几何（不溢出视口、输入框在视口内、舞台区高度够、题就长在会话流里）。
+  在无头浏览器里量几何（不溢出视口、**不横向溢出**、输入框在视口内、会话流高度够、题就长在流里），
+  四档窗口宽 1912 / 1440 / 1180 / 900。
   早期那条静态 mock 实拍链已经删了——mock 会和真页面漂移，真页面的问题它量不出来。
+  第十七轮重修了它：它量的锚点（`#stage-chat` / `#chatInner` / `.stage-tabs`）在「会话单列」改版后
+  就不存在了，注入的脚本第一行就抛，dump 里从来没有读数——而"跑过了"的判据是"dump 里搜得到标记字样"，
+  搜到的是注入进 body 的那段**源码本身**。这类"探针静默失效"比红更难发现，所以现在的读数标记由两段
+  拼出来（不执行就凑不出），锚点 id 由 `contract-consistency.mjs` 对着今天的 `index.html` 逐条钉。
+  浏览器由 `test/preview/browser.mjs` 发现（`BROWSER_PATH`/`EDGE_PATH` → 平台已知安装位 → PATH 轮询
+  chromium / chrome / edge / brave），不再写死某台机器的 Edge 路径；容器里额外带 `--disable-dev-shm-usage`
+  （`/dev/shm` 只有 64MB 时不加就随机崩），`--no-sandbox` 只在 root 下加。
+  **它不进 `test:all`**：随机红的闸门比没有闸门更糟，这条臂仍是手跑的。
 
 ### 排查"卡住不回话"
 
@@ -394,6 +427,15 @@ curl -X POST http://127.0.0.1:8787/api/notebooks/$ID/answer \
 读盘扫**对话 / 笔记 / 事件 / 概念 / 制品标题 / 学习标题**（数据全在本地，几 MB 级扫描可接受，
 不需要索引），每个命中带「哪一本 · 什么种类 · 摘一段」。结果行点开直接打开那本学习并清掉
 搜索态。无数字（Invariant 4：只给"在哪、是什么"，不给量）；空词/无命中给一句人话，不假装没事。
+
+**左栏每行说「上次聊到」（2026-10-07 第十七轮）。** 这本挂了六轮的候选（第十一轮起三次 `⏸ 维持`）
+本轮收掉：列表行的 meta 多一行 `上次聊到：昨天 / 3 天前 / 10 月 6 日 / 还没聊过`。
+数据取 `GET /api/notebooks` 每行的 `lastAt` = **最后一条消息的时间戳**（`chat.messages` 里最大的那个），
+**不是 `meta.updatedAt`**——改名、改设置都会刷 updatedAt，那不是"聊到"，这条由 `run.mjs` 的
+「改名会刷 updatedAt / 改名不刷 lastAt」两颗前提钉子钉住。只读展示、只说时间不说量
+（Invariant 4：可见面上不许长出数字化学情指标，这一行是日历不是分数）；相对天数按**本地日历天**差算，
+跟上面时区那条教训同一坐标系，跨 DST 与 UTC+14 都验过。前端是纯函数 `lastChatWords(lastAt)`，
+坏时间戳与没聊过都回「还没聊过」，不渲 `NaN`。
 
 **「目标卡」是右栏第一行只读上下文（2026-10-06 第八轮）。** 规则把 goal 当锚点（CLARIFY 收窄 →
 DECOMPOSE 编译 → 终局对着 goal 收尾），前端此前却从不显示它。现在紧挨着改动区有一张卡：
@@ -523,7 +565,7 @@ alpha 合成，而"为一个新的配色组合现搓一套算法"正是这套钉
 运行时那段内联 `<script>` 之前，否则脚本先跑、策略后生效。这条顺序有一条反向断言：故意换成
 `injectArtifactRuntime(injectArtifactCsp(html))` 就红。
 
-**这条策略是量出来的，不是猜的**（两个脚本都要真 Edge，跑法写在文件头）：`node test/preview/csp-probe.mjs`
+**这条策略是量出来的，不是猜的**（两个脚本都要真浏览器，路径由 `test/preview/browser.mjs` 发现，跑法写在文件头）：`node test/preview/csp-probe.mjs`
 两臂对照，对照臂先自证"帧内脚本跑得起来、没有策略时 fetch 和外链图都成功"——否则下面每一条"被禁了"都可能
 是连接拒绝的假信号；量下来 fetch 抛 `TypeError`、外链图 `EncodingError`，而内联 script、`new Function`、
 `data:` 图全部照跑（这三条恰恰是孔要用的）。`node test/preview/legacy-artifact-csp.mjs <制品 HTML>` 拿用户
@@ -675,7 +717,7 @@ manifest 认这件、事件里不再有 `persisted`、工具返回值只剩一�
 代价是同一列里凭空多出两个地方，题答完还得搬一次家。现在题就落在把它问出来的那段正文下面，
 往上滚是它、往下读也是它。回合已经结束的旧题**原地作废**（`.sealed`：选项禁用、作答控件摘掉）——
 服务端这时候只回 409，留一个可点的按钮等于骗人去点一个报错。
-`measure-layout.py` 在无头 Edge 里量这一列（题必须能在 `.thread` 里选到、不许被压扁）。
+`measure-layout.py` 在无头浏览器里量这一列（题必须能在 `.thread` 里选到、不许被压扁）。
 
 **题目随消息落盘。** 题面以前只走 SSE，刷新页面就消失——而题面是学习的核心内容。
 现在 `execAsk` 把题目（含作答结果）记成 `roundQuestions`，回合结束时和制品一样挂到
@@ -777,9 +819,11 @@ assistant 消息上写进 `chat.json`；刷新后 `renderThread()` 按时间顺�
 钉在 `web-smoke` 第 14 节（停靠/点回/✕ 三段）与第 21b 节（文件不跟去别的会话）。
 
 **页面布局的度量断言。** `test/preview/measure-layout.py` 把**真**的 `web/index.html`
-（内联真 `styles.css`、摘掉 `app.js`）在无头 Edge 里逐页签渲染一遍，断言
-「整体不溢出视口 / 输入框在视口内 / 舞台区不低于 400px / 当页确实可见 / 会话页的题就长在流里」。
+（内联真 `styles.css`、摘掉 `app.js`）在无头浏览器里按四档窗口宽渲染一遍，断言
+「整体不溢出视口 / 不横向溢出 / 输入框在视口内 / 会话流够高 / 题就长在流里」。
 它以前量的是拼出来的静态假页面，那条 mock 链已经整体删掉——假页面会和真页面漂移，量出来的通过不算数。
+第十七轮又抓到它**第二次**静默失效：锚点是改版前的 `#stage-chat` / `#chatInner`，页面里早没有了，
+脚本一执行就抛，而判据"搜得到标记"搜到的是注入的源码——详见「测试」一节那条。
 
 ## 会话与记忆是怎么管理的
 
@@ -1090,6 +1134,14 @@ agent 调 `read_artifact_evidence` 就能拿到。反过来 agent 下发的指�
   只允许下载**体检此刻认定的损坏文件**（服务端先跑一遍 healthCheck 校验路径在报告里，
   `isWithin` 兜底），不是任意文件读取口；超过 5MB 先拒绝、让人直接翻 data/ 目录。
   处置（修/隔离）仍要人拍板，取证只是只读出口。
+- **证据按内容去重，名字独占**（2026-10-07 第十七轮）：读到一个坏 JSON 就在旁边留一份
+  `*.corrupt-<毫秒>` 原件副本，这是第十一轮的纪律；但坏文件会被**反复读**（右栏每刷新一次、
+  每回合落盘一次都在读它），实测坏一个 `chat.json` 读 6 次就堆 4 份逐字节相同的副本——
+  "留证据"变成了造垃圾山，`[数据损坏]` 也跟着刷屏。现在同一份坏内容只留一份、只喊一次
+  （字节比对，不走 utf8 往返）；**坏法变了必须再留一份**，那是另一种损坏，旧证据顶不了。
+  另一手：副本名里的毫秒**不是计数器**，同毫秒坏出两种不同内容时旧写法会把前一份证据直接覆盖
+  （实测约每 5 次跑撞中 1 次），现在用 `openSync(..., 'wx')` 抢名、撞了就 +1 号——
+  这条由 `run.mjs` 里钉死 `Date.now` 的撞名钉子守着。
 - **处置台**（2026-10-06 第四轮）：体检报告之后能动手了，但只搬走、不删除——
   孤儿制品送进隔离区 `data/quarantine/`（`POST /api/health/quarantine`），随时放回原位
   （`POST /api/health/restore`；原位已被新文件占用时**让路**，不覆盖）。每件搬进/放回都记在
@@ -1142,6 +1194,9 @@ agent 调 `read_artifact_evidence` 就能拿到。反过来 agent 下发的指�
   下次开口 agent 照样读得到（这是设计如此，不是丢失）。下行指令（`onCommand`）只在制品还开着时有效。
 - **界面观感只做过几何度量，没做过像素断言，真页面也没实拍过。**
   逻辑与契约由「测试」一节那 6 个套件覆盖（计数以 `npm run test:all` 的汇总为准）；观感侧只有
-  `test/preview/measure-layout.py` 对**真页面**量出来的几何断言（不溢出视口、输入框在视口内、
-  舞台区高度够、题就长在会话流里）——本机的 headless 视口拿不到，像素这步退化成度量，
+  `test/preview/measure-layout.py` 对**真页面**量出来的几何断言（不溢出视口、不横向溢出、
+  输入框在视口内、会话流够高、题就长在会话流里）——本机的 headless 视口拿不到，像素这步退化成度量，
   别把量出来的 PASS 当成看过。**最终观感还是要打开 `http://127.0.0.1:8787` 自己看一眼。**
+  这条臂第十七轮重修过一次（锚点随改版失效、判据本身是假绿，详见「测试」一节），
+  它仍是**手跑**的：没进 `test:all`，因为这台机器上的真浏览器通道会随机崩，装一个随机红的闸门
+  比没有闸门更糟。

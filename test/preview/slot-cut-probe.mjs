@@ -23,6 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { findBrowser, browserBaseArgs } from './browser.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -57,7 +58,7 @@ fs.writeFileSync(REPORT, `# 讲稿槽 / 转场条 探针 ${new Date().toISOStrin
 say(`临时数据目录：${tmp}`);
 say(`报告实时写到这里：${REPORT}`);
 
-const edgePath = process.env.EDGE_PATH || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
+// 浏览器不再写死一台机器的 Edge 安装路径（见 browser.mjs 头部注释）。
 
 /** 端口必须真空着，否则会话会建在别人的孤儿服务的数据目录里（见 live-desk-probe 同段注释）。 */
 function portIsFree(port) {
@@ -355,7 +356,7 @@ async function slotHtmlPeek(nbId, notebook) {
   }
 }
 
-// ───────────────────────────────────────────── 浏览器臂：真 Edge + CDP
+// ───────────────────────────────────────────── 浏览器臂：真浏览器 + CDP
 
 class Cdp {
   constructor(ws) {
@@ -384,15 +385,20 @@ class Cdp {
   close() { try { this.ws.close(); } catch { /* 已经断了 */ } }
 }
 
-async function launchEdge() {
-  if (!fs.existsSync(edgePath)) {
-    say(`⚠ 找不到 Edge：${edgePath}（浏览器臂跳过。可用 --edge 或环境变量 EDGE_PATH 指路）`);
+async function launchBrowser() {
+  // findBrowser：EDGE_PATH/BROWSER_PATH 显式指路 → 平台已知安装位 → PATH 轮询。
+  // 过去这里写死一台 Windows 的 Edge 路径，换机器就整条臂静默消失（browser.mjs 头部记了因由）。
+  const browserPath = findBrowser();
+  if (!browserPath) {
+    say('⚠ 找不到可用浏览器（可用 BROWSER_PATH 或 EDGE_PATH 指路）——浏览器臂跳过，下面的量都是空的');
     return null;
   }
-  const proc = spawn(edgePath, [
-    '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-    `--remote-debugging-port=${CDP_PORT}`, `--window-size=${WIDTH},${HEIGHT}`,
-    `--user-data-dir=${path.join(tmp, 'edge-profile')}`, 'about:blank',
+  const proc = spawn(browserPath, [
+    ...browserBaseArgs(path.join(tmp, 'edge-profile'), [
+      `--remote-debugging-port=${CDP_PORT}`,
+      `--window-size=${WIDTH},${HEIGHT}`,
+    ]),
+    'about:blank',
   ], { stdio: 'ignore' });
   let wsUrl = null;
   for (let i = 0; i < 40 && !wsUrl; i += 1) {
@@ -402,7 +408,7 @@ async function launchEdge() {
       wsUrl = j.webSocketDebuggerUrl;
     } catch { /* 还没听 */ }
   }
-  if (!wsUrl) { say('⚠ Edge 起了但 CDP 没答话，浏览器臂跳过'); proc.kill(); return null; }
+  if (!wsUrl) { say('⚠ 浏览器起了但 CDP 没答话，浏览器臂跳过'); proc.kill(); return null; }
   const cdp = await Cdp.connect(wsUrl);
   return { proc, cdp };
 }
@@ -487,21 +493,21 @@ const PROBE_STATE = `(() => {
 
 async function browserArm(targetNbId, notebook) {
   say('');
-  say('── 浏览器臂（真 Edge，窗口尺寸是真的，不是 viewport 0x0 那套假数）');
-  const edge = await launchEdge();
-  if (!edge) return;
+  say('── 浏览器臂（真浏览器，窗口尺寸是真的，不是 viewport 0x0 那套假数）');
+  const browser = await launchBrowser();
+  if (!browser) return;
   let sid = null;
   let targetId = null;
   try {
-    const t = await edge.cdp.send('Target.createTarget', { url: 'about:blank' });
+    const t = await browser.cdp.send('Target.createTarget', { url: 'about:blank' });
     targetId = t.targetId;
-    const att = await edge.cdp.send('Target.attachToTarget', { targetId, flatten: true });
+    const att = await browser.cdp.send('Target.attachToTarget', { targetId, flatten: true });
     sid = att.sessionId;
-    await edge.cdp.send('Page.enable', {}, sid);
-    await edge.cdp.send('Runtime.enable', {}, sid);
-    await edge.cdp.send('Page.navigate', { url: `${BASE}/` }, sid);
+    await browser.cdp.send('Page.enable', {}, sid);
+    await browser.cdp.send('Runtime.enable', {}, sid);
+    await browser.cdp.send('Page.navigate', { url: `${BASE}/` }, sid);
     await new Promise((r) => setTimeout(r, 2500));
-    let st = await evalJson(edge.cdp, sid, PROBE_STATE);
+    let st = await evalJson(browser.cdp, sid, PROBE_STATE);
     if (st?.__eval_error) { say(`  ✗ 页面探测脚本本身跑挂了：${st.__eval_error}`); return; }
     say(`  视口：${st.env.innerWidth}x${st.env.innerHeight}（dpr ${st.env.dpr}）｜窄屏=${st.env.narrow}`);
     if (!(st.env.innerWidth > 100)) say('  ⚠ 视口没真起来——下面所有几何数都不许当证据');
@@ -511,7 +517,7 @@ async function browserArm(targetNbId, notebook) {
     say(`  侧栏 ${st.rows?.length ?? 0} 行会话`);
     const row = (st.rows || []).find((r) => r.id === targetNbId);
     if (!row) { say(`  ✗ 侧栏里找不到目标会话 ${targetNbId}`); return; }
-    const openedAt = await evalJson(edge.cdp, sid, `(() => {
+    const openedAt = await evalJson(browser.cdp, sid, `(() => {
       const r = [...document.querySelectorAll('.nb-item')].find(x => x.dataset.notebookId === ${JSON.stringify(targetNbId)});
       const m = r && r.querySelector('.nb-item-main');
       if (!m) return JSON.stringify({ok:false});
@@ -520,11 +526,11 @@ async function browserArm(targetNbId, notebook) {
     })()`);
     say(`  点开「${row.title}」：${openedAt?.ok ? '已派发 click' : '没找到可点的行'}`);
     await new Promise((r) => setTimeout(r, 3000));
-    st = await evalJson(edge.cdp, sid, PROBE_STATE);
+    st = await evalJson(browser.cdp, sid, PROBE_STATE);
     say(`  台面：${st.sceneBlocks?.length ?? 0} 场｜拍 ${st.deskBeatCount}｜制品卡 ${st.cards?.length ?? 0}｜游离的 .stage-notes ${st.looseStageNotes}`);
     // 沙箱帧（srcdoc + 不透明源）父页读不到 DOM，宿主那条落位只能靠帧自己上报。
     // CDP 若能把帧当独立 target 附上去，就能进帧里量 canvas——先探一下这条通道在不在。
-    const infos = (await edge.cdp.send('Target.getTargets'))?.targetInfos || [];
+    const infos = (await browser.cdp.send('Target.getTargets'))?.targetInfos || [];
     const iframes = infos.filter((t) => t.type === 'iframe' || /srcdoc/.test(String(t.url || '')));
     say(`  帧内可读性：CDP 看见 ${iframes.length} 个 iframe target${iframes.length ? `（可钻进去量 canvas）：${iframes.map((t) => String(t.url).slice(0, 24)).join(' ')}` : '⇒ 钻不进去，画面里画了什么只能靠帧上报'}`);
     for (const b of st.sceneBlocks || []) {
@@ -600,7 +606,7 @@ async function browserArm(targetNbId, notebook) {
     }
 
     // 点承台那件：D 那一刀的手感
-    const clickable = await evalJson(edge.cdp, sid, `(() => {
+    const clickable = await evalJson(browser.cdp, sid, `(() => {
       const chips = [...document.querySelectorAll('.scene-block .scene-cut .cut-prop')].filter(b => b.tagName === 'BUTTON');
       if (!chips.length) return JSON.stringify({clicked: false, why: '画面上没有可点的承台片'});
       const chip = chips[0];
@@ -610,7 +616,7 @@ async function browserArm(targetNbId, notebook) {
     say(`  点转场条上的承台片：${clickable.clicked ? `点了「${clickable.text}」` : `没得点（${clickable.why}）`}`);
     if (clickable.clicked) {
       await new Promise((r) => setTimeout(r, 1200));
-      const after = await evalJson(edge.cdp, sid, PROBE_STATE);
+      const after = await evalJson(browser.cdp, sid, PROBE_STATE);
       say(`    点完之后：钉住一拍 ${JSON.stringify(after.watched)}｜各场收合状态 ${after.sceneBlocks.map((b) => `${b.sceneId}:${b.collapsed ? '收' : '开'}`).join(' ')}`);
       const opened = after.sceneBlocks.filter((b) => !b.collapsed).length;
       say(`    ${after.watched?.length ? '✓ 镜头钉住了（A-2 那只手复用到）' : '⚠ 没有任何一拍被钉住 ⇒ 点了等于没点'}｜摊开的场 ${opened} 个`);
@@ -628,10 +634,10 @@ async function browserArm(targetNbId, notebook) {
       }
     }
   } finally {
-    try { if (targetId) await edge.cdp.send('Target.closeTarget', { targetId }); } catch { /* CDP 收尾失败不该拖住清场 */ }
-    edge.cdp.close();
-    edge.proc.kill();
-    say('  Edge 已关');
+    try { if (targetId) await browser.cdp.send('Target.closeTarget', { targetId }); } catch { /* CDP 收尾失败不该拖住清场 */ }
+    browser.cdp.close();
+    browser.proc.kill();
+    say('  浏览器已关');
   }
 }
 
@@ -724,14 +730,14 @@ try {
   if (server?.child && !server.child.killed) server.child.kill();
   if (DATA) say(`盘是外头给的，探针没删：${tmp}`);
   else if (flag('keep')) say(`临时目录留着（自己删）：${tmp}`);
-  // Edge 的 user-data-dir 就在这份临时目录里：进程刚 kill 时文件还被锁着，
+  // 浏览器的 user-data-dir 就在这份临时目录里：进程刚 kill 时文件还被锁着，
   // 直接 rmSync 会 EPERM 把整个探针崩掉（第一遍就崩在这里，报告最后几行没落盘）。
   else {
     let cleaned = false;
     for (let i = 0; i < 10 && !cleaned; i += 1) {
       try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 6, retryDelay: 300 }); cleaned = true; }
       catch (err) {
-        if (i === 9) say(`⚠ 临时目录没删干净（Edge 还锁着）：${err.code} ${tmp}`);
+        if (i === 9) say(`⚠ 临时目录没删干净（浏览器还锁着）：${err.code} ${tmp}`);
         else await new Promise((r) => setTimeout(r, 400));
       }
     }

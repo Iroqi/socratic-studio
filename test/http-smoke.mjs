@@ -15,8 +15,10 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const APP = path.resolve(here, '..');
-const PORT = process.env.SOCRATIC_PORT || '8799';
-const BASE = `http://127.0.0.1:${PORT}`;
+// 默认让系统挑一个空闲端口（SOCRATIC_PORT=0），从服务打印的 `LISTENING <port>` 读回实际端口。
+// 过去这里写死 8799：与开发服务并存、或两个套件并发跑就 EADDRINUSE，服务没起来，
+// 整套断言直接 0 项——聚合器报成「FAIL 0 项」，看起来像断言变少了。显式给了 SOCRATIC_PORT 就照用那个值。
+const PORT = process.env.SOCRATIC_PORT || '0';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'socratic-http-'));
 const tmpOut = path.join(os.tmpdir(), `socratic-http-out-${Date.now()}.log`);
 const tmpErr = path.join(os.tmpdir(), `socratic-http-err-${Date.now()}.log`);
@@ -37,6 +39,26 @@ const server = spawn(process.execPath, ['server/serve.mjs'], {
 });
 server.stdout.pipe(fs.createWriteStream(tmpOut));
 server.stderr.pipe(fs.createWriteStream(tmpErr));
+
+// 服务起来后会打一行 `LISTENING <实际端口>`。端口为 0 时那才是真端口，BASE 由它拼出来。
+let BASE = '';
+const listeningReady = new Promise((resolve, reject) => {
+  let buf = '';
+  const timer = setTimeout(() => {
+    let tail = '';
+    try { tail = fs.readFileSync(tmpErr, 'utf8').slice(0, 600); } catch { /* 日志可能没落 */ }
+    reject(new Error(`30 秒内没读到 LISTENING 行（服务没起来）。stderr 前 600 字节：\n${tail}`));
+  }, 30000);
+  const onData = (chunk) => {
+    buf += chunk.toString('utf8');
+    const m = /^LISTENING (\d+)$/m.exec(buf);
+    if (!m) return;
+    clearTimeout(timer);
+    server.stdout.off('data', onData);
+    resolve(Number(m[1]));
+  };
+  server.stdout.on('data', onData);
+});
 
 let passed = 0;
 let failed = 0;
@@ -65,6 +87,9 @@ async function jfetch(url, { method = 'GET', headers = {}, body } = {}) {
 }
 
 async function waitForServer() {
+  // 先拿到实际端口（端口 0 时只有服务自己知道），再轮询 bootstrap。
+  const port = await listeningReady;
+  BASE = `http://127.0.0.1:${port}`;
   let last = '';
   for (let i = 0; i < 60; i += 1) {
     try {
@@ -186,11 +211,43 @@ function scriptBody(script) {
   return JSON.stringify({ script: JSON.stringify(script) });
 }
 
+/**
+ * 端口被占时说实话：再起一个服务压在当前 BASE 的端口上，它必须
+ * ① 以退出码 1 结束（以前是 EADDRINUSE 抛未捕获异常 → 一屏栈 → 测试聚合器只看到"套件死了"）；
+ * ② stderr 里有 `[启动失败] 端口 ... 已经被占用` 这句人话；
+ * ③ stderr 里不许出现未捕获异常栈（`Unhandled 'error' event` / EADDRINUSE 原始栈）。
+ */
+async function expectAddrInUse() {
+  const port = Number(BASE.split(':').pop());
+  const busyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'socratic-busy-'));
+  const busy = spawn(process.execPath, ['server/serve.mjs'], {
+    cwd: APP,
+    env: { ...env, SOCRATIC_PORT: String(port), SOCRATIC_DATA_DIR: busyDir },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  busy.stderr.on('data', (c) => { out += c.toString('utf8'); });
+  const code = await new Promise((resolve) => {
+    const t = setTimeout(() => { busy.kill(); resolve(null); }, 15000);
+    busy.on('exit', (c) => { clearTimeout(t); resolve(c); });
+  });
+  fs.rmSync(busyDir, { recursive: true, force: true });
+  return code === 1
+    && /\[启动失败\] 端口 \d+ 已经被占用/.test(out)
+    && !/Unhandled 'error' event/.test(out);
+}
+
 try {
   await waitForServer();
   console.log('\n1. 服务与静态资源');
   const boot = await jfetch(`${BASE}/api/bootstrap`);
   check('服务启动', boot.data?.app === 'Socratic Studio', JSON.stringify(boot.data).slice(0, 200));
+  // 端口握手：套件不再写死端口，实际端口从服务打印的 `LISTENING <port>` 读回。
+  // BASE 里必须是真的那个端口，不是字面 0（0 意味着握手没读成，后面全是空响应）。
+  check('实际端口由 LISTENING 行握手拿到（BASE 不是 :0）',
+    /^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(BASE) && !BASE.endsWith(':0'), BASE);
+  check('端口占用不再抛未捕获异常栈：第二次起同端口 → 人话 + 退出码 1',
+    await expectAddrInUse(), '看下面 1 节里的 [启动失败] 检查');
   check('faux provider 已注册', (boot.data?.availableModels || []).filter((m) => m.provider === 'faux').length === 1, JSON.stringify(boot.data?.availableModels));
   const idx = await fetch(`${BASE}/`);
   check('index.html 可访问', idx.status === 200, `status=${idx.status}`);

@@ -12,6 +12,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { injectArtifactCsp } from '../../server/artifact.mjs';
+import { findBrowser, browserBaseArgs } from './browser.mjs';
 
 const target = process.argv[2];
 if (!target || !fs.existsSync(target)) {
@@ -58,14 +59,13 @@ function hostDoc(html) {
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'legacy-csp-'));
 const port = 8811 + Math.floor(Math.random() * 40);
-const edge =
-  process.env.EDGE_PATH || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const proc = spawn(
-  edge,
-  ['--headless=new', '--disable-gpu', `--remote-debugging-port=${port}`, '--no-first-run',
-    '--no-default-browser-check', `--user-data-dir=${path.join(tmp, 'profile')}`],
-  { stdio: 'ignore' },
-);
+const edge = findBrowser();
+if (!edge) {
+  console.error('找不到可用的浏览器（chromium / chrome / edge 都不在 PATH 或已知安装位置）。');
+  console.error('可用 BROWSER_PATH 环境变量指路；没有真浏览器这条核对跑不出意义。');
+  process.exit(2);
+}
+const proc = spawn(edge, browserBaseArgs(path.join(tmp, 'profile'), [`--remote-debugging-port=${port}`]), { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let wsUrl = null;
@@ -78,7 +78,7 @@ for (let i = 0; i < 60 && !wsUrl; i += 1) {
 }
 if (!wsUrl) {
   proc.kill();
-  throw new Error('Edge 没起来');
+  throw new Error('浏览器没起来（CDP 端口没答话）');
 }
 const ws = new WebSocket(wsUrl);
 await new Promise((res, rej) => {

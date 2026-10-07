@@ -15,8 +15,9 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const APP = path.resolve(here, '..');
-const PORT = process.env.SOCRATIC_PORT || '8860';
-const BASE = `http://127.0.0.1:${PORT}`;
+// 与 http-smoke 同理：默认请系统挑空闲端口，从服务打印的 `LISTENING <port>` 读回实际端口。
+// 过去写死 8860，两个套件并发跑就撞 EADDRINUSE，整套证据链断言直接 0 项。
+const PORT = process.env.SOCRATIC_PORT || '0';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'socratic-art-'));
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'art-'));
 const tmpOut = path.join(tmpDir, 'out.log');
@@ -26,6 +27,25 @@ const env = { ...process.env, SOCRATIC_PORT: String(PORT), SOCRATIC_DATA_DIR: da
 const server = spawn(process.execPath, ['server/serve.mjs'], { cwd: APP, env, stdio: ['ignore', 'pipe', 'pipe'] });
 server.stdout.pipe(fs.createWriteStream(tmpOut));
 server.stderr.pipe(fs.createWriteStream(tmpErr));
+
+let BASE = '';
+const listeningReady = new Promise((resolve, reject) => {
+  let buf = '';
+  const timer = setTimeout(() => {
+    let tail = '';
+    try { tail = fs.readFileSync(tmpErr, 'utf8').slice(0, 600); } catch { /* 日志可能没落 */ }
+    reject(new Error(`30 秒内没读到 LISTENING 行（服务没起来）。stderr 前 600 字节：\n${tail}`));
+  }, 30000);
+  const onData = (chunk) => {
+    buf += chunk.toString('utf8');
+    const m = /^LISTENING (\d+)$/m.exec(buf);
+    if (!m) return;
+    clearTimeout(timer);
+    server.stdout.off('data', onData);
+    resolve(Number(m[1]));
+  };
+  server.stdout.on('data', onData);
+});
 
 let passed = 0;
 let failed = 0;
@@ -51,6 +71,9 @@ async function jfetch(url, { method = 'GET', headers = {}, body } = {}) {
 }
 
 async function waitForServer() {
+  // 先拿到实际端口（端口 0 时只有服务自己知道），再轮询 bootstrap。
+  const port = await listeningReady;
+  BASE = `http://127.0.0.1:${port}`;
   let last = '';
   for (let i = 0; i < 60; i += 1) {
     try {

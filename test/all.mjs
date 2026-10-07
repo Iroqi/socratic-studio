@@ -59,12 +59,21 @@ for (const suite of SUITES) {
   const counts = [...out.matchAll(/通过 (\d+) 项[，,]失败 (\d+) 项/g)];
   const passed = counts.reduce((n, m) => n + Number(m[1]), 0);
   const broke = counts.reduce((n, m) => n + Number(m[2]), 0);
+  // 「一项都没跑」和「跑了但有红」是两件事，必须分开报。
+  // 以前崩掉的套件（起服务撞 EADDRINUSE、未捕获异常直接死）报成 `FAIL 0 项`，
+  // 合计跟着变小——看上去像"断言变少了"，其实是"这个套件根本没跑完"。
+  const crashed = r.status !== 0 && counts.length === 0;
   const ok = r.status === 0 && counts.length > 0 && broke === 0;
   if (ok) total += passed;
   else failed++;
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${String(passed).padStart(4)} 项  ${suite.name}`);
-  if (!ok) {
-    console.log(out.split('\n').filter((l) => /失败|✗|Error|error/.test(l)).slice(-8).join('\n'));
+  const tag = crashed ? 'CRASH' : ok ? 'PASS' : 'FAIL';
+  console.log(`${tag}  ${String(passed).padStart(4)} 项  ${suite.name}`);
+  if (crashed) {
+    const err = (r.stderr || Buffer.from('')).toString('utf8');
+    console.log('  这个套件**没跑完**（退出码非 0，且一行「通过 N 项」都没有）——不是断言变少，是它中途死了：');
+    console.log(err.split('\n').filter((l) => l.trim()).slice(-6).map((l) => `    ${l}`).join('\n'));
+  } else if (!ok) {
+    console.log(out.split('\n').filter((l) => /失败|✗|Error|error|FAIL/.test(l)).slice(-8).join('\n'));
     console.log((r.stderr || Buffer.from('')).toString('utf8').split('\n').slice(-6).join('\n'));
   }
 }

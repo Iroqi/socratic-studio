@@ -1494,7 +1494,13 @@ function expandAttachments(notebookId, attachments = [], modelHasVision) {
 }
 
 server.listen(PORT, HOST, () => {
-  const url = `http://${HOST}:${PORT}`;
+  // 实际端口可能不是 PORT：测试套件用 SOCRATIC_PORT=0 请系统挑一个空闲端口，
+  // 这时 server.address().port 才是真的那一个。把**实际**端口打在 stdout 第一行，
+  // 起服务的一方读这行定地址——固定端口在并发跑 / 与 dev 服务并存时会 EADDRINUSE。
+  const actual = server.address()?.port ?? PORT;
+  // 机器可读的一行：test/*.mjs 靠它拿到实际端口，别改格式（改了套件找不到服务）。
+  console.log(`LISTENING ${actual}`);
+  const url = `http://${HOST}:${actual}`;
   console.log(`\n  Socratic Studio 已启动`);
   console.log(`  → ${url}`);
   console.log(`  数据目录：${DATA_DIR}`);
@@ -1504,6 +1510,28 @@ server.listen(PORT, HOST, () => {
     );
   }
   console.log('');
+});
+
+// 端口被占是启动最常见的失败。以前没有这个监听：Node 把 'error' 当未捕获异常抛出，
+// 打印一屏异常栈后进程死掉——测试聚合器只看到"套件退出码非 0、一项断言都没跑"，
+// 报成 FAIL 0 项，看上去像"断言变少了"，其实是"服务根本没起来"。
+// 现在说实话：说是哪个端口、大概率是谁占的、怎么换。
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(
+      `[启动失败] 端口 ${PORT} 已经被占用（${HOST}:${PORT}）。\n` +
+        `  多半是另有一个 Socratic Studio 在跑，或别的程序占着这个端口。\n` +
+        `  换一个：SOCRATIC_PORT=41712 npm start（测试里用 SOCRATIC_PORT=0 让系统挑空闲端口）。`,
+    );
+  } else if (err.code === 'EACCES') {
+    console.error(
+      `[启动失败] 没有权限监听 ${HOST}:${PORT}（1024 以下需要 root）。换一个端口：SOCRATIC_PORT=8787 npm start`,
+    );
+  } else {
+    console.error(`[启动失败] 监听 ${HOST}:${PORT} 出错：${err.message}（code=${err.code || '—'}）`);
+  }
+  process.exitCode = 1;
+  process.exit(1);
 });
 
 process.on('SIGINT', () => {
