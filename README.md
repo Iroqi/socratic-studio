@@ -107,6 +107,14 @@ auth 解析顺序：显式 `apiKey` → 已存的 credential → 环境变量。
 | `SOCRATIC_JEV_MODEL` | 覆盖模型 id |
 | `SOCRATIC_ENABLE_FAUX` | `1` 时判定走确定性桩（不联网、不花钱、结果标 `jev_called: false`） |
 
+**面板显式可配了（2026-10-07 第十五轮）**：设置弹层新开「判定模型（Decision）」块——路由
+（TypeSafe 官方 / OpenRouter）、模型 id、key（只存本机、永不回显）、确定性桩开关，保存后
+`GET/PUT /api/config/decision` 落盘到 `settings.json`（decision 字段）+ `credentials.json`
+（`jev` key）。**面板配了的字段压过环境变量**（`SOCRATIC_*` 仍是回退层，老用户行为不变）；
+面板没碰过（`configured: false`）时判定照旧走环境变量。配置导出/导入把 decision 设置与
+jev 凭据一起带走（备份本意），导入白名单清洗 provider/model/faux，key 只进凭据。
+未配置 key 时状态行明说「判定会跳过，退回模型自行判断」——与工具侧同口径，绝不假装判过。
+
 三条红线写在 `server/decision.mjs`（与 JEV 官方文档同口径）：**probability ≠ 正确率**，只当置信度
 门槛（< 0.8 或边际 < 0.15 进 `needs_review`）；**缺失证据 = needs_review**（unknown），低概率硬凑
 比不判更糟；**判定全留痕**——每次调用（含失败）写进 `data/notebooks/<id>/decision-journal.json`

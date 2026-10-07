@@ -4017,6 +4017,7 @@ async function openConfig() {
   modalLastFocus = document.activeElement || null;
   $('configModal').classList.remove('hidden');
   await refreshConfig();
+  state.decision = await api('GET', '/api/config/decision');
   renderConfig();
 }
 
@@ -4055,8 +4056,103 @@ function renderConfig() {
   // ── 4. 自建端点（可添加多个，每个一行） ──
   body.append(buildCustomEndpointsBlock());
 
+  // ── 4.5 判定模型（Decision）：JEV 这类不生成文字的决策模型，面板里显式可配 ──
+  body.append(buildDecisionBlock());
+
   // ── 5. 配置备份：设置 + 端点 + 凭据一次带走（换机器不用重配） ──
   body.append(buildConfigBackupBlock());
+}
+
+/**
+ * 判定模型（Decision）配置（第十五轮）。
+ * 不生成文字，只做类型化判定——本应用用它做「判定外包」（判对/判错、证据够不够、下一步选哪个）。
+ * 面板配置压过环境变量（没碰过面板的老用户行为不变）；key 只存本机、永不回显。
+ */
+function buildDecisionBlock() {
+  const dec = state.decision || {};
+  const block = el('div', 'cfg-block');
+  block.append(el('h3', 'cfg-block-title', '判定模型（Decision）'));
+  block.append(el('span', 'cfg-block-note', '不生成文字，只做类型化判定——判对/判错、证据、下一步'));
+
+  const providerSel = el('select', 'cfg-select');
+  for (const [v, label] of [['typesafe', 'TypeSafe 官方'], ['openrouter', 'OpenRouter']]) {
+    const opt = el('option', null, label);
+    opt.value = v;
+    providerSel.append(opt);
+  }
+  providerSel.value = dec.provider === 'openrouter' ? 'openrouter' : 'typesafe';
+  block.append(el('label', 'cfg-label', '路由'));
+  block.append(providerSel);
+
+  const modelInput = el('input', 'cfg-input');
+  modelInput.type = 'text';
+  modelInput.placeholder = '模型 id（留空用路由默认）';
+  modelInput.value = dec.model || '';
+  block.append(el('label', 'cfg-label', '模型'));
+  block.append(modelInput);
+
+  const keyInput = el('input', 'cfg-input');
+  keyInput.type = 'password';
+  keyInput.placeholder = 'API key（只存本机，不回显）';
+  keyInput.autocomplete = 'off';
+  block.append(el('label', 'cfg-label', 'key'));
+  block.append(keyInput);
+
+  const fauxRow = el('div', 'cfg-check-row');
+  const fauxInput = el('input');
+  fauxInput.type = 'checkbox';
+  fauxInput.checked = dec.faux === true;
+  fauxRow.append(fauxInput);
+  fauxRow.append(el('span', null, '用确定性桩（不联网、不花钱，判定标 jev_called: false）'));
+  block.append(fauxRow);
+
+  const modelLabel = dec.model || (dec.provider === 'openrouter' ? 'typesafe/jev-1.13' : 'jev-1.13.0');
+  const statusLine = el('p', 'cfg-hint');
+  statusLine.textContent = dec.configured
+    ? `已配置：${dec.provider === 'openrouter' ? 'OpenRouter' : 'TypeSafe'} · ${modelLabel}`
+    : '未配置 key：判定会跳过，退回模型自行判断（不会假装判过）';
+  block.append(statusLine);
+
+  const btnRow = el('div', 'cfg-check-row');
+  const saveBtn = el('button', 'btn btn-primary btn-sm', '保存');
+  btnRow.append(saveBtn);
+  if (dec.configured) {
+    const clearBtn = el('button', 'btn btn-ghost btn-sm', '清除 key');
+    btnRow.append(clearBtn);
+    clearBtn.onclick = async () => {
+      try {
+        clearBtn.disabled = true;
+        const r = await api('PUT', '/api/config/decision', { apiKey: '' });
+        state.decision = { provider: r.provider, model: r.model, faux: r.faux, configured: false };
+        renderConfig();
+        toast('已清除判定模型 key');
+      } catch (err) {
+        toast(`清除失败：${err.message}`, true);
+      }
+    };
+  }
+  block.append(btnRow);
+
+  saveBtn.onclick = async () => {
+    try {
+      saveBtn.disabled = true;
+      const payload = {
+        provider: providerSel.value,
+        model: modelInput.value.trim(),
+        faux: fauxInput.checked,
+      };
+      if (keyInput.value.trim()) payload.apiKey = keyInput.value.trim();
+      const r = await api('PUT', '/api/config/decision', payload);
+      state.decision = { provider: r.provider, model: r.model, faux: r.faux, configured: r.configured };
+      renderConfig();
+      toast('已保存判定模型配置');
+    } catch (err) {
+      toast(`保存失败：${err.message}`, true);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  };
+  return block;
 }
 
 function buildConfigBackupBlock() {

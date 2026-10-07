@@ -13,8 +13,25 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from './config.mjs';
+import { DATA_DIR, SETTINGS_FILE, CREDENTIALS_FILE } from './config.mjs';
 import { runTurn } from './agent.mjs';
+import { panelDecisionOpts } from './decision.mjs';
+
+/** 分身任务也用面板配置的 Decision 选项（没有就走环境变量，跟主回合一致）。 */
+function readJsonSafe(file, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return fallback;
+  }
+}
+
+function decisionOptsForTasks() {
+  return panelDecisionOpts({
+    settings: readJsonSafe(SETTINGS_FILE, {}),
+    credentials: readJsonSafe(CREDENTIALS_FILE, {})['jev'] || undefined,
+  });
+}
 
 const HELPER_RULES = `
 你现在是一个**分身**，被主教学会话派出来单独做一件事。你不是主讲老师。
@@ -143,6 +160,7 @@ export class TaskRunner {
         },
         signal: controller.signal,
         systemPrompt,
+        decision: decisionOptsForTasks(),
         // 分身拿的是派出那一刻的 notebook 克隆：它一写 scene.json 就用旧台面盖掉老师
         // 在这之后的每一手（实测：第二场连台上的道具一起退回第一场）。上台归宿主。
         deskWriter: false,

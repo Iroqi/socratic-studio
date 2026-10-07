@@ -23,7 +23,7 @@ const { checkTransition, runTurn, buildTools, TOOL_NAMES, seedArtifacts, normali
 const store = await import('../server/store.mjs');
 const { crc32 } = await import('../server/zip.mjs');
 const { ensureDirs, NOTEBOOKS_DIR } = await import('../server/config.mjs');
-const { jevDecide, normalizeAnswers, validateQuestions, DecisionError } = await import('../server/decision.mjs');
+const { jevDecide, normalizeAnswers, validateQuestions, mergeJevConfig, panelDecisionOpts, DecisionError } = await import('../server/decision.mjs');
 
 ensureDirs();
 
@@ -2524,6 +2524,31 @@ try {
 } catch (e) { cfgErr = e; }
 check('无 key 且非 faux → config 错误（点名环境变量）',
   cfgErr instanceof DecisionError && cfgErr.kind === 'config' && /TYPESAFE_API_KEY/.test(cfgErr.message));
+
+// —— 13f. 面板配置压过环境变量（第十五轮：Decision 面板显式可配）
+const envForMerge = {
+  SOCRATIC_JEV_PROVIDER: 'openrouter',
+  SOCRATIC_JEV_API_KEY: 'env-key',
+  SOCRATIC_JEV_MODEL: 'env-model',
+  SOCRATIC_ENABLE_FAUX: '1',
+};
+const envOnly = mergeJevConfig({}, envForMerge);
+check('面板没配时整份回退环境变量（provider/key/model/faux）',
+  envOnly.provider === 'openrouter' && envOnly.apiKey === 'env-key' && envOnly.model === 'env-model' && envOnly.faux === true,
+  JSON.stringify(envOnly));
+const panelWins = mergeJevConfig({ provider: 'typesafe', apiKey: 'panel-key', faux: false }, envForMerge);
+check('面板配了的字段压过环境变量（provider/key/faux），没配的仍回退（model）',
+  panelWins.provider === 'typesafe' && panelWins.apiKey === 'panel-key' && panelWins.faux === false && panelWins.model === 'env-model',
+  JSON.stringify(panelWins));
+const storedOpts = panelDecisionOpts({
+  settings: { decision: { provider: 'openrouter', model: 'typesafe/jev-1.13', faux: true } },
+  credentials: { key: 'c-key' },
+});
+check('panelDecisionOpts 从落盘配置生成 opts（provider/model/faux/apiKey）',
+  storedOpts.provider === 'openrouter' && storedOpts.model === 'typesafe/jev-1.13' && storedOpts.faux === true && storedOpts.apiKey === 'c-key',
+  JSON.stringify(storedOpts));
+check('panelDecisionOpts 全空回 null（没碰过面板 → 判定走环境变量）', panelDecisionOpts({}) === null);
+check('panelDecisionOpts 只配 provider 也生效', panelDecisionOpts({ settings: { decision: { provider: 'typesafe' } } })?.provider === 'typesafe');
 
 // —— 13e. 工具接线：buildTools 注册、execJevJudge 判定留痕、无 key 明说、坏输入报 validation
 const jevTool = buildTools().find((t) => t.name === TOOL_NAMES.JEV_JUDGE);

@@ -3796,6 +3796,34 @@ console.log('\n32. 转场条：新场开头那行「接住第 1 场 ·「这件�
   check('配置备份这条链路无异常', errors.length === 0, errors.join(' | '));
 }
 
+// ─── 34. 判定模型（Decision）：JEV 这类决策模型面板显式可配
+{
+  const { state: st, renderConfig } = appModule.__hooks;
+  st.settings = { activeModel: null, custom: null, customEndpoints: [], recent: [] };
+  st.config = { availableModels: [], subscriptions: [], endpoints: [] };
+  st.decision = { provider: 'typesafe', model: '', faux: false, configured: false };
+  renderConfig();
+  const cfgBody = doc.getElementById('configBody');
+  const blocks = cfgBody.findByClass('cfg-block');
+  const decBlock = blocks.find((b) => Array.from(b.children).some((c) => c.textContent === '判定模型（Decision）'));
+  check('设置面板有「判定模型（Decision）」块（决策模型显式可配）', Boolean(decBlock), '没有判定模型块');
+  const labels = decBlock ? decBlock.findByTag('label').map((l) => l.textContent) : [];
+  check('块里有路由 / 模型 / key 三组输入', labels.includes('路由') && labels.includes('模型') && labels.includes('key'), labels.join('/'));
+  check('未配置时状态行说清楚（不假装判过）',
+    Boolean(decBlock) && decBlock.findByTag('p').some((p) => p.textContent.includes('未配置 key')),
+    decBlock ? decBlock.findByTag('p').map((p) => p.textContent).join('|') : '没有块');
+  const saveBtn = decBlock ? decBlock.findByTag('button').find((b) => b.textContent === '保存') : null;
+  responses.set('PUT /api/config/decision', () =>
+    json({ ok: true, provider: 'openrouter', model: 'typesafe/jev-1.13', faux: false, configured: true }));
+  const reqBeforeDec = requests.length;
+  saveBtn.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  check('点「保存」真的请求了 /api/config/decision',
+    requests.slice(reqBeforeDec).some((k) => k === 'PUT /api/config/decision'), requests.slice(reqBeforeDec).join(','));
+  check('保存成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已保存判定模型配置')));
+  check('判定模型配置链路无异常', errors.length === 0, errors.join(' | '));
+}
+
 // ─── 32. 看不见的看得见：回马枪候选卡 / 判定记录 / 损坏文件取证
 {
   const { state: st, renderPanel: rp, setCamera: sc } = appModule.__hooks;

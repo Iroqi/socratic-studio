@@ -35,11 +35,23 @@ import { updateNote, deleteNote } from './notes.mjs';
 import { loadRulesText } from './prompt.mjs';
 import { TaskRunner } from './tasks.mjs';
 import { generateStarters, readStarterCache, writeStarterCache, studiedFingerprint } from './starters.mjs';
+import { panelDecisionOpts } from './decision.mjs';
 
 ensureDirs();
 const registry = await createRegistry();
 // 只调一次：它返回未能加载的订阅清单，给启动日志和 /api/bootstrap 用
 const failedProviders = await registry.ensureAllBuiltin();
+
+/**
+ * 把配置面板里落盘的 Decision 选项（settings.decision + credentials.jev）取出来，
+ * 每次回合现读（改了立刻生效，不用重启）。全空回 null → 判定走环境变量（老行为）。
+ */
+async function decisionOptsFromStore() {
+  return panelDecisionOpts({
+    settings: loadSettings(),
+    credentials: await registry.credentials.read('jev'),
+  });
+}
 
 /**
  * 测试/演示用：SOCRATIC_ENABLE_FAUX=1 时注册 pi-ai 的 faux provider。
@@ -582,6 +594,64 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, saveSettings(patch));
     }
 
+    // ---------- 判定模型（Decision）配置：面板显式可配（第十五轮）。
+    // 路由只选 typesafe | openrouter；模型 id 可选覆盖；faux 是确定性桩开关。
+    // key 存进 credentials 的 jev 条目（和其他 provider 的 key 同一张文件同一把锁），
+    // settings.decision 只存不敏感的路由/模型/桩开关。GET 永不回显 key。
+    if (pathname === '/api/config/decision' && method === 'GET') {
+      const d = loadSettings().decision || {};
+      const cred = await registry.credentials.read('jev');
+      return sendJson(res, 200, {
+        provider: d.provider || null,
+        model: d.model || null,
+        faux: d.faux === true,
+        configured: Boolean(cred?.key),
+      });
+    }
+    if (pathname === '/api/config/decision' && method === 'PUT') {
+      const body = await readBody(req);
+      const settingsTouched = body.provider !== undefined || body.model !== undefined || body.faux !== undefined;
+      const provider = body.provider === undefined || body.provider === null ? null : body.provider;
+      if (settingsTouched && provider !== 'typesafe' && provider !== 'openrouter') {
+        return sendJson(res, 400, { error: 'Decision 路由只能是 typesafe | openrouter' });
+      }
+      const model = body.model === undefined || body.model === null ? body.model : String(body.model).trim().slice(0, 120);
+      if (model !== undefined && model !== null && typeof body.model !== 'string') {
+        return sendJson(res, 400, { error: '模型 id 必须是文本' });
+      }
+      if (body.faux !== undefined && typeof body.faux !== 'boolean') {
+        return sendJson(res, 400, { error: 'faux 必须是 true 或 false' });
+      }
+      if (body.apiKey !== undefined && body.apiKey !== null && typeof body.apiKey !== 'string') {
+        return sendJson(res, 400, { error: 'key 必须是文本' });
+      }
+      // key 显式给了非空 → 存；给了空串 → 清；没给 → 不动
+      if (body.apiKey !== undefined && body.apiKey !== null) {
+        const key = String(body.apiKey).trim();
+        if (key) await registry.setApiKey('jev', key);
+        else await registry.clearApiKey('jev');
+      }
+      // 只有显式给了路由/模型/桩开关才动 settings（「清除 key」只清凭据，不碰面板其他项）
+      if (settingsTouched) {
+        saveSettings({
+          decision: {
+            provider: provider || null,
+            model: model || null,
+            faux: body.faux === true,
+          },
+        });
+      }
+      const cur = loadSettings().decision || {};
+      const cred = await registry.credentials.read('jev');
+      return sendJson(res, 200, {
+        ok: true,
+        provider: cur.provider || null,
+        model: cur.model || null,
+        faux: cur.faux === true,
+        configured: Boolean(cred?.key),
+      });
+    }
+
     // ---------- 配置备份：设置 + 端点 + 凭据一次带走（换机器不用重配）。
     // 导出 = 带密钥的 JSON（备份的本意；README 标注勿外传）。
     // 导入 = 校验形状后整份写回（settings 走白名单，凭据整份替换进固定文件，无注入面）。
@@ -612,8 +682,18 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { error: '配置备份里没有 settings' });
       }
       const patch = {};
-      for (const key of ['activeModel', 'custom', 'customEndpoints', 'recent']) {
+      for (const key of ['activeModel', 'custom', 'customEndpoints', 'recent', 'decision']) {
         if (key in settings) patch[key] = settings[key];
+      }
+      // decision 也清洗：只收 provider/model/faux 三个不敏感键（key 永远在 credentials 里）
+      if (patch.decision && typeof patch.decision === 'object' && !Array.isArray(patch.decision)) {
+        const clean = {};
+        if (patch.decision.provider === 'typesafe' || patch.decision.provider === 'openrouter') {
+          clean.provider = patch.decision.provider;
+        }
+        if (typeof patch.decision.model === 'string') clean.model = patch.decision.model.slice(0, 120);
+        if (typeof patch.decision.faux === 'boolean') clean.faux = patch.decision.faux;
+        patch.decision = clean;
       }
       if (Array.isArray(patch.customEndpoints)) {
         // 端点本体仍走白名单校验：只收认得的字段，堵住"任意 JSON 原样写进 settings"
@@ -1082,6 +1162,7 @@ const server = http.createServer(async (req, res) => {
             emit,
             signal: turn.abort.signal,
             systemPrompt: buildSystemPrompt(notebook),
+            decision: await decisionOptsFromStore(),
             onSession: (session) => {
               turn.session = session;
               // 待办落盘：刷新页面后右侧页签还要能看见

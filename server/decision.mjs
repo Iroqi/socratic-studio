@@ -49,6 +49,36 @@ export function resolveJevConfig(env = process.env) {
   return { provider, keyEnv, apiKey, model, faux };
 }
 
+/**
+ * 面板配置与环境变量的合并（第十五轮起：设置面板能显式配 Decision 模型）。
+ * 规则一句话：**面板里配了的字段压过环境变量，没配的字段回退环境变量**——
+ * 没碰过面板的老用户行为不变；碰过面板的，面板就是这台机器上的权威。
+ */
+export function mergeJevConfig(panel = {}, env = process.env) {
+  const envCfg = resolveJevConfig(env);
+  return {
+    provider: panel.provider || envCfg.provider,
+    apiKey: panel.apiKey ?? envCfg.apiKey,
+    model: panel.model || envCfg.model,
+    faux: typeof panel.faux === 'boolean' ? panel.faux : envCfg.faux,
+  };
+}
+
+/**
+ * 从落盘配置（settings.decision + credentials.jev）生成传给 jevDecide 的 opts。
+ * 全空回 null（调用方不传 decision → 判定完全走环境变量，向后兼容）。
+ * credentials 形如 { key }（FileCredentialStore 的条目），只取非空字符串。
+ */
+export function panelDecisionOpts({ settings, credentials } = {}) {
+  const d = settings?.decision;
+  const opts = {};
+  if (d?.provider) opts.provider = d.provider;
+  if (d?.model) opts.model = d.model;
+  if (typeof d?.faux === 'boolean') opts.faux = d.faux;
+  if (credentials?.key) opts.apiKey = credentials.key;
+  return Object.keys(opts).length ? opts : null;
+}
+
 function urlFor(provider) {
   return provider === 'typesafe' ? TYPESAFE_URL : OPENROUTER_URL;
 }
@@ -208,11 +238,12 @@ export async function jevDecide(
   { state, questions, model: modelOverride },
   { provider, apiKey, faux, fauxAnswers = {}, timeoutMs = 30000 } = {},
 ) {
-  const cfg = resolveJevConfig();
-  const useFaux = faux !== undefined ? faux : cfg.faux;
-  const useProvider = provider || cfg.provider;
-  const useKey = apiKey !== undefined ? apiKey : cfg.apiKey;
-  const useModel = modelOverride || cfg.model;
+  // 面板配置 > 环境变量（逐字段）；面板什么都没配时整份回退环境变量。
+  const cfg = mergeJevConfig({ provider, apiKey, model: modelOverride, faux });
+  const useFaux = cfg.faux;
+  const useProvider = cfg.provider;
+  const useKey = cfg.apiKey;
+  const useModel = cfg.model;
 
   const payload = validatePayload({ model: useModel, state, questions });
 

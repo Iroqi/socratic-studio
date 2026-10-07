@@ -622,6 +622,49 @@ try {
     method: 'POST', headers: H, body: JSON.stringify({ kind: 'other-bundle', version: 1, settings: {}, credentials: {} }),
   });
   check('kind 不对的包即使带 settings 也被拒（防止清空现有配置）', wrongKind.status === 400, `status=${wrongKind.status}`);
+
+  console.log('\n18. 判定模型（Decision）：面板显式可配（真服务）');
+  const d0 = (await jfetch(`${BASE}/api/config/decision`)).data;
+  check('初始 decision 未配置（configured=false，无 provider）', d0.configured === false && d0.provider === null, JSON.stringify(d0));
+  const dput = await jfetch(`${BASE}/api/config/decision`, {
+    method: 'PUT', headers: H,
+    body: JSON.stringify({ provider: 'openrouter', model: 'typesafe/jev-1.13', apiKey: 'sk-jev-test', faux: false }),
+  });
+  check('保存 Decision 配置成功（provider/model/faux/configured 回读）',
+    dput.data?.ok === true && dput.data?.provider === 'openrouter' && dput.data?.model === 'typesafe/jev-1.13' && dput.data?.configured === true,
+    JSON.stringify(dput.data));
+  const d1 = (await jfetch(`${BASE}/api/config/decision`)).data;
+  check('GET 回读不带 key（key 只进 credentials，永不回显）',
+    d1.configured === true && !JSON.stringify(d1).includes('sk-jev-test'), JSON.stringify(d1));
+  const settingsNow = (await jfetch(`${BASE}/api/settings`)).data;
+  check('settings 里 decision 只有不敏感键（provider/model/faux，无 key）',
+    settingsNow?.decision?.provider === 'openrouter' && !JSON.stringify(settingsNow.decision).includes('sk-jev-test'),
+    JSON.stringify(settingsNow.decision));
+  const exp2 = (await jfetch(`${BASE}/api/config/export`)).data;
+  check('配置导出带上 decision 设置与 jev 凭据（备份本意）',
+    exp2?.settings?.decision?.provider === 'openrouter' && exp2?.credentials?.jev?.key === 'sk-jev-test',
+    JSON.stringify({ s: exp2?.settings?.decision, c: exp2?.credentials?.jev }).slice(0, 140));
+  const badRoute = await jfetch(`${BASE}/api/config/decision`, {
+    method: 'PUT', headers: H, body: JSON.stringify({ provider: 'ollama' }),
+  });
+  check('非法路由被拒（只收 typesafe | openrouter）', badRoute.status === 400, `status=${badRoute.status}`);
+  const imp2 = await jfetch(`${BASE}/api/config/import`, {
+    method: 'POST', headers: H,
+    body: JSON.stringify({
+      kind: 'socratic-config', version: 1,
+      settings: { decision: { provider: 'typesafe', model: 'jev-1.13.0', faux: true } },
+      credentials: { jev: { type: 'api_key', key: 'sk-imported' } },
+    }),
+  });
+  check('配置导入带 decision 白名单还原', imp2.data?.ok === true, `status=${imp2.status}`);
+  const d2 = (await jfetch(`${BASE}/api/config/decision`)).data;
+  check('导入后 decision 生效（provider/model/faux/configured 全对）',
+    d2.provider === 'typesafe' && d2.model === 'jev-1.13.0' && d2.faux === true && d2.configured === true,
+    JSON.stringify(d2));
+  const dputClear = await jfetch(`${BASE}/api/config/decision`, {
+    method: 'PUT', headers: H, body: JSON.stringify({ apiKey: '' }),
+  });
+  check('apiKey 空串清除已存 key（configured 变 false）', dputClear.data?.configured === false, JSON.stringify(dputClear.data));
 } finally {
   server.kill();
   await sleep(400);

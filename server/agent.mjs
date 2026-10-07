@@ -1757,6 +1757,7 @@ export async function runTurn({
   onPersistMessage,
   taskRunner = null,
   deskWriter = true,
+  decision = null,
 }) {
   const model = registry.resolveModel(modelRef);
   // taskRunner 必须一路传到 TeachingSession：spawn_subagent / run_background_task /
@@ -1772,6 +1773,9 @@ export async function runTurn({
     // 分身/后台任务要用同一个模型跑，所以 modelRef 也得进 session（否则任务记录的 model 为空）
     modelRef,
     deskWriter,
+    // 判定外包的注入口：宿主（serve/tasks）把面板配置好的 Decision 选项递进来；
+    // null 时判定全走环境变量（没碰过配置面板的老行为）。
+    decision,
   });
   // 把上一轮落盘的制品回报种子进来：跨轮续学 / 续玩时，read_artifact_evidence 才读得到之前发生了什么。
   // 这些是观测记录，不是状态——只喂给模型判断，不驱动任何转移。
