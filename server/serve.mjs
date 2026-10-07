@@ -35,7 +35,7 @@ import { updateNote, deleteNote } from './notes.mjs';
 import { loadRulesText } from './prompt.mjs';
 import { TaskRunner } from './tasks.mjs';
 import { generateStarters, readStarterCache, writeStarterCache, studiedFingerprint } from './starters.mjs';
-import { panelDecisionOpts } from './decision.mjs';
+import { panelDecisionOpts, jevPing } from './decision.mjs';
 
 ensureDirs();
 const registry = await createRegistry();
@@ -650,6 +650,15 @@ const server = http.createServer(async (req, res) => {
         faux: cur.faux === true,
         configured: Boolean(cred?.key),
       });
+    }
+
+    // ---------- 判定模型「测试连接」：用已存的配置（面板 > 环境变量）发最小判定请求。
+    // 三条分支全确定性可测（faux / 无 key / 真请求），不写判定账本——连通性测试不是教学判定。
+    if (pathname === '/api/config/decision/test' && method === 'POST') {
+      const cred = await registry.credentials.read('jev');
+      const panel = panelDecisionOpts({ settings: loadSettings(), credentials: cred });
+      const result = await jevPing({ ...(panel || {}) });
+      return sendJson(res, 200, result);
     }
 
     // ---------- 配置备份：设置 + 端点 + 凭据一次带走（换机器不用重配）。

@@ -665,6 +665,19 @@ try {
     method: 'PUT', headers: H, body: JSON.stringify({ apiKey: '' }),
   });
   check('apiKey 空串清除已存 key（configured 变 false）', dputClear.data?.configured === false, JSON.stringify(dputClear.data));
+  const dOff = await jfetch(`${BASE}/api/config/decision`, {
+    method: 'PUT', headers: H, body: JSON.stringify({ provider: 'typesafe', faux: false }),
+  });
+  check('显式关掉 faux（导入时开的）为 auth 分支做准备', dOff.data?.faux === false && dOff.data?.configured === false, JSON.stringify(dOff.data));
+  const tAuth = (await jfetch(`${BASE}/api/config/decision/test`, { method: 'POST', headers: H, body: '{}' })).data;
+  check('测试连接：没 key → auth 分支（明说不假装）', tAuth.ok === false && tAuth.stage === 'auth', JSON.stringify(tAuth));
+  const dput2 = await jfetch(`${BASE}/api/config/decision`, {
+    method: 'PUT', headers: H,
+    body: JSON.stringify({ provider: 'typesafe', faux: true, apiKey: 'sk-jev-faux' }),
+  });
+  check('重新保存（faux 开）为测试桩分支做准备', dput2.data?.configured === true && dput2.data?.faux === true, JSON.stringify(dput2.data));
+  const tFaux = (await jfetch(`${BASE}/api/config/decision/test`, { method: 'POST', headers: H, body: '{}' })).data;
+  check('测试连接：faux → 桩分支（不联网，明说不验证 key）', tFaux.ok === true && tFaux.mode === 'faux', JSON.stringify(tFaux));
 } finally {
   server.kill();
   await sleep(400);

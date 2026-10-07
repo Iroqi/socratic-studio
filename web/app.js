@@ -2077,6 +2077,39 @@ function appendTail(t, html) {
 }
 
 /**
+ * 回合失败的排查引导（第十六轮）：把模型侧/服务端的错误话术归成几类，给一句"下一步"。
+ * 只分类、只提示，不替用户操作。识别不出的返回 null——没把握不乱指路。
+ * 顺序敏感：具体的特征（401 / 429 / auth）先于泛化词；大小写归一后匹配。
+ */
+function turnErrorHint(message) {
+  const low = String(message || '').toLowerCase();
+  if (/未配置 key|没有.*key|api key|凭据|auth|401|403/.test(low)) {
+    return '先给模型配好 key：设置 → 模型订阅 → 选服务商 → 填 key → 测试连通。';
+  }
+  if (/还没有选择模型|接入一个订阅|needmodel/.test(low)) {
+    return '先在设置里接入一个模型订阅并选好它（模型配置 → 保存一个订阅的 key）。';
+  }
+  if (/429|限流|配额|rate ?limit/.test(low)) {
+    return '撞上限流或配额了。等一会儿再发；经常撞就换一个模型或端点。';
+  }
+  if (/超时|timeout|abort|timed ?out/.test(low)) {
+    return '模型侧超时了。稍等重发一次；老是超时就换一个模型或端点。';
+  }
+  if (/网络|fetch failed|econn|连接|network/.test(low)) {
+    return '连不上模型服务。检查网络与端点地址，再发一次。';
+  }
+  return null;
+}
+
+/** 有排查提示才在回合流里加一行；没有就什么都不加（不假装有路走）。 */
+function appendTurnErrorHint(t, message) {
+  const hint = turnErrorHint(message);
+  if (!hint) return false;
+  appendTail(t, `<p class="turn-hint">排查提示：${hint}</p>`);
+  return true;
+}
+
+/**
  * 往本轮那一拍里追加一张卡片（工具明细 / 题 / 计划）。
  * 卡片落进来之后，下一段文字会自己另起一个文字块排在它下面（见 textBlock），
  * 所以这里不需要"先把气泡切一刀"——那是形态 2 整块重画的债。
@@ -2259,6 +2292,7 @@ function handleTurnEvent(evt) {
     }
     case 'error':
       appendTail(t, `<p style="color:var(--danger)">⚠ ${escapeHtml(evt.message)}</p>`);
+      appendTurnErrorHint(t, evt.message);
       setStatus(`出错了：${evt.message}`, { spinner: false });
       break;
     case 'done':
@@ -4115,7 +4149,8 @@ function buildDecisionBlock() {
 
   const btnRow = el('div', 'cfg-check-row');
   const saveBtn = el('button', 'btn btn-primary btn-sm', '保存');
-  btnRow.append(saveBtn);
+  const testBtn = el('button', 'btn btn-ghost btn-sm', '测试连接');
+  btnRow.append(saveBtn, testBtn);
   if (dec.configured) {
     const clearBtn = el('button', 'btn btn-ghost btn-sm', '清除 key');
     btnRow.append(clearBtn);
@@ -4132,6 +4167,33 @@ function buildDecisionBlock() {
     };
   }
   block.append(btnRow);
+
+  // 测试连接：用已存的配置（面板 > 环境变量）发最小判定请求，验证 key / 端点能不能用。
+  // 结果行挂在本块上（sub-msg 是订阅面板同款：ok 绿 / bad 红），不弹窗、不打扰。
+  const testMsg = el('div', 'sub-msg');
+  block.append(testMsg);
+  testBtn.onclick = async () => {
+    try {
+      testBtn.disabled = true;
+      testMsg.className = 'sub-msg';
+      testMsg.textContent = '测试中…';
+      const r = await api('POST', '/api/config/decision/test', {});
+      if (r.ok) {
+        testMsg.className = 'sub-msg ok';
+        testMsg.textContent = r.mode === 'faux'
+          ? r.message
+          : `连通：${r.provider === 'openrouter' ? 'OpenRouter' : 'TypeSafe'} · ${r.model}（${r.latencyMs} ms）`;
+      } else {
+        testMsg.className = 'sub-msg bad';
+        testMsg.textContent = `没连通：${r.message}`;
+      }
+    } catch (err) {
+      testMsg.className = 'sub-msg bad';
+      testMsg.textContent = `测试失败：${err.message}`;
+    } finally {
+      testBtn.disabled = false;
+    }
+  };
 
   saveBtn.onclick = async () => {
     try {
@@ -4956,6 +5018,9 @@ export const __hooks = {
   submitArtifactResult,
   applyArtifactHeight,
   ARTIFACT_HEIGHT_MAX,
+  // 回合失败的排查引导
+  turnErrorHint,
+  appendTurnErrorHint,
   // 道具一屏看全
   fitCanvasFrame,
   refitCanvas,

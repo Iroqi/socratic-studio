@@ -84,6 +84,79 @@ function urlFor(provider) {
 }
 
 /**
+ * 判定请求的纯构造（第十六轮抽出，jevDecide 与 jevPing 共用，两端不漂移）。
+ * 只回描述，不发起网络；测试可以逐字段断言 url / 请求头 / 载荷。
+ */
+export function buildDecisionFetch(cfg, payload) {
+  const provider = cfg.provider === 'typesafe' ? 'typesafe' : 'openrouter';
+  return {
+    url: urlFor(provider),
+    headers: {
+      Authorization: `Bearer ${cfg.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  };
+}
+
+/**
+ * 连通性测试（第十六轮：Decision 面板「测试连接」）。不写判定账本——这是验证
+ * key / 端点能不能用，不是一次教学判定。三条分支全部确定性可测：
+ *   faux   → { ok: true,  mode: 'faux',  ... }（桩不联网，测不出 key，明说）
+ *   无 key  → { ok: false, stage: 'auth', ... }（不抛、不假装，跟 jevDecide 同一口径）
+ *   有 key  → 真请求最小 noul 判定；成功 { ok: true, mode: 'real', latencyMs }，
+ *             失败 { ok: false, stage: <kind>, ... }。key 永不回显、永不进日志。
+ */
+export async function jevPing({ provider, apiKey, faux, timeoutMs = 15000 } = {}) {
+  const cfg = mergeJevConfig({ provider, apiKey, faux });
+  const base = { provider: cfg.provider, model: cfg.model };
+  if (cfg.faux) {
+    return {
+      ok: true, mode: 'faux', ...base,
+      message: '确定性桩已开启，判定不联网——这次测试只验证桩可用，不验证 key。',
+    };
+  }
+  if (!cfg.apiKey) {
+    return {
+      ok: false, stage: 'auth', ...base,
+      message: '判定模型还没有 key。先在设置面板「判定模型」里保存 key，或用环境变量配好再测。',
+    };
+  }
+  const payload = validatePayload({
+    model: cfg.model,
+    state: '连通性测试：请判定下面这个问题。',
+    questions: [{ id: 'ping', type: 'noul', instructions: '判定「这是一个连通性测试请求」。' }],
+  });
+  const started = Date.now();
+  let spec;
+  try {
+    spec = buildDecisionFetch(cfg, payload);
+    const controller = AbortSignal.timeout(timeoutMs);
+    const res = await fetch(spec.url, { method: 'POST', headers: spec.headers, body: spec.body, signal: controller });
+    if (!res.ok) {
+      return {
+        ok: false, stage: 'http', ...base,
+        message: `${cfg.provider === 'typesafe' ? 'TypeSafe' : 'OpenRouter'} HTTP ${res.status}。key 可能不对，或端点需要别的路由。`,
+      };
+    }
+    try {
+      await res.json();
+    } catch {
+      return { ok: false, stage: 'parse', ...base, message: '服务回了东西，但不是判定 JSON。' };
+    }
+    return { ok: true, mode: 'real', ...base, latencyMs: Date.now() - started };
+  } catch (err) {
+    const stage = err.name === 'TimeoutError' || err.name === 'AbortError' ? 'timeout' : 'network';
+    return {
+      ok: false, stage, ...base,
+      message: stage === 'timeout'
+        ? '请求超时，判定服务没在限期内回答。'
+        : '网络请求失败，连不到判定服务。',
+    };
+  }
+}
+
+/**
  * questions 收两种形状（工具侧用数组带 id，模型侧顺手；API 侧本来就是对象）：
  *   [{ id, type, instructions, criteria }]  或  { id: { type, instructions, criteria } }
  * 统一成 { id: { type, instructions, criteria } }，按官方 CLI 的校验规则逐条查。
@@ -275,14 +348,12 @@ export async function jevDecide(
 
   let raw;
   try {
+    const spec = buildDecisionFetch(cfg, payload);
     const controller = AbortSignal.timeout(timeoutMs);
-    const res = await fetch(urlFor(useProvider), {
+    const res = await fetch(spec.url, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${useKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+      headers: spec.headers,
+      body: spec.body,
       signal: controller,
     });
     if (!res.ok) {

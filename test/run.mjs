@@ -23,7 +23,7 @@ const { checkTransition, runTurn, buildTools, TOOL_NAMES, seedArtifacts, normali
 const store = await import('../server/store.mjs');
 const { crc32 } = await import('../server/zip.mjs');
 const { ensureDirs, NOTEBOOKS_DIR } = await import('../server/config.mjs');
-const { jevDecide, normalizeAnswers, validateQuestions, mergeJevConfig, panelDecisionOpts, DecisionError } = await import('../server/decision.mjs');
+const { jevDecide, normalizeAnswers, validateQuestions, mergeJevConfig, panelDecisionOpts, buildDecisionFetch, jevPing, DecisionError } = await import('../server/decision.mjs');
 
 ensureDirs();
 
@@ -2549,6 +2549,29 @@ check('panelDecisionOpts 从落盘配置生成 opts（provider/model/faux/apiKey
   JSON.stringify(storedOpts));
 check('panelDecisionOpts 全空回 null（没碰过面板 → 判定走环境变量）', panelDecisionOpts({}) === null);
 check('panelDecisionOpts 只配 provider 也生效', panelDecisionOpts({ settings: { decision: { provider: 'typesafe' } } })?.provider === 'typesafe');
+
+// —— 13g. 判定模型「测试连接」（第十六轮）：三分支确定性可测，请求构造可逐字段断言
+const pingNoKey = await jevPing({ provider: 'typesafe', faux: false });
+check('测试连接：无 key → auth 分支（不抛、不假装）', pingNoKey.ok === false && pingNoKey.stage === 'auth', JSON.stringify(pingNoKey));
+const pingFaux = await jevPing({ provider: 'typesafe', faux: true });
+check('测试连接：faux → 明说桩不联网（不验证 key）', pingFaux.ok === true && pingFaux.mode === 'faux', JSON.stringify(pingFaux));
+const specTs = buildDecisionFetch(
+  { provider: 'typesafe', apiKey: 'k-1', model: 'jev-1.13.0' },
+  { model: 'jev-1.13.0', state: 's', questions: { ping: { type: 'noul', instructions: 'x' } } },
+);
+check('请求构造：typesafe 端点 + Bearer key + JSON 载荷',
+  specTs.url === 'https://api.typesafe.ai/v1/systemone'
+    && specTs.headers.Authorization === 'Bearer k-1'
+    && specTs.headers['Content-Type'] === 'application/json'
+    && JSON.parse(specTs.body).model === 'jev-1.13.0',
+  JSON.stringify(specTs).slice(0, 140));
+const specOr = buildDecisionFetch(
+  { provider: 'openrouter', apiKey: 'k-2', model: 'typesafe/jev-1.13' },
+  { model: 'typesafe/jev-1.13', state: 's', questions: { ping: { type: 'noul', instructions: 'x' } } },
+);
+check('请求构造：openrouter 端点（alpha/decisions）+ 同一把 Bearer key',
+  specOr.url === 'https://openrouter.ai/api/alpha/decisions' && specOr.headers.Authorization === 'Bearer k-2',
+  JSON.stringify(specOr).slice(0, 120));
 
 // —— 13e. 工具接线：buildTools 注册、execJevJudge 判定留痕、无 key 明说、坏输入报 validation
 const jevTool = buildTools().find((t) => t.name === TOOL_NAMES.JEV_JUDGE);

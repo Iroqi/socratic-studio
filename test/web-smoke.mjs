@@ -3822,6 +3822,42 @@ console.log('\n32. 转场条：新场开头那行「接住第 1 场 ·「这件�
     requests.slice(reqBeforeDec).some((k) => k === 'PUT /api/config/decision'), requests.slice(reqBeforeDec).join(','));
   check('保存成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已保存判定模型配置')));
   check('判定模型配置链路无异常', errors.length === 0, errors.join(' | '));
+
+  // 测试连接：点按钮发 POST /api/config/decision/test，结果行说明通没通
+  const testBtn = decBlock.findByTag('button').find((b) => b.textContent === '测试连接');
+  check('块里有「测试连接」按钮', Boolean(testBtn), '没有测试连接按钮');
+  responses.set('POST /api/config/decision/test', () =>
+    json({ ok: true, mode: 'real', provider: 'openrouter', model: 'typesafe/jev-1.13', latencyMs: 123 }));
+  testBtn.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  const okMsg = decBlock.findByClass('sub-msg').map((m) => m.textContent).join('|');
+  check('测试连接成功 → 结果行说连通（带路由与耗时）', okMsg.includes('连通') && okMsg.includes('123'), okMsg);
+  responses.set('POST /api/config/decision/test', () =>
+    json({ ok: false, stage: 'auth', message: '判定模型还没有 key。' }));
+  testBtn.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  const badMsg = decBlock.findByClass('sub-msg').map((m) => m.textContent).join('|');
+  check('测试连接失败 → 结果行照实说没连通', badMsg.includes('没连通') && badMsg.includes('还没有 key'), badMsg);
+  check('测试连接链路无异常', errors.length === 0, errors.join(' | '));
+}
+
+// ─── 35. 回合失败排查引导：error 事件带一句"下一步"
+{
+  const { turnErrorHint, appendTurnErrorHint, appendChatTurn } = appModule.__hooks;
+  check('分类：未配 key → 指去模型订阅', turnErrorHint('未配置 key：请先在模型配置里保存 API key')?.includes('模型订阅') || '');
+  check('分类：无模型 → 指去接入订阅', turnErrorHint('还没有选择模型。请先在「模型配置」里接入一个订阅')?.includes('接入一个模型订阅') || '');
+  check('分类：超时 → 说稍等重发', turnErrorHint('JEV 请求超时；未做自动重试')?.includes('超时') || '');
+  check('分类：429 限流 → 说等一会儿', turnErrorHint('429 Too Many Requests')?.includes('限流') || '');
+  check('分类：网络 → 说检查网络', turnErrorHint('network request failed')?.includes('网络') || '');
+  check('识别不出的错误不加提示（不假装有路走）', turnErrorHint('这是个没见过的错误') === null);
+  const t = appendChatTurn(null, { role: 'assistant', __live: true, timestamp: Date.now() });
+  const added = appendTurnErrorHint(t, '未配置 key：请先保存 API key');
+  const html = (t.blocks || []).map((b) => b.node.innerHTML).join('|');
+  check('有提示时回合流多一行 turn-hint', added === true && html.includes('turn-hint') && html.includes('排查提示'), html.slice(0, 100));
+  const t2 = appendChatTurn(null, { role: 'assistant', __live: true, timestamp: Date.now() });
+  const before = (t2.blocks || []).length;
+  check('没提示时不加行（错误照原样显示，不夹带私货）',
+    appendTurnErrorHint(t2, '别的错误') === false && (t2.blocks || []).length === before);
 }
 
 // ─── 32. 看不见的看得见：回马枪候选卡 / 判定记录 / 损坏文件取证
