@@ -597,6 +597,8 @@ responses.set('GET /api/bootstrap', () =>
 );
 responses.set('GET /api/notebooks', () => json({ notebooks: sampleList() }));
 responses.set('GET /api/notebooks/nb-test', () => json({ notebook: sampleNotebook() }));
+// 打开学习时会补水任务记录（第十九轮）——这里给默认空桩，避免各段落被未桩化请求扰出时序差。
+responses.set('GET /api/notebooks/nb-test/tasks', () => json({ tasks: [] }));
 responses.set('GET /api/providers', () =>
   json({
     subscriptions: [
@@ -4143,6 +4145,52 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('无结果给一句人话（不是空列表假装没事）', Boolean(empty[0]) && empty[0].textContent.includes('没找到'), empty[0]?.textContent);
   appModule.__hooks.runSearch(); // 清回普通态
   check('跨本搜索这条链路无异常', errors.length === 0, errors.join(' | '));
+}
+
+// ─── 35. 任务记录补水：盘上有记录，打开学习就该看得见（第十九轮）
+{
+  console.log('\n35. 后台任务补水（GET /tasks 终于有人调了）');
+  const st = appModule.__hooks.state;
+  // 服务端给三种各一条：还在跑的、跑完的、重启时没掉的
+  responses.set('GET /api/notebooks/nb-test/tasks', () => json({
+    tasks: [
+      { id: 'job-live-1', kind: 'background', notebookId: 'nb-test', title: '预生成三道题', status: 'running', createdAt: '2026-10-07T09:00:00.000Z', output: '', error: null },
+      { id: 'job-old-2', kind: 'background', notebookId: 'nb-test', title: '整理长素材', status: 'done', createdAt: '2026-10-07T08:00:00.000Z', output: '整理好了', error: null },
+      { id: 'job-zomb-3', kind: 'background', notebookId: 'nb-test', title: '重启时没了的', status: 'interrupted', createdAt: '2026-10-07T07:00:00.000Z', output: '', error: null, note: '服务重启时这个任务还挂着，它跟着上一进程一起没了——这里读回来时如实标成已中断。' },
+    ],
+  }));
+  const reqBefore = requests.length;
+  await appModule.__hooks.openNotebook('nb-test');
+  check('打开学习时真的去问 GET /tasks（以前这接口没人调用）',
+    requests.slice(reqBefore).includes('GET /api/notebooks/nb-test/tasks'), requests.slice(reqBefore).join(' | '));
+  await new Promise((r) => setTimeout(r, 80));
+  tabByName('learn')?.click?.();
+  await new Promise((r) => setTimeout(r, 30));
+  const items = deepAll(domRoot, 'task-item');
+  check('补水回来的任务渲染成卡片（刷新后不再全空）', items.length === 3, `实际 ${items.length} 张`);
+  check('进行中的任务照常标"进行中"', deepAll(domRoot, 'task-badge').some((b) => b.textContent === '进行中'));
+  check('跑完的老任务也在场（历史不是只活在此刻）', deepAll(domRoot, 'task-badge').some((b) => b.textContent === '完成'));
+  const zombieBadge = deepAll(domRoot, 'task-badge').find((b) => b.textContent === '已中断');
+  check('中断的任务如实标"已中断"（不谎称进行中）', Boolean(zombieBadge), deepAll(domRoot, 'task-badge').map((b) => b.textContent).join(','));
+  check('中断卡片带一句为什么（note 从服务端一路带到面板）',
+    deepAll(domRoot, 'task-note').some((n) => n.textContent.includes('服务重启')), deepAll(domRoot, 'task-note').map((n) => n.textContent).join(' | '));
+  check('中断的任务不给"停掉"按钮（没有还在跑的东西可停）',
+    items.filter((c) => c.classList.contains('interrupted')).every((c) => !deepAll(c, 'btn').some((b) => b.textContent.includes('停掉'))));
+  check('顶栏计数只数在跑的（补水不谎报）', (doc.getElementById('taskCount')?.textContent || '').includes('1 个任务在跑'), doc.getElementById('taskCount')?.textContent);
+  // 实时优先：本地已记成终态的任务，晚到的 running 快照不许把它降回去
+  st.tasks = [{ id: 'job-live-1', kind: 'background', notebookId: 'nb-test', title: '预生成三道题', status: 'done', output: '实时先到' }];
+  appModule.__hooks.hydrateTasks('nb-test');
+  await new Promise((r) => setTimeout(r, 80));
+  check('本地已终态的任务不被过期快照降回 running',
+    st.tasks.find((t) => t.id === 'job-live-1')?.status === 'done', JSON.stringify(st.tasks.find((t) => t.id === 'job-live-1')));
+  // 补水失败不拦路：接口炸了也照常看得见当下的会话
+  responses.set('GET /api/notebooks/nb-test/tasks', () => { throw new Error('服务没起来'); });
+  st.tasks = [];
+  await appModule.__hooks.openNotebook('nb-test');
+  await new Promise((r) => setTimeout(r, 80));
+  check('补水失败只是看不到历史任务，打开学习不受影响',
+    st.notebook?.id === 'nb-test' && errors.length === 0, errors.join(' | '));
+  responses.set('GET /api/notebooks/nb-test/tasks', () => json({ tasks: [] }));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

@@ -803,6 +803,53 @@ try {
     check('删一本不存在的书走 404 而不是 409（守卫不冤枉空 id）', delGhost.status === 404, `status=${delGhost.status}`);
   }
 
+  console.log('\n21. 任务记录回读：盘上翻得回来 + stop 认归属（真服务）');
+  /*
+   * 第十九轮探针 19-A/19-D 的真服务版。原来 jobs/*.json 只写不读：GET /tasks 只看内存 Map，
+   * 落盘的那一份从来没人读回来；stop 路由取了 URL 里的 :id 却根本没用，A 本能停掉 B 本的任务。
+   * 这里不真重启服务（慢且脆），直接把记录写到盘上——回读这条认的就是盘，与重启后同形。
+   */
+  {
+    const nb21a = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '回读真服务A', goal: null }) })).data.notebook.id;
+    const nb21b = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '回读真服务B', goal: null }) })).data.notebook.id;
+    const jobs21 = (id) => path.join(dataDir, 'notebooks', id, 'jobs');
+    const tid21 = `job-${Date.now().toString(36)}-a`;
+    fs.mkdirSync(jobs21(nb21b), { recursive: true });
+    fs.writeFileSync(path.join(jobs21(nb21b), `${tid21}.json`), JSON.stringify({
+      id: tid21, kind: 'background', notebookId: nb21b, parentId: null, title: '盘上等回读的任务',
+      instructions: 'x', helper: null, status: 'running', model: null,
+      createdAt: new Date().toISOString(), finishedAt: null, output: '', error: null,
+    }, null, 2));
+
+    const listed21 = (await jfetch(`${BASE}/api/notebooks/${nb21b}/tasks`)).data;
+    check('GET /tasks 能把盘上的记录翻回来（不再只看内存）',
+      listed21.tasks?.length === 1 && listed21.tasks[0].id === tid21, JSON.stringify(listed21.tasks));
+    check('本机没句柄的 running 经 HTTP 读回来是 interrupted',
+      listed21.tasks?.[0]?.status === 'interrupted', listed21.tasks?.[0]?.status);
+    check('回读带一句为什么中断（HTTP 侧也不光秃秃）',
+      String(listed21.tasks?.[0]?.note || '').includes('重启'), listed21.tasks?.[0]?.note);
+    check('回读把盘上那条僵尸补写成 interrupted',
+      JSON.parse(fs.readFileSync(path.join(jobs21(nb21b), `${tid21}.json`), 'utf8')).status === 'interrupted');
+    check('别的学习翻不到这一本的任务（按本隔离）',
+      (await jfetch(`${BASE}/api/notebooks/${nb21a}/tasks`)).data.tasks.length === 0);
+
+    const cross21 = await jfetch(`${BASE}/api/notebooks/${nb21a}/tasks/${tid21}/stop`, { method: 'POST' });
+    check('借 A 本的 URL 停 B 本的任务：404（:id 不再只是装饰）',
+      cross21.status === 404 && cross21.data?.crossNotebook === true, `status=${cross21.status} ${JSON.stringify(cross21.data)}`);
+    const own21 = await jfetch(`${BASE}/api/notebooks/${nb21b}/tasks/${tid21}/stop`, { method: 'POST' });
+    check('本本停一条已中断的任务：200 里如实说没有还在跑的', own21.status === 200 && own21.data?.ok === false, JSON.stringify(own21.data));
+    check('停已中断时讲清原因（服务重启时它就跟着没了）',
+      String(own21.data?.error || '').includes('中断'), JSON.stringify(own21.data));
+    const shape21 = await fetch(`${BASE}/api/notebooks/${nb21b}/tasks/..%2F..%2Fsettings/stop`, { method: 'POST' });
+    const shapeBody21 = await shape21.json().catch(() => ({}));
+    check('畸形 task id 查无此任务、不抛不越界',
+      shape21.status === 200 && shapeBody21.ok === false && !String(shapeBody21.error).includes('不属于'), JSON.stringify(shapeBody21));
+
+    const exp21 = (await jfetch(`${BASE}/api/notebooks/${nb21b}/export`)).data;
+    check('整本导出带上 jobs（备份不漏任务凭据）',
+      Array.isArray(exp21.jobs) && exp21.jobs.length === 1 && exp21.jobs[0].id === tid21, JSON.stringify(exp21.jobs));
+  }
+
   console.log('\n20. 治好之后的损坏存证：取证口不再查无实据（真服务）');
   /*
    * 第十一轮起的取证口只认"体检此刻认定的损坏文件"：原件被下一次写治好后 corruptFiles 清空，

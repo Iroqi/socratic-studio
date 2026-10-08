@@ -1361,9 +1361,23 @@ export class TeachingSession {
     if (!id) return { ok: false, error: 'task_id 不能为空' };
     const t = this.taskRunner.get(id);
     if (!t) return { ok: false, error: `没有这个任务: ${id}` };
+    // 记录现在真的能从盘上翻回来了，那更要把好归属这道门：别的学习的任务不是这个会话的
+    if (t.notebookId && t.notebookId !== this.notebook.id) {
+      return { ok: false, error: `这个任务不属于当前学习（notebook=${t.notebookId}）` };
+    }
     // 后台任务离开本回合也能拿结果，所以连同历史记录一起找
     if (t.status === 'running') {
       return { ok: true, task_id: id, status: 'running', note: '还在跑，先继续手上的事。' };
+    }
+    if (t.status === 'interrupted') {
+      // 服务重启时它跟着上一进程没了：如实说清楚，别让模型当它还活着、更不要当它做完了
+      return {
+        ok: false,
+        task_id: id,
+        status: 'interrupted',
+        error: t.note || '这个任务在服务重启时中断了，没有结论。',
+        note: '要这个结果就重新派一次；别向学习者声称它已经完成。',
+      };
     }
     return {
       ok: t.status === 'done',
@@ -1384,7 +1398,8 @@ export class TeachingSession {
 
   execStopBackground(args) {
     if (!this.taskRunner) return { ok: false, error: '这个会话没有配置任务运行器' };
-    return this.taskRunner.stop(String(args.task_id || '').trim());
+    // 带上这一本的 id：模型手上有别的本子的任务 id 时停不掉它（与 HTTP 路由同一道门）
+    return this.taskRunner.stop(String(args.task_id || '').trim(), this.notebook.id);
   }
 
   /**

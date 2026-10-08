@@ -91,6 +91,15 @@ function assertExists(id) {
   return dir;
 }
 
+/**
+ * 整本导出要看任务记录，但 store 不该反过来依赖 tasks.mjs（它 import 了 agent.mjs，
+ * 接上就成环）。路由层启动时用下面这个 setter 注一个"给我这一本的任务快照"的函数进来。
+ */
+let tasksSnapshotFn = null;
+export function setTasksSnapshotFn(fn) {
+  tasksSnapshotFn = typeof fn === 'function' ? fn : null;
+}
+
 // ---------------------------------------------------------------- defaults
 
 const EMPTY_GRAPH = {
@@ -865,7 +874,32 @@ export function exportNotebook(id) {
     files,
     uploads,
     artifacts,
+    // 任务记录也带走的（第十九轮）：这是"这一台机器上派过什么分身、结果如何"的凭据，
+    // 备份不该漏。导入侧原样无视它们——日志不属于新机器（它没跑过这些活），
+    // 还原出来只会凭空造一堆"中断"的历史。
+    jobs: tasksSnapshotFn ? tasksSnapshotFn(id) : listJobRecordsFromDisk(id),
   };
+}
+
+/**
+ * 路由层没注入快照函数时（直接调 store 的脚本与测试）兜一条盘上的路：
+ * 逐份读 jobs/*.json。内存里的实时状态拿不到，读到的就是盘上写的那一份。
+ */
+function listJobRecordsFromDisk(id) {
+  const dir = path.join(notebookDir(id), 'jobs');
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return []; // 没派过任务 = 没有 jobs 目录，正常状态
+  }
+  const out = [];
+  for (const name of names.sort()) {
+    if (!name.endsWith('.json')) continue;
+    const record = readJsonSafe(path.join(dir, name), null);
+    if (record && typeof record === 'object' && typeof record.id === 'string') out.push(record);
+  }
+  return out;
 }
 
 /**
@@ -915,6 +949,8 @@ export function importNotebook(bundle) {
   if (!notes || typeof notes !== 'object' || !Array.isArray(notes.notes) || notes.notes.length > IMPORT_MAX_NOTES) {
     throw new BadRequestError('导入包的 notes.json 必须是 { notes: [...] }（且条数不超上限）');
   }
+  // bundle.jobs（任务记录，第十九轮随导出带上）在这里被有意无视：那是旧机器上的运行日志，
+  // 新机器没跑过这些活，还原出来只会凭空多出一堆永远等不到结论的历史记录。
 
   // ---- 素材：只认原本的相对路径（uploads/<sanitized>），重新落盘前逐项校验
   const uploads = Array.isArray(bundle.uploads) ? bundle.uploads : [];

@@ -44,6 +44,9 @@ const HELPER_RULES = `
 let counter = 0;
 const nextId = (prefix) => `${prefix}-${Date.now().toString(36)}-${(counter += 1).toString(36)}`;
 
+/** 盘上写着 running、可这台进程里没有它的句柄时，如实说一句话。 */
+const INTERRUPTED_NOTE = '服务重启时这个任务还挂着，它跟着上一进程一起没了——这里读回来时如实标成已中断。';
+
 /** 制品分身的专用规则：它的活就是把 HTML 做出来交出去。 */
 const ARTIFACT_HELPER = `
 你现在是一个**制品分身**，被主教学会话派出来单独制作一份 HTML 制品。
@@ -81,7 +84,68 @@ export class TaskRunner {
     return path.join(DATA_DIR, 'notebooks', notebookId, 'jobs');
   }
 
-  /** 建一条任务记录并落一个空文件，刷新/重启后还能翻出来。 */
+  /**
+   * 把 jobs/*.json 从盘上读回来。落盘只是承诺的一半，回读才是兑现的那一半（第十九轮）：
+   * 原来这里只写不读，注释却写着「刷新/重启后还能翻出来」——重启后 list/get 只看内存 Map，
+   * 盘上那些记录一条都翻不出来（探针 19-A 实测：重启后 GET /tasks 0 条，盘上还有 1 条）。
+   *
+   * 每条记录过一道 statusFor：内存里正拿着句柄的活任务照原样，句柄不在这台进程里的
+   * running 记录如实读成 interrupted——服务被杀时任务其实跟着死了，盘上那条永远停在
+   * running（探针 19-C），把它读成「进行中」就是撒谎。
+   *
+   * 顺带把僵尸就地治好：读回来时状态与盘上不一致（running → interrupted）就补写回文件一次，
+   * 只改 status/finishedAt/note 三个字段。不补写的话，同一份谎每刷新一次页面就要重圆一次。
+   * 补写只可能发生在重启之后（活任务在 statusFor 那一步就是 running），不动写盘热路径。
+   */
+  _hydrate(notebookId) {
+    if (!notebookId) return;
+    const dir = this.jobsDir(notebookId);
+    let names;
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      return; // 还没有 jobs 目录 = 这个学习没派过任务，正常状态
+    }
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const record = readJsonSafe(path.join(dir, name), null);
+      if (!record || typeof record !== 'object' || typeof record.id !== 'string') continue;
+      // 内存优先：活任务的句柄、增量输出都在这里，盘上那份可能落后好几秒
+      if (this.tasks.has(record.id)) continue;
+      // 不属于这一本的记录不认领（防串台，也防手改文件把任务塞进别人家）
+      if (record.notebookId && record.notebookId !== notebookId) continue;
+      const view = this.statusFor(record);
+      if (view.status === 'interrupted' && record.status === 'running') {
+        // 补写只在服务重启之后发生（此时这条记录必是僵尸），所以不碰活任务的写盘热路径
+        record.status = 'interrupted';
+        record.finishedAt = record.finishedAt || new Date().toISOString();
+        record.note = INTERRUPTED_NOTE;
+        try {
+          fs.writeFileSync(path.join(dir, name), `${JSON.stringify(record, null, 2)}\n`);
+        } catch {
+          /* 补写失败不影响读回来的这份视图 */
+        }
+      }
+      this.tasks.set(record.id, record);
+    }
+  }
+
+  /**
+   * 一条记录**现在**是什么状态——所有对外视图都过这一道（list / get / 导出 / stop 的拒绝话术）。
+   * 判据是「这台进程还拿着它的句柄吗」，不是盘上那个字段写了什么：服务被杀时任务跟着死了，
+   * 盘上却永远停在 running（探针 19-C）。也不看 createdAt 猜时间窗——`_create` 落盘与
+   * `run()` 装上 abort 是紧挨着的两步，任何"刚写完盘就该算死"的猜测都会把活任务判成死的。
+   */
+  statusFor(record) {
+    const live = this.tasks.get(record.id);
+    if (live?.abort && live.status === 'running') return { ...record, status: 'running' };
+    if (record.status === 'running') {
+      return { ...record, status: 'interrupted', note: record.note || INTERRUPTED_NOTE };
+    }
+    return { ...record };
+  }
+
+  /** 建一条任务记录并落一个文件，重启后还能翻出来（_hydrate 负责翻）。 */
   _create({ notebookId, kind, title, instructions, parentId = null, modelRef, helper = null }) {
     const id = nextId(kind === 'subagent' ? 'sub' : 'job');
     const record = {
@@ -92,7 +156,7 @@ export class TaskRunner {
       title: String(title || instructions || '未命名任务').slice(0, 120),
       instructions: String(instructions || ''),
       helper,
-      status: 'running', // running | done | failed | stopped
+      status: 'running', // running | done | failed | stopped；盘上是 running 但本机没句柄时读成 interrupted
       model: modelRef ? { provider: modelRef.provider, model: modelRef.model } : null,
       createdAt: new Date().toISOString(),
       finishedAt: null,
@@ -203,25 +267,72 @@ export class TaskRunner {
   }
 
   list({ notebookId, kind } = {}) {
+    this._hydrate(notebookId);
     const out = [];
     for (const r of this.tasks.values()) {
       if (notebookId && r.notebookId !== notebookId) continue;
       if (kind && r.kind !== kind) continue;
-      out.push(publicView(r));
+      out.push(publicView(this.statusFor(r)));
     }
     out.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     return out;
   }
 
+  /**
+   * 按 id 取一条。不知道它属于哪本时给 notebookId 没用，所以按文件名直接查盘：
+   * 重启后 read_background_task 问的正是这种来路不明的 id。
+   */
   get(id) {
     const r = this.tasks.get(id);
-    return r ? publicView(r) : null;
+    if (r) return publicView(this.statusFor(r));
+    const recovered = this._findById(id);
+    return recovered ? publicView(this.statusFor(recovered)) : null;
   }
 
-  stop(id) {
-    const r = this.tasks.get(id);
-    if (!r) return { ok: false, error: `没有这个任务: ${id}` };
-    if (r.status !== 'running') return { ok: false, error: `任务已经是 ${r.status}` };
+  /** id 长这样：`job-<base36 时间>-<base36 序号>` 或 subagent 的 `sub-…`；文件名就是 id.json。 */
+  _findById(id) {
+    const safe = typeof id === 'string' ? id : '';
+    if (!/^(job|sub)-[0-9a-z]+-[0-9a-z]+$/.test(safe)) return null;
+    // id 前缀与 kind 是一对（subagent 才有 sub- 前缀），对不上就是被人动过的文件
+    const expectKind = safe.startsWith('sub-') ? 'subagent' : 'background';
+    let notebooks;
+    try {
+      notebooks = fs.readdirSync(path.join(DATA_DIR, 'notebooks'));
+    } catch {
+      return null;
+    }
+    for (const nbId of notebooks) {
+      const file = path.join(this.jobsDir(nbId), `${safe}.json`);
+      if (!fs.existsSync(file)) continue;
+      const record = readJsonSafe(file, null);
+      if (!record || typeof record !== 'object' || record.id !== safe || record.kind !== expectKind) continue;
+      record.notebookId = record.notebookId || nbId;
+      this.tasks.set(safe, record);
+      return record;
+    }
+    return null;
+  }
+
+  /**
+   * 停一个任务。传 notebookId 时必须真是这一本的任务（第十九轮：路由取了 URL 里的
+   * :id 却根本没用，A 本 200 停掉了 B 本的任务——守卫要长在动手的那一侧）。
+   */
+  stop(id, notebookId = null) {
+    let r = this.tasks.get(id);
+    if (!r) {
+      const disk = this._findById(id);
+      if (!disk) return { ok: false, error: `没有这个任务: ${id}` };
+      r = disk;
+    }
+    if (notebookId && r.notebookId !== notebookId) {
+      // 标上 crossNotebook 让路由层如实翻译成 404：这一本下面没有这个任务
+      return { ok: false, crossNotebook: true, error: `这个任务不属于当前学习（notebook=${r.notebookId || '?'}）` };
+    }
+    const view = this.statusFor(r);
+    if (view.status === 'interrupted') {
+      return { ok: false, error: '这个任务已经中断了（服务重启时它就跟着没了），没有还在跑的东西可停' };
+    }
+    if (view.status !== 'running') return { ok: false, error: `任务已经是 ${view.status}` };
     this._abort(r);
     return { ok: true, note: `已请求停止 ${r.title}` };
   }

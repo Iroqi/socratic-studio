@@ -209,7 +209,7 @@ value / probability 是判定置信度不是学习量（Invariant 4），完整�
 │  ├─ graph.mjs            Learning Graph 严格校验 + 拓扑排序
 │  ├─ store.mjs            每个 notebook 的落盘（graph / progress / patches / chat / uploads / artifacts / todos / jobs）+ 整本导出 / 导入 + 制品打包（zip，第十四轮）+ 学习小结编译（Markdown / HTML 双出口）+ 对话导出（过程时间线，同一数据源）
   ├─ zip.mjs              极简 STORED zip（CRC32 自算、时间戳固定、确定性输出；第十四轮）
-│  ├─ tasks.mjs            后台任务与子 agent：任务记录、隔离执行、落盘、事件外发
+│  ├─ tasks.mjs            后台任务与子 agent：任务记录、隔离执行、落盘、**回读**（第十九轮）、事件外发
 │  ├─ agent.mjs            18 个工具、状态转移守卫、agentic 循环（SSE 事件源）
 │  ├─ prompt.mjs           读 rules/ 编译 system prompt + 宿主能力映射 + 状态快照
 │  ├─ starters.mjs         开局引导现编：提示词、解析、按已学清单缓存（编不出就交白卷）
@@ -356,7 +356,7 @@ curl -X POST http://127.0.0.1:8787/api/notebooks/$ID/answer \
 | **工具调用明细** | `tool_exec` 带完整 `args`、`tool_end` 带裁剪后的 `result`（20KB 上限，否则整份 Graph 能把 SSE 撑爆） | 会话列里只有一行标题；参数与返回值不展示、也展不开，失败的工具标红并在行内写明原因 |
 | **本轮待办** | `update_todo_list`（整体替换，不是追加）。落在 `todos.json`，**不掺进 progress.json** | 「讲解顺序」那一节顶部的一条进度条（`本轮 2/5` + 每步一个 chip），实时打勾——**不再单列一节** |
 | **计划模式** | `present_plan` **阻塞到学习者裁决**；裁决走 `/plan` 回调 | 计划卡：Markdown 方案 + 「按这个来」/「我要改一下」 |
-| **后台任务** | `run_background_task` 立刻返回 id；`read` / `list` / `stop` 三个配套工具 | 右栏「学习」页的「后台任务」段 + 顶栏在跑计数，常驻 SSE 推送 |
+| **后台任务** | `run_background_task` 立刻返回 id；`read` / `list` / `stop` 三个配套工具 | 右栏「学习」页的「后台任务」段 + 顶栏在跑计数：常驻 SSE 推实时事件，**打开学习时再从 `GET /tasks` 补水一次**（刷新不再是全空，第十九轮） |
 | **子 agent** | `spawn_subagent` **阻塞**等结论；跑在自己的 `TeachingSession` + `structuredClone(notebook)` 上，且不挂 `onPersist` | 复用任务面板，与后台任务同一套视图 |
 | **交付物卡片** | 沿用既有 `artifacts/manifest.json` | 右栏「素材与制品」：类型徽章 + 折叠预览 + 新窗口打开 |
 | **@ 引用素材** | 无新增接口，复用 `uploads` | 输入框打 `@` 浮层筛选、方向键选择、回车插入并自动加入附件 |
@@ -837,7 +837,7 @@ assistant 消息上写进 `chat.json`；刷新后 `renderThread()` 按时间顺�
 | `progress.json` | mastery 状态、观察事件、制品回报（evidence/state/event） | 同上 |
 | `todos.json` | 本轮待办（**单独文件**，不掺进 progress） | 待办一变动就写 |
 | `patches.json` | 待确认的结构改动 | 提出/裁决时 |
-| `uploads/` `artifacts/` `jobs/` | 素材 / 落盘制品 / 任务记录 | 各自发生时 |
+| `uploads/` `artifacts/` `jobs/` | 素材 / 落盘制品 / 任务记录（**只写不读是第十九轮修掉的洞**：重启后翻不回来、僵尸 running 无人改判） | 各自发生时；`jobs` 读回来时如实改判 interrupted |
 
 **"记忆"不是把历史原样塞回上下文**，而是每回合开头把 Graph + Progress + 制品回报
 编译成一份状态快照，拼进 system prompt（`server/prompt.mjs` 的 `renderStateSnapshot`）。
@@ -1026,6 +1026,34 @@ README、只兑在浏览器里**——前端只看当前标签页有没有 `stat
 `serve.mjs` 的 DELETE 分支绑死（摘掉守卫，文档测试当场红）。
 顺带修一处更老的漂移：这段曾写着「点开要输入「删除」二字」——那种做法像设置密码，早已被
 弹层确认替代（`web/app.js` 注释里记着这个决定），文档一直没跟上。
+
+### 后台任务记录：落盘要有回读，状态要如实（2026-10-07 第十九轮）
+
+`tasks.mjs` 每条任务都往 `jobs/<id>.json` 落一份，注释写着「刷新/重启后还能翻出来」——
+可第十九轮实测发现它**只写不读**：`list` / `get` / `stop` 全部只看内存 Map，服务一重启
+`GET /api/notebooks/<id>/tasks` 就回空数组，盘上那条记录一条也翻不出来。前端更彻底：
+`openNotebook` 把 `state.tasks` 清成 `[]`，任务面板只靠常驻 SSE 的实时事件填，
+`web/app.js` 全文没有一处调用过 `GET /tasks`——这个接口一直挂着，没人来取。
+同一条注释后半句（刷新）也没兑：不重启、只刷一次页面，面板照样全空。
+
+现在的口径，三句话：
+
+- **回读**：`list()` 先 `_hydrate(notebookId)` 扫这一本的 `jobs/*.json`（内存里已有的不覆盖，
+  不属于这一本的不认领），`get(id)` 查不到内存时按 id 找回盘上那一份（`job-` / `sub-` 前缀
+  与 `kind` 对不上就不认领，免得被人动过的文件把任务塞进别人家）。前端 `openNotebook`
+  补水一次（不 await、失败静默：读不回来只是看不到历史任务，不许拖慢或弄红"打开学习"）。
+- **如实**：一条记录是不是 `running`，判据是**这台进程手里有没有它的句柄**，不是盘上那个
+  字段写了什么。服务被杀时任务跟着死了，盘上却永远停在 `running`——读回来一律改判
+  `interrupted`（已中断），并补写回文件一次，谎不许每刷新一次重圆一次。工具侧
+  `read_background_task` 读到中断就说中断、给"重新派一次"的出口，绝不让模型替它圆场。
+- **归属**：`POST /api/notebooks/:id/tasks/:taskId/stop` 里那个 `:id` 以前只解码不使用，
+  实测 A 本发这条请求真把 B 本的任务停了（HTTP 200）。现在归属校验在 `TaskRunner.stop`
+  里做——与第十八轮删除守卫同一条纪律：守卫要站在动手那一侧，路由只把"不属于这一本"
+  翻译成 404。`stop_background_task` 工具带同一道门。
+
+整本导出（`/export`）现在带上 `jobs`（派过什么分身、结果如何，属于这本学习的凭据）；
+导入**有意无视**它们——旧机器上的运行日志不属于新机器，照原样还原只会凭空造出一堆
+永远等不到结论的"中断历史"。
 
 ### 制品回放
 

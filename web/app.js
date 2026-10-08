@@ -202,9 +202,7 @@ async function subscribeTaskStream() {
         completeArtifactPlaceholder(evt.artifact);
       }
       if (state.panelTab === 'learn') renderPanel();
-      const running = (state.tasks || []).filter((t) => t.status === 'running').length;
-      const badge = $('taskCount');
-      if (badge) badge.textContent = running ? `${running} 个任务在跑` : '';
+      updateTaskBadge();
     };
     es.onerror = () => {
       /* EventSource 自动重连；真断了也只是看不到实时进度，不影响主流程 */
@@ -212,6 +210,13 @@ async function subscribeTaskStream() {
   } catch {
     /* 流连不上也只是看不到实时进度，任务本身照常在后台跑完 */
   }
+}
+
+/** 顶栏在跑计数：实时流与补水（hydrateTasks）都调这一个，别在两个地方各写一遍。 */
+function updateTaskBadge() {
+  const running = (state.tasks || []).filter((t) => t.status === 'running').length;
+  const badge = $('taskCount');
+  if (badge) badge.textContent = running ? `${running} 个任务在跑` : '';
 }
 
 async function refreshConfig() {
@@ -593,7 +598,40 @@ async function openNotebook(id, { carryComposer = false } = {}) {
   }
   scrollToBottom(true);
   subscribeTaskStream();
+  hydrateTasks(id);
   syncOrphanTurn();
+}
+
+/**
+ * 把这一本的任务记录从服务端读回来（第十九轮）。以前面板只靠常驻 SSE 的实时事件填，
+ * 刷新一次页面就全空——盘上明明有记录，GET /tasks 也明明在，就是没人调用它。
+ * 这正是"落盘了，但没人读回来"在前端的那一半。
+ *
+ * 三条纪律：
+ * - 不 await：开本速度不为它等一秒；回来时要是已经切走了别的学习，这批数据就地作废。
+ * - 失败就静默：读不回来只是看不到历史任务，不该让打开学习这件事变红。
+ * - 实时优先：本地已经记成终态（done/failed/stopped）的任务，不用可能过期的快照把它
+ *   降回 running——快照发出后任务恰好跑完，是这个异步调用必然撞上的正常竞态。
+ */
+function hydrateTasks(notebookId) {
+  api('GET', `/api/notebooks/${notebookId}/tasks`)
+    .then((data) => {
+      if (state.notebook?.id !== notebookId) return;
+      const list = Array.isArray(data?.tasks) ? data.tasks : [];
+      if (!list.length) return;
+      const merged = state.tasks || [];
+      for (const t of list) {
+        if (!t?.id) continue;
+        const local = merged.find((x) => x.id === t.id);
+        if (local && local.status !== 'running') continue;
+        state.tasks = upsertTask(merged, t);
+      }
+      if (state.panelTab === 'learn') renderPanel();
+      updateTaskBadge();
+    })
+    .catch(() => {
+      /* 读不回来只是少了历史，不拦任何当下的事 */
+    });
 }
 
 /**
@@ -2568,6 +2606,9 @@ function renderTaskItem(t) {
   card.append(head);
   if (t.output) card.append(el('div', 'task-out', t.output.slice(0, 2000)));
   if (t.error) card.append(el('div', 'task-error', t.error));
+  // 中断的任务要说清为什么中断：它盘上写着 running，读回来时是「已中断」，
+  // 不给一句话解释，学习者只会以为这个任务凭空坏了（服务端在 note 里带着那句）。
+  if (t.status === 'interrupted') card.append(el('div', 'task-note', t.note || '服务重启时这个任务跟着没了。'));
   if (t.status === 'running') {
     const stop = el('button', 'btn btn-danger btn-sm', '停掉');
     stop.onclick = async () => {
@@ -2586,7 +2627,7 @@ function renderTaskItem(t) {
   return card;
 }
 
-const TASK_LABEL = { running: '进行中', done: '完成', failed: '失败', stopped: '已停' };
+const TASK_LABEL = { running: '进行中', done: '完成', failed: '失败', stopped: '已停', interrupted: '已中断' };
 
 /** 任务事件只带增量，这里按 id 合并进列表。 */
 function upsertTask(list, incoming) {
@@ -5042,6 +5083,7 @@ boot().catch((err) => toast(`启动失败：${err.message}`, true));
  */
 export const __hooks = {
   state,
+  hydrateTasks,
   stateWord,
   toast,
   consumeSse,

@@ -1451,6 +1451,117 @@ check('分身没碰主会话的 learning 状态', session.progress.concepts['clo
   for (const f of settingsCopies) fs.rmSync(path.join(dirOfSettings, f), { force: true });
 }
 
+// ─────────────────────────── 7f-2. 落盘的回读：jobs/*.json 不是写进去就完事（第十九轮）
+
+section('7f-2. 任务记录回读：僵尸 running 读成 interrupted + 归属这道门');
+
+/*
+ * 探针 19-A / 19-C 的单元测试版。原来 tasks.mjs 只写不读：注释写着「刷新/重启后还能翻出来」，
+ * list/get 却只看内存 Map（实测：重启后 GET /tasks 0 条，盘上还有 1 条 done 记录）；
+ * 服务被杀时盘上那条永远停在 running，读回来照原样喊"进行中"就是撒谎。
+ * 这里用两个 TaskRunner 实例演"重启"：runnerB 内存全空，只有盘——它必须能把记录翻回来，
+ * 并把这台进程没有句柄的 running 如实读成 interrupted。
+ */
+{
+  const hydrateNb = store.createNotebook({ topic: '回读探针', goal: null, pace: 'normal' }).id;
+  const jobsDirP = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', hydrateNb, 'jobs');
+  const readDisk = (id) => JSON.parse(fs.readFileSync(path.join(jobsDirP, `${id}.json`), 'utf8'));
+  const runnerA = new TaskRunner({ registry, rulesText: '（回读探针）', onEvent: () => {} });
+  // 直接造记录、不真跑分身：这一节验的是读回来的路，不是执行的路
+  const recLive = runnerA._create({ notebookId: hydrateNb, kind: 'background', title: '这台进程还拿着的', instructions: 'x' });
+  recLive.abort = new AbortController(); // 假句柄：活任务的判据是"这台进程有没有它的句柄"
+  const recZombie = runnerA._create({ notebookId: hydrateNb, kind: 'background', title: '跟着旧进程没掉的', instructions: 'x' });
+  delete recZombie.abort; // 服务被杀：句柄没了，盘上那条永远停在 running
+
+  // 持句柄这一侧先验一遍：running 就该是 running，且回读不许把活任务的文件改花
+  check('本机有句柄的任务读起来仍是 running', runnerA.get(recLive.id).status === 'running');
+  check('回读不误伤活任务（句柄在，盘上那份保持 running）',
+    runnerA.list({ notebookId: hydrateNb }).find((t) => t.id === recLive.id)?.status === 'running'
+    && readDisk(recLive.id).status === 'running', readDisk(recLive.id).status);
+
+  // 换个 runner = 重启后的新进程：内存全空，只剩盘
+  const runnerB = new TaskRunner({ registry, rulesText: '（回读探针）', onEvent: () => {} });
+  const listed = runnerB.list({ notebookId: hydrateNb });
+  check('重启后盘上的任务翻得回来（条数对）', listed.length === 2, JSON.stringify(listed.map((t) => t.id)));
+  check('两条都从盘上找回了标题', listed.every((t) => typeof t.title === 'string' && t.title.length > 0));
+  const zombieView = listed.find((t) => t.id === recZombie.id);
+  check('盘上写着 running、本机没句柄 → 如实读成 interrupted',
+    zombieView?.status === 'interrupted', `status=${zombieView?.status}`);
+  check('重启后连"还活着"那条也如实读成 interrupted（句柄确实没了）',
+    listed.find((t) => t.id === recLive.id)?.status === 'interrupted');
+  check('中断记录带一句为什么（不是光秃秃一个状态）',
+    Boolean(zombieView?.note) && zombieView.note.includes('重启'), zombieView?.note || '(无 note)');
+
+  // 僵尸就地治好：读回来时状态与盘上不符就补写回去一次，谎不许每刷新一次重圆一次
+  check('补写回盘：僵尸那条现在写着 interrupted', readDisk(recZombie.id).status === 'interrupted', readDisk(recZombie.id).status);
+  check('补写的僵尸带 finishedAt 与 note（终态就该有终态的样子）',
+    Boolean(readDisk(recZombie.id).finishedAt) && Boolean(readDisk(recZombie.id).note));
+  check('补写幂等：再读一遍还是 interrupted，不来回翻转',
+    runnerB.list({ notebookId: hydrateNb }).find((t) => t.id === recZombie.id)?.status === 'interrupted'
+    && readDisk(recZombie.id).status === 'interrupted');
+
+  // get() 也要能凭 id 从盘上认人（重启后 read_background_task 问的就是这种来路不明的 id）
+  const runnerC = new TaskRunner({ registry, rulesText: '（回读探针）', onEvent: () => {} });
+  const gotZombie = runnerC.get(recZombie.id);
+  check('get(id) 也能从盘上翻回来（不只看内存）',
+    gotZombie?.id === recZombie.id && gotZombie.status === 'interrupted', JSON.stringify(gotZombie));
+  check('形状不对的 id 不拿去拼路径（查无此任务，不抛）',
+    runnerC.get('../../settings') === null && runnerC.get('job-nope-nope') === null);
+  check('id 前缀与 kind 对不上就不认领（被人动过的文件）',
+    (() => {
+      const junkName = `sub-${Date.now().toString(36)}-f.json`;
+      fs.writeFileSync(path.join(jobsDirP, junkName),
+        JSON.stringify({ id: junkName.replace('.json', ''), kind: 'background', notebookId: hydrateNb, status: 'done' }));
+      const denied = runnerC.get(junkName.replace('.json', '')) === null;
+      fs.rmSync(path.join(jobsDirP, junkName), { force: true }); // 用完就清，别污染后面的导出计数
+      return denied;
+    })());
+
+  // 归属这道门：别的本不能停这一本的任务（探针 19-D 的单元版）
+  const otherNb = store.createNotebook({ topic: '隔壁本', goal: null, pace: 'normal' }).id;
+  const stopCross = runnerB.stop(recZombie.id, otherNb);
+  check('跨本 stop 拒绝并标 crossNotebook',
+    stopCross.ok === false && stopCross.crossNotebook === true, JSON.stringify(stopCross));
+  const stopInterrupted = runnerB.stop(recZombie.id, hydrateNb);
+  check('停一条已中断的任务：如实说没有还在跑的东西', stopInterrupted.ok === false, JSON.stringify(stopInterrupted));
+  const stopOwn = runnerA.stop(recLive.id, hydrateNb);
+  check('本本内 stop 认得活任务（带句柄那条真被请求停止）', stopOwn.ok === true, JSON.stringify(stopOwn));
+
+  // 工具这一侧：read 到中断就说中断，别让模型以为它做完了
+  const probeSession = new TeachingSession({
+    registry, notebook: store.getNotebook(hydrateNb), emit: () => {},
+    signal: new AbortController().signal, taskRunner: runnerB,
+    modelRef: { provider: 'faux', model: fauxModel.id },
+  });
+  const readInterrupted = probeSession.execReadBackground({ task_id: recZombie.id });
+  check('read_background_task 读回中断任务：ok=false + status=interrupted',
+    readInterrupted.ok === false && readInterrupted.status === 'interrupted', JSON.stringify(readInterrupted));
+  check('中断时给"重新派一次"的出口，不假装完成',
+    String(readInterrupted.note || '').includes('重新派'), JSON.stringify(readInterrupted));
+  check('read 查无此任务还是老实地报没有', probeSession.execReadBackground({ task_id: 'sub-ffff-9' }).ok === false);
+  check('execStopBackground 也带归属（别本 id 停不掉）',
+    (() => {
+      const s = new TeachingSession({
+        registry, notebook: store.getNotebook(otherNb), emit: () => {},
+        signal: new AbortController().signal, taskRunner: runnerB,
+        modelRef: { provider: 'faux', model: fauxModel.id },
+      });
+      const r = s.execStopBackground({ task_id: recZombie.id });
+      return r.ok === false && String(r.error).includes('不属于');
+    })());
+
+  // 整本导出带上任务记录（"派过什么分身、结果如何"的凭据，备份不该漏）
+  const bundleJobs = store.exportNotebook(hydrateNb);
+  check('整本导出带上 jobs（任务记录不再漏）',
+    Array.isArray(bundleJobs.jobs) && bundleJobs.jobs.length === 2, JSON.stringify(bundleJobs.jobs?.map?.((j) => j.id)));
+  check('导出的 jobs 里 id 与盘上一致',
+    bundleJobs.jobs.every((j) => fs.existsSync(path.join(jobsDirP, `${j.id}.json`))));
+  // 导入有意无视 jobs：旧机器上的运行日志不属于新机器，还原出来只会凭空造一堆中断历史
+  const restoredJobs = store.importNotebook(bundleJobs);
+  check('导入还原出的新本不带 jobs 目录（不凭空造中断历史）',
+    !fs.existsSync(path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', restoredJobs.id, 'jobs')), restoredJobs.id);
+}
+
 // ─────────────────────────────────────── 7g. 结构化笔记（compile_notes）
 
 section('7g. 结构化笔记：compile_notes 落 notes.json');

@@ -327,6 +327,10 @@ const taskRunner = new TaskRunner({
   },
 });
 
+// 整本导出带上任务记录：store 不能反过来 import tasks.mjs（那会成环），从路由层注进去。
+// 走 taskRunner.list 而不是直接读盘——顺带过一遍 _hydrate + statusFor，导出的状态是真实状态。
+store.setTasksSnapshotFn((notebookId) => taskRunner.list({ notebookId }));
+
 class TurnHandle {
   constructor(notebookId) {
     this.notebookId = notebookId;
@@ -1343,7 +1347,12 @@ const server = http.createServer(async (req, res) => {
     if (m && method === 'POST') {
       const id = decodeURIComponent(m[1]);
       const taskId = decodeURIComponent(m[2]);
-      return sendJson(res, 200, taskRunner.stop(taskId));
+      // :id 不能只当装饰：第十九轮探针 19-D 实测，A 本发这条请求真把 B 本的任务停了（200）。
+      // 归属校验交给 TaskRunner.stop（守卫长在动手的那一侧，与第十八轮删除守卫同一条纪律），
+      // 这里只负责把「不属于这一本」如实翻译成 404。
+      const out = taskRunner.stop(taskId, id);
+      if (out.ok === false && out.crossNotebook) return sendJson(res, 404, out);
+      return sendJson(res, 200, out);
     }
 
     // 中断回合

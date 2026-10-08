@@ -551,6 +551,79 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
 }
 
 
+// ──────────────────────────────────────────────── 落盘的东西必须有人读回来：注释/文档/代码三方对齐
+//
+// 第十九轮的病灶：tasks.mjs 给每条任务落一份 jobs/<id>.json，注释写着「刷新/重启后还能翻出来」，
+// 可 list/get/stop 只看内存 Map——没有任何一行代码去读那个目录（探针 19-A 实测：重启后
+// GET /tasks 0 条，盘上还有 1 条）。前端同样只写不读：openNotebook 清 state.tasks，
+// 全文件没人调用 GET /tasks。这一节把**注释里那句承诺**与**真去读盘的那段代码**绑死：
+// 摘掉回读，那句注释不许独自绿着。
+{
+  const tasksSrc = fs.readFileSync(path.join(app, 'server', 'tasks.mjs'), 'utf8');
+  const promiseHits = [...tasksSrc.matchAll(/还能翻出来/g)];
+  check('tasks.mjs 对 jobs 落盘的承诺在案（不许悄悄删掉这句话躲测试）',
+    promiseHits.length >= 1, '找不到「还能翻出来」这句承诺');
+  const hydrateDef = /_hydrate\(notebookId\) \{[\s\S]*?\n  \}/.exec(tasksSrc);
+  check('_hydrate 真的在扫这一本的 jobs 目录（承诺不是空话）',
+    Boolean(hydrateDef) && hydrateDef[0].includes('this.jobsDir(')
+    && /fs\.readdirSync/.test(hydrateDef[0]) && /readJsonSafe/.test(hydrateDef[0]),
+    hydrateDef ? hydrateDef[0].replace(/\n+\s*/g, ' ').slice(0, 200) : '没有 _hydrate 或它不读盘');
+  const listBody = /list\(\{ notebookId, kind \} = \{\}\) \{[\s\S]*?\n  \}/.exec(tasksSrc);
+  check('list() 开口第一件事就是回读盘（不回读就还是只看内存）',
+    Boolean(listBody) && /this\._hydrate\(notebookId\)/.test(listBody[0]),
+    listBody ? listBody[0].replace(/\n+\s*/g, ' ').slice(0, 160) : 'list() 找不到了');
+  const getBody = /get\(id\) \{[\s\S]*?\n  \}/.exec(tasksSrc);
+  check('get(id) 内存查不到时按 id 找回盘上那一份',
+    Boolean(getBody) && /_findById\(id\)/.test(getBody[0]),
+    getBody ? getBody[0].replace(/\n+\s*/g, ' ').slice(0, 160) : '找不到 get() 本体');
+
+  // running 的判据必须是"这台进程还有句柄"——盘上那个字段不算数（探针 19-C 的僵尸）
+  const statusFor = /statusFor\(record\) \{[\s\S]*?\n  \}/.exec(tasksSrc);
+  check('statusFor 的 running 判据是句柄在手（live?.abort），不是盘上写的字段',
+    Boolean(statusFor) && /live\?\.abort/.test(statusFor[0]),
+    statusFor ? statusFor[0].replace(/\n+\s*/g, ' ').slice(0, 200) : '没有 statusFor');
+  check('没句柄的 running 读成 interrupted（如实，不改判就是撒谎）',
+    Boolean(statusFor) && /status: 'interrupted'/.test(statusFor[0]), '僵尸又被原样读成 running 了');
+  check('interrupted 在状态口径注释里挂了号（不许留一份没人认领的状态）',
+    /running \| done \| failed \| stopped[\s\S]{0,80}interrupted/.test(tasksSrc), '状态口径没跟上');
+
+  // 前端这一侧：接口有、承诺有，就得有人真的去打它
+  const webApp = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+  check('前端打开学习时补水任务记录（GET /tasks 终于有人调用）',
+    /hydrateTasks\(/.test(webApp) && /api\/notebooks\/\$\{notebookId\}\/tasks/.test(webApp)
+    && /openNotebook[\s\S]{0,2600}hydrateTasks\(id\)/.test(webApp),
+    'GET /tasks 又没人来取了');
+  check('补水不许拖慢或弄红打开学习（异步出去 + catch 静默）',
+    /function hydrateTasks[\s\S]{0,900}\.catch\(/.test(webApp), '补水没有静默失败出口');
+  check('前端有"已中断"徽章词（服务端改判的状态在界面上有名字）',
+    /interrupted: '已中断'/.test(webApp), 'TASK_LABEL 没带 interrupted');
+  check('中断卡片给一句为什么（note 一路带到面板）',
+    /status === 'interrupted'[\s\S]{0,240}task-note/.test(webApp), '面板只显示状态不显示原因');
+
+  // stop 的归属门：路由不许把 URL 里的 :id 当装饰
+  check('serve.mjs 的 stop 分支把 :id 真的交给 stop 做归属校验',
+    /taskRunner\.stop\(taskId, id\)/.test(serveSrc), '路由又开始无视 notebook id 了');
+  check('跨本 stop 如实翻成 404（这一本下面查无此任务）',
+    /crossNotebook/.test(serveSrc) && /sendJson\(res, 404/.test(serveSrc), '404 翻译没在路由侧');
+  check('TaskRunner.stop 本体做归属校验（守卫长在动手那一侧，不只靠路由）',
+    /stop\(id, notebookId = null\)[\s\S]{0,700}r\.notebookId !== notebookId/.test(tasksSrc),
+    '归属校验没落在 stop 自己身上');
+  check('stop_background_task 工具带同一道门（模型侧不停别本）',
+    /this\.taskRunner\.stop\(String\(args\.task_id \|\| ''\)\.trim\(\), this\.notebook\.id\)/.test(agentSrc),
+    '工具侧还是裸 stop(id)');
+  check('read_background_task 读到 interrupted 如实说并给重派的出口',
+    /status: 'interrupted'[\s\S]{0,300}重新派/.test(agentSrc), '工具又开始把中断任务当活着或当完成');
+
+  // README 那一节：钉语义而不是关键词（第十八轮 §4.1 的教训——M15 撞出来的）
+  const jobsDoc = /### 后台任务记录[\s\S]{0,2200}?\n###/.exec(readmeDoc);
+  check('README 有「落盘要有回读」一节并写明三件事（回读 / 如实 / 归属）',
+    Boolean(jobsDoc) && /只写不读/.test(jobsDoc[0]) && /句柄/.test(jobsDoc[0])
+    && /interrupted/.test(jobsDoc[0]) && /守卫要站在动手那一侧/.test(jobsDoc[0]),
+    jobsDoc ? jobsDoc[0].replace(/\n+/g, ' ').slice(0, 220) : '找不到这一节');
+  check('README 写明导出带 jobs、导入有意无视（这条"不做"要有名分）',
+    /导入.{0,16}有意无视/.test(readmeDoc), 'jobs 的导出/导入口径没进文档');
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;
