@@ -4265,6 +4265,99 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === 0, errors.join(' | '));
 }
 
+// ─── 37. 分身交付的最后一公里：占位卡按 job id 收掉，台面的账从后台流递过来（第二十一轮）
+{
+  console.log('\n37. 分身交付最后一公里：占位卡认 job id + task_scene 那本账');
+  const st37 = appModule.__hooks.state;
+  const errsBefore37 = errors.length;
+  const es37 = [...esInstances].reverse().find((e) => String(e.url).includes('/task-stream') && !e.closed);
+  check('手里有一条活的后台流', Boolean(es37), `${esInstances.length} 条实例`);
+
+  // 场景：回合早就结束了（分身的主场），台面上只有一张"正在做"的占位卡。
+  // 占位卡上的 id 是任务的 id（agent.mjs 的 artifact_pending 带的是 record.id），
+  // 交付的那一件 id 是 store 新发的 art-*——以前只按真 id 找，永远找不到这张卡。
+  cam.resetDesk();
+  st37.notebook = sceneNotebook(); // current = scene-02，props 为空
+  st37.turn = { blocks: [], flow: null };
+  st37.turn.flow = cam.appendChatTurn(null, { role: 'assistant', __live: true, timestamp: Date.now() });
+  cam.handleTurnEvent({
+    type: 'artifact_pending',
+    artifact: { id: 'job-late37', title: '跨本探针', kind: 'game', description: null, jobId: 'job-late37' },
+  });
+  const ph37 = cam.artifactNodeEl('job-late37');
+  check('占位卡挂在台面上（id 记的是任务的 id）',
+    Boolean(ph37) && ph37.classList.contains('artifact-pending'), ph37 ? ph37.className : '没有这张卡');
+
+  // 旧行为的第一格：账没到（props 还是空的），制品就算到了也不许上台——
+  // pushArtifact 那道闸门认的是这本账。这一条不是 bug，是把纪律钉住：账必须先递过来。
+  cam.pushArtifact({
+    id: 'art-late37', title: '跨本探针', kind: 'game',
+    rel: 'artifacts/art-late37/index.html', html: '<html><body>art37</body></html>',
+  });
+  check('台面的账里没有这件时不许画它（闸门照旧有效，绕过后台流的直达件同样拦下）',
+    cam.artifactNodeEl('art-late37') === null, '闸门被绕过了');
+
+  // 宿主递账：scene 事件在制品之前到（serve.mjs 的交付顺序）
+  es37.emit({
+    type: 'task_scene',
+    task: { id: 'job-late37', notebookId: 'nb-test' },
+    scene: { id: 'scene-02', index: 2, title: '闭包记住了哪个绑定', phase: 'practice',
+      props: [{ id: 'art-late37', title: '跨本探针', rel: 'artifacts/art-late37/index.html' }],
+      openedAt: '2026-03-04T09:21:00.000Z' },
+    log: st37.notebook.scene.log,
+  });
+  check('task_scene 把账接住：当前这一场的 props 里有这件',
+    (st37.notebook.scene.current.props || []).some((p) => p.id === 'art-late37'),
+    JSON.stringify(st37.notebook.scene.current.props));
+
+  es37.emit({
+    type: 'task_artifact',
+    taskId: 'job-late37',
+    task: { id: 'job-late37', notebookId: 'nb-test', title: '制作制品：跨本探针', kind: 'background', status: 'running' },
+    artifact: {
+      id: 'art-late37', title: '跨本探针', description: null, kind: 'game',
+      rel: 'artifacts/art-late37/index.html',
+      html: '<!doctype html><html><head></head><body>art37</body></html>',
+    },
+  });
+  check('交付的那一件真的上台了（画面上看得见，不是只在服务端账上）',
+    Boolean(cam.artifactNodeEl('art-late37')), '没有落成卡');
+  check('占位卡原地被收掉（第二十一轮之前它一直挂着"做好会自动替换这一张"）',
+    cam.artifactNodeEl('job-late37') === null
+    && deepAll(desk(), 'artifact-pending').length === 0,
+    deepAll(desk(), 'artifact-pending').map((n) => n.textContent).join(' | '));
+  check('台面上这一件只有一张卡（占位与实物不许并存）',
+    deepAll(desk(), 'artifact').filter((n) => n.dataset?.artifactId === 'art-late37').length === 1,
+    `${deepAll(desk(), 'artifact').length} 张制品卡`);
+
+  // 刷新之后没有占位卡了（chat.json 回放才是那时的来源），迟到的交付照样不能画歪
+  cam.handleTurnEvent({ type: 'done', notebook: st37.notebook, learnerView: { counts: {}, total: 0, items: [] } });
+  st37.turn = null;
+  es37.emit({
+    type: 'task_artifact',
+    taskId: 'job-other37',
+    task: { id: 'job-other37', notebookId: 'nb-test' },
+    artifact: { id: 'art-late37', title: '跨本探针', kind: 'game', rel: 'artifacts/art-late37/index.html', html: '<html><body>art37</body></html>' },
+  });
+  check('同一件重复到达不再画第二张（幂等：只画一次那条规矩对后台流同样成立）',
+    deepAll(desk(), 'artifact').filter((n) => n.dataset?.artifactId === 'art-late37').length === 1,
+    `${deepAll(desk(), 'artifact').length} 张`);
+
+  // 未知事件与不带归属的事件都不许把画面弄坏（前端这一侧也认户口，虽然投递已经按归属过滤）
+  es37.emit({ type: 'task_scene', scene: null });
+  es37.emit({ type: 'task_progress', note: '未来的事件，现在必须安静忽略' });
+  check('没有台面的 task_scene 与未知事件都不炸（常驻流以后还会带别的类型）',
+    errors.length === errsBefore37, errors.slice(errsBefore37).join(' | '));
+
+  const srcApp = appSrc;
+  check('前端不再靠"事件广播给所有订阅者"就能看见（这一节用的是自带 task 的两种事件）',
+    /evt\.taskId \?\? evt\.task\?\.id/.test(srcApp) && srcApp.includes("type === 'task_scene'"),
+    '占位卡没接 taskId，或后台流没接 task_scene');
+  check('这一节无异常', errors.length === errsBefore37, errors.slice(errsBefore37).join(' | '));
+  cam.resetDesk();
+  st37.notebook = sampleNotebook();
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

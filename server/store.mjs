@@ -15,6 +15,7 @@ import {
   NOTEBOOKS_DIR,
   SETTINGS_FILE,
   CREDENTIALS_FILE,
+  NOTEBOOK_FILE,
   writeJsonAtomic,
   readJsonSafe,
   safeId,
@@ -24,7 +25,9 @@ import { readNotes } from './notes.mjs';
 import { validateGraph, topoSortConcepts } from './graph.mjs';
 import { normaliseSceneState, placeProp, emptySceneState } from './scene.mjs';
 
-const NOTEBOOK_FILE = 'notebook.json';
+// NOTEBOOK_FILE 从 config.mjs 引（第二十一轮）：它是「一本学习」的唯一判据，
+// notes.mjs / tasks.mjs 写盘前都要问同一句话，而它们不能回头 import store（成环）。
+// 判据只留一份，漂移就没有容身之处（第二十轮变异 m15 教的）。
 const GRAPH_FILE = 'learning-graph.json';
 const PROGRESS_FILE = 'progress.json';
 const PATCH_FILE = 'patches.json';
@@ -92,15 +95,12 @@ function assertExists(id) {
 }
 
 /**
- * 这一本还在吗？非抛版，判据与 assertExists 同源（有 notebook.json 才算一本学习）：
- * 光看目录存在不够——被分身复活出来的鬼目录（只有 jobs/，没有 notebook.json）也得算"没了"。
- * 写后台任务记录、开任务接口之前都要过这一道，免得往已经删掉的学习上继续落盘、把目录 mkdir 回来。
+ * 「这一本还在吗」的判据（非抛版 notebookExists）住在 config.mjs——第二十一轮搬过去的：
+ * notes.mjs 写盘前、tasks.mjs 落盘前、serve 路由开闸前都要问同一句话，而它们不能回头
+ * import store（成环）。判据全仓只留一份；下面的 assertExists 用的 NOTEBOOK_FILE
+ * 也从 config 引，"有 notebook.json 才算一本学习"这句话没有第二种写法。
+ * （第二十轮变异 m15 教的：判据一旦各处各写，退化就没人看得见。）
  */
-export function notebookExists(id) {
-  const safe = safeId(id);
-  if (!safe) return false;
-  return fs.existsSync(path.join(NOTEBOOKS_DIR, safe, NOTEBOOK_FILE));
-}
 
 /**
  * 整本导出要看任务记录，但 store 不该反过来依赖 tasks.mjs（它 import 了 agent.mjs，

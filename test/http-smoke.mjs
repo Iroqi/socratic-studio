@@ -1019,6 +1019,180 @@ try {
       !(repClean.ghostDirs || []).some((g) => g.notebook === ghost2) && repClean.ok === true,
       JSON.stringify({ ok: repClean.ok, ghosts: repClean.ghostDirs }));
   }
+
+  console.log('\n23. 分身交付的制品真的走到终点：上台、落账、只进自己家（真服务全链路）');
+  /*
+   * 探针 21-B / 21-C 的真服务版，也是这一轮的主案。宿主替分身交付的那一段（placeOnDesk +
+   * upsertChatMessage）读代码看是齐的，但 nid 取自 event.task?.notebookId，而 task_artifact
+   * 只带 taskId —— nid 恒 undefined，两个 if (nid) 一次都没进过：制品从不上台、从不落账。
+   * 用户之所以看得见大件，全靠当时那条「查不到归属就广播给所有订阅者」的兜底：A 那整份
+   * HTML 发给了每一本开着后台面板的浏览器（实测 B 收到 A 的制品全文 21KB）。
+   * 所以这一节两头都要钉：**交付要发生**（上台 + 落账），**交付不许串门**（B 一个字都收不到）。
+   *
+   * faux 队列按到达顺序消费（§22 实测恒定：回合第 1 调 → 分身第 1 调 → 回合第 2 调）：
+   *   回合1 开场 + prepare_artifact 派活 → 分身1 share_artifact 交付 → 之后两边各收一条纯正文。
+   * 分身那一条与回合收尾那条谁先到不影响断言（两条都只是正文）。
+   */
+  {
+    const MARKER23 = 'ART23-MARKER-7c3f';
+    const nbA = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '分身交制品A', goal: null }) })).data.notebook.id;
+    const nbB = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '隔壁无辜的B', goal: null }) })).data.notebook.id;
+    const streamA = await fetch(`${BASE}/api/notebooks/${nbA}/task-stream`);
+    const streamB = await fetch(`${BASE}/api/notebooks/${nbB}/task-stream`);
+    await jfetch(`${BASE}/api/__faux`, { method: 'POST', headers: H, body: scriptBody([
+      [{ type: 'text', text: '先开一场，再派分身做大件。' },
+       { type: 'toolCall', name: 'run_scene', arguments: { action: 'open', title: '第一场：交付终点', phase: 'teach' } },
+       { type: 'toolCall', name: 'prepare_artifact', arguments: { title: '跨本探针', kind: 'game', spec: '单文件 HTML，body 里带上标记，不要解释原因' } }],
+      [{ type: 'toolCall', name: 'share_artifact', arguments: { title: '跨本探针', kind: 'game', html: `<html><head></head><body>${MARKER23}</body></html>` } }],
+      [{ type: 'text', text: '派好了，这边继续讲。' }],
+      [{ type: 'text', text: '分身这边也结了。' }],
+    ]) });
+    const turn23 = await fetch(`${BASE}/api/notebooks/${nbA}/turn`, {
+      method: 'POST', headers: H,
+      body: JSON.stringify({ message: '开一场并派分身做个大件', model: { provider: 'faux', model: fauxModelId } }),
+    });
+    const evs23 = await readSSE(turn23, { deadlineMs: 45000 });
+    const jobId23 = JSON.stringify(evs23).match(/"job_id":"([^"]+)"/)?.[1];
+    check('场景成立：回合把大件派给了分身（拿到 job_id）', Boolean(jobId23), evs23.map((e) => e.type).join(','));
+
+    // 等分身收尾（交付发生在它 share_artifact 那一刻，收尾在它交完正文之后）
+    let taskState23 = null;
+    for (let i = 0; i < 60; i += 1) {
+      const list = (await jfetch(`${BASE}/api/notebooks/${nbA}/tasks`)).data;
+      taskState23 = list.tasks?.find((t) => t.id === jobId23) || null;
+      if (taskState23 && taskState23.status !== 'running') break;
+      await sleep(250);
+    }
+    const eventsA = await readSSELines(streamA, { maxLines: 20, perLineMs: 1500 });
+    const eventsB = await readSSELines(streamB, { maxLines: 20, perLineMs: 1500 });
+    streamA.body?.cancel?.().catch?.(() => {});
+    streamB.body?.cancel?.().catch?.(() => {});
+
+    const artEvtA = eventsA.find((e) => e.type === 'task_artifact');
+    check('分身交付的 task_artifact 到了 A 自己的后台流', Boolean(artEvtA),
+      `A: ${eventsA.map((e) => e.type).join(',')} / task=${JSON.stringify(taskState23)}`);
+    check('事件自带户口：task.notebookId 就是派出它的那一本（宿主那两只 if (nid) 从此有 nid）',
+      artEvtA?.task?.notebookId === nbA && artEvtA?.task?.id === jobId23,
+      JSON.stringify({ taskId: artEvtA?.taskId, task: artEvtA?.task }));
+    check('B 一个字都收不到（旧兜底「广播给所有订阅者」把 A 的整份 HTML 发给了每一本）',
+      !eventsB.some((e) => e.type === 'task_artifact')
+      && !JSON.stringify(eventsB).includes(MARKER23),
+      `B 收到: ${eventsB.map((e) => `${e.type}${e.task?.notebookId ? `(nb=${e.task.notebookId})` : ''}`).join(',')}`);
+
+    const nb23 = (await jfetch(`${BASE}/api/notebooks/${nbA}`)).data.notebook;
+    const deliveredId = artEvtA?.artifact?.id;
+    check('交付的这件真的落了盘（manifest 有它）',
+      Boolean(deliveredId) && (nb23.artifacts || []).some((a) => a.id === deliveredId), JSON.stringify((nb23.artifacts || []).map((a) => a.id)));
+    check('宿主替它上台：当前这一场的 props 里有这件（探针 21-C 实测 props 恒为空）',
+      Boolean(deliveredId) && (nb23.scene?.current?.props || []).some((p) => p.id === deliveredId),
+      JSON.stringify(nb23.scene?.current?.props));
+    const ledger23 = (nb23.chat?.messages || []).filter((m) => (m.artifacts || []).some((a) => a.id === deliveredId));
+    check('交付落进对话台账（刷新后回放才有它）',
+      ledger23.length === 1 && ledger23[0].role === 'assistant', JSON.stringify(ledger23.map((m) => m.role)));
+    check('HTML 只在自己家的盘上（B 的目录里搜不到那枚标记）',
+      !fs.existsSync(path.join(dataDir, 'notebooks', nbB, 'artifacts'))
+      || !fs.readdirSync(path.join(dataDir, 'notebooks', nbB, 'artifacts')).length, 'B 的 artifacts 目录不该有东西');
+
+    const nbBData = (await jfetch(`${BASE}/api/notebooks/${nbB}`)).data.notebook;
+    check('B 的台面与台账都没被 A 的大件污染',
+      (nbBData.scene?.current?.props || []).length === 0
+      && !(nbBData.chat?.messages || []).some((m) => (m.artifacts || []).length), JSON.stringify(nbBData.scene));
+
+    // 交付顺序的账（scene 在 artifact 之前）：宿主先摆台再发制品，前端那道 props 闸门才放行
+    const idxSceneA = eventsA.findIndex((e) => e.type === 'task_scene' && (e.scene?.props || []).some((p) => p.id === deliveredId));
+    const idxArtA = eventsA.findIndex((e) => e.type === 'task_artifact');
+    check('台面的账跟着交付走到后台流（task_scene 在，且带着这件）——回合早结束时前端只有这一条流可收',
+      idxSceneA > -1, `A 收到: ${eventsA.map((e) => e.type).join(',')}`);
+    check('task_scene 先于 task_artifact（props 闸门认的就是这本账，账晚到一步这件就永远上不了台面）',
+      idxSceneA < idxArtA, `scene=${idxSceneA} artifact=${idxArtA}`);
+    check('task_scene 也只进自己家（B 的流上没有它）',
+      !eventsB.some((e) => e.type === 'task_scene'), JSON.stringify(eventsB.map((e) => e.type)));
+    fs.rmSync(path.join(dataDir, 'notebooks', nbA), { recursive: true, force: true });
+    fs.rmSync(path.join(dataDir, 'notebooks', nbB), { recursive: true, force: true });
+  }
+
+  console.log('\n24. 一道门统口径：带 :id 的路由对不存在的学习说同一句话（真服务审计）');
+  /*
+   * 探针 21-A 的清单（28 条边逐条打）。第二十轮的存在性门只长在探针碰巧打中的两条边上，
+   * 其余各说各的话：answer 409（回合话术）、plan 409、interrupt 200 ok、task-stream 200 挂住
+   * 不结束、notes 404 是笔记的话术、tasks 404 是「学习不存在」。同一个 id 一半认得一半不认得。
+   * 现在门在路由分发之前，口径应当只有一种；非法 id 是另一回事（400，别说成"不存在"）。
+   */
+  {
+    const gNb = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '删掉之后各边说什么', goal: null }) })).data.notebook.id;
+    const gDel = await jfetch(`${BASE}/api/notebooks/${gNb}`, { method: 'DELETE' });
+    check('场景成立：这本先建后删（200）', gDel.status === 200 && gDel.data?.ok === true, `status=${gDel.status}`);
+    const edges24 = [
+      ['GET', `/api/notebooks/${gNb}`],
+      ['DELETE', `/api/notebooks/${gNb}`],
+      ['POST', `/api/notebooks/${gNb}/answer`, { questionId: 'q-nope', selected: [], text: '' }],
+      ['POST', `/api/notebooks/${gNb}/plan`, { decision: 'approve' }],
+      ['POST', `/api/notebooks/${gNb}/interrupt`, {}],
+      ['GET', `/api/notebooks/${gNb}/tasks`],
+      ['POST', `/api/notebooks/${gNb}/tasks/job-nope/stop`],
+      ['GET', `/api/notebooks/${gNb}/turn-state`],
+      ['GET', `/api/notebooks/${gNb}/graph`],
+      ['GET', `/api/notebooks/${gNb}/summary`],
+      ['PUT', `/api/notebooks/${gNb}/notes/note-nope`, { title: 'x' }],
+      ['POST', `/api/notebooks/${gNb}/artifact-message`, { artifactId: 'art-nope', type: 'event', name: 'x' }],
+      ['GET', `/api/notebooks/${gNb}/artifacts/art-nope`],
+      ['POST', `/api/notebooks/${gNb}/artifacts/art-nope/lifetime`, { retired: true }],
+      ['PATCH', `/api/notebooks/${gNb}`, { title: '鬼本改名' }],
+      ['GET', `/api/notebooks/${gNb}/conversation`],
+    ];
+    for (const [m24, url24, body24] of edges24) {
+      const r24 = await jfetch(`${BASE}${url24}`, {
+        method: m24, headers: H, body: body24 ? JSON.stringify(body24) : undefined,
+      });
+      check(`鬼学习走 ${m24} ${url24.replace(`/api/notebooks/${gNb}`, '')} 给 404 学习不存在（不再是 ${r24.status}）`,
+        r24.status === 404 && r24.data?.error === '学习不存在', `status=${r24.status} body=${JSON.stringify(r24.data)}`);
+    }
+    // SSE 那两条边最容易漏：它们不返回 JSON，过去的形状是 200 然后把连接挂住
+    const gStream = await fetch(`${BASE}/api/notebooks/${gNb}/stream`);
+    check('鬼学习的回合重连流不再 200 挂住（给 404 JSON，浏览器不用永远等）',
+      gStream.status === 404, `status=${gStream.status}`);
+    gStream.body?.cancel?.().catch?.(() => {});
+    const gTaskStream = await fetch(`${BASE}/api/notebooks/${gNb}/task-stream`);
+    check('鬼学习的后台流同样 404（21-A 实测它 200 挂住一条永不结束的 SSE）',
+      gTaskStream.status === 404, `status=${gTaskStream.status}`);
+    gTaskStream.body?.cancel?.().catch?.(() => {});
+    const gTurn = await fetch(`${BASE}/api/notebooks/${gNb}/turn`, {
+      method: 'POST', headers: H,
+      body: JSON.stringify({ message: '对着鬼本说话', model: { provider: 'faux', model: fauxModelId } }),
+    });
+    check('对鬼本发起回合也 404（不再把消息落进一个不存在的本）',
+      gTurn.status === 404, `status=${gTurn.status}`);
+    gTurn.body?.cancel?.().catch?.(() => {});
+
+    // 非法 id 与"不存在"是两句话：前者是 400（请求本身不对），后者是 404
+    const bad24 = await jfetch(`${BASE}/api/notebooks/%2e%2e%2fsettings/graph`);
+    check('路径穿越样的 id 给 400（不装作"查过、不存在"）',
+      bad24.status === 400, `status=${bad24.status} body=${JSON.stringify(bad24.data)}`);
+    /*
+     * 门自己那份判据（config.notebookExists）若漂成"不过 safeId、直接问盘"，上面那条照样绿：
+     * `../../settings/notebook.json` 本来就查无此文件。这里拿一个**盘上真存在、形状却不合法**
+     * 的目录走 HTTP 问一遍——不合法就是 400，绝不因为"盘上碰巧有"就认它是一本学习。
+     */
+    const weird24 = 'a:b';
+    fs.mkdirSync(path.join(dataDir, 'notebooks', weird24), { recursive: true });
+    fs.writeFileSync(path.join(dataDir, 'notebooks', weird24, 'notebook.json'),
+      JSON.stringify({ id: weird24, title: '形状不合法的那一本' }, null, 2));
+    const weirdRes = await jfetch(`${BASE}/api/notebooks/${encodeURIComponent(weird24)}/graph`);
+    check('盘上真有这么一个目录，形状不合法仍给 400（门不许因为"存在"就放行非法形状）',
+      weirdRes.status === 400, `status=${weirdRes.status} body=${JSON.stringify(weirdRes.data)}`);
+    fs.rmSync(path.join(dataDir, 'notebooks', weird24), { recursive: true, force: true });
+    const ok24 = (await jfetch(`${BASE}/api/notebooks/${id}`));
+    check('活学习照常 200（门不许过严）', ok24.status === 200 && ok24.data?.notebook?.id === id, `status=${ok24.status}`);
+    const created24 = await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '门不许挡住创建' }) });
+    check('创建走门前面（新建的学习此刻还没有 notebook.json，门不能把自己关在外面）',
+      created24.status === 201, `status=${created24.status}`);
+    const importProbe = await jfetch(`${BASE}/api/notebooks/import`, { method: 'POST', headers: H, body: JSON.stringify({}) });
+    check('/import 没被当成一本名叫 import 的学习（400/422 一类校验话术，不是学习不存在）',
+      importProbe.status !== 404 || importProbe.data?.error !== '学习不存在', `status=${importProbe.status} ${JSON.stringify(importProbe.data)}`);
+    const aliveB24 = await jfetch(`${BASE}/api/notebooks/${id}/tasks`);
+    check('受门管的这条（tasks）对活学习照旧 200（拆重复门没把功能拆掉）',
+      aliveB24.status === 200, `status=${aliveB24.status}`);
+  }
 } finally {
   server.kill();
   await sleep(400);

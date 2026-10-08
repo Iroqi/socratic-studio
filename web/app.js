@@ -196,10 +196,27 @@ async function subscribeTaskStream() {
       }
       if (evt.type === 'task_start' || evt.type === 'task_end') {
         state.tasks = upsertTask(state.tasks || [], evt.task);
+      } else if (evt.type === 'task_scene') {
+        /*
+         * 宿主替分身把大件摆上台面之后递过来的那本账。回合早结束了，活流没了，
+         * 这条常驻流是唯一收件人——不接住它，紧跟而来的 task_artifact 会被
+         * pushArtifact 那道 props 闸门砍掉（服务端台上明明有它，画面上偏偏没有）。
+         * 整件替换服务端那一份，与回合流上的 scene 事件同一个写法。
+         */
+        if (state.notebook) {
+          state.notebook.scene = {
+            version: 1,
+            index: evt.scene?.index || 0,
+            current: evt.scene || null,
+            log: evt.log || [],
+          };
+        }
+        applySceneState();
       } else if (evt.type === 'task_artifact') {
         // 分身把大件制品做出来了：占位卡换成真 iframe。回合早结束了，
         // 它就落在当下这一场的台面上（不用"去看"，就在眼前）。
-        completeArtifactPlaceholder(evt.artifact);
+        // taskId 也要传：占位卡是按 job id 记的，交付的是 art-*（两个 id 不同名）。
+        completeArtifactPlaceholder(evt.artifact, evt.taskId ?? evt.task?.id);
       }
       if (state.panelTab === 'learn') renderPanel();
       updateTaskBadge();
@@ -1386,10 +1403,16 @@ function pushArtifactPlaceholder(pending) {
 /**
  * 分身把制品做出来了：占位卡原地换成真 iframe。
  * 走 task-stream（常驻 SSE），所以回合结束后到达也照样生效。
+ *
+ * 占位卡那张卡上的 id 是**任务的 id**（agent.mjs 的 artifact_pending 带的是 record.id），
+ * 交付的这一件 id 是 store 新发的 art-*——两个 id 天生不同名。以前只按 artifact.id 找占位卡，
+ * 永远找不到，那张「分身正在后台生成，做好会自动替换这一张」就一直挂着，做好的那件
+ * 在旁边另起一张（第二十一轮实测）。所以要连 taskId 一起找：先按真 id（刷新后重放那种），
+ * 再按 job id 收掉占位卡。
  */
-function completeArtifactPlaceholder(artifact) {
+function completeArtifactPlaceholder(artifact, taskId) {
   if (!artifact?.id) return null;
-  const placeholder = artifactNodeEl(String(artifact.id));
+  const placeholder = artifactNodeEl(String(artifact.id)) || (taskId ? artifactNodeEl(String(taskId)) : null);
   // 占位卡可能还在（同一次会话内），也可能已随刷新消失——都直接摆上台面
   placeholder?.remove?.();
   return pushArtifact(artifact);
@@ -5129,6 +5152,8 @@ export const __hooks = {
   handleTurnEvent,
   appendChatTurn,
   pushArtifact,
+  pushArtifactPlaceholder,
+  completeArtifactPlaceholder,
   hydrateArtifact,
   submitArtifactResult,
   applyArtifactHeight,

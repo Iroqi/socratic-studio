@@ -161,3 +161,17 @@ export function safeId(id) {
   if (id.includes('..')) return null;
   return id;
 }
+
+/**
+ * 「一本学习」的判据：目录里有 notebook.json 才算。定义放在最底层的地基里，
+ * 因为要问这句话的不止 store（notes.mjs 写盘前、tasks.mjs 落盘前都要问），
+ * 而 notes/tasks 谁都不能回头 import store（会成环）。判据只有一份，
+ * 漂移就没有容身之处——第二十轮的变异 m15 教的就是这个。
+ */
+export const NOTEBOOK_FILE = 'notebook.json';
+
+export function notebookExists(id) {
+  const safe = safeId(id);
+  if (!safe) return false;
+  return fs.existsSync(path.join(NOTEBOOKS_DIR, safe, NOTEBOOK_FILE));
+}

@@ -13,14 +13,14 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR, SETTINGS_FILE, CREDENTIALS_FILE, readJsonSafe } from './config.mjs';
-import { notebookExists } from './store.mjs';
+import { DATA_DIR, SETTINGS_FILE, CREDENTIALS_FILE, readJsonSafe, notebookExists } from './config.mjs';
 import { runTurn } from './agent.mjs';
 import { panelDecisionOpts } from './decision.mjs';
 
 /*
- * store.mjs 不 import tasks/agent（第十九轮注释里那条"反向依赖会成环"说的是 store→tasks），
- * tasks→store 是顺着已有依赖图走的（agent→store 早就在），这一口不会成环。
+ * notebookExists 的判据住在 config.mjs（第二十一轮搬的）：store / notes / tasks / serve
+ * 都要问同一句话，地基谁都能 import 且不成环。以前它住在 store，tasks→store 那口顺向边
+ * 是为了这个判据才开的——现在判据下沉，依赖跟着变薄（agent→store 的旧边本来就早就在）。
  */
 
 /*
@@ -236,9 +236,13 @@ export class TaskRunner {
         history: childHistory,
         modelRef: record.model ?? undefined,
         emit: (e) => {
-          // 制品类分身做出的 HTML 交给宿主：原样往上抛，由宿主摆进学习者当前这一场的台
+          // 制品类分身做出的 HTML 交给宿主：原样往上抛，由宿主摆进学习者当前这一场的台。
+          // （第二十一章的账）以前这里只带 taskId——宿主拿 event.task?.notebookId 找归属，
+          // 恒为 undefined，上台与落账两个 if (nid) 一次都没进过，事件还掉进"广播给所有
+          // 订阅者"的兜底，把整份 HTML 发给了别的本。事件必须自带户口：task 与 task_start /
+          // task_end 同形（publicView），宿主按归属投递。
           if (e.type === 'artifact') {
-            this.onEvent({ type: 'task_artifact', taskId: record.id, artifact: e.artifact });
+            this.onEvent({ type: 'task_artifact', taskId: record.id, task: publicView(record), artifact: e.artifact });
           }
         },
         signal: controller.signal,

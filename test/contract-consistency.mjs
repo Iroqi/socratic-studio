@@ -513,12 +513,28 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     notebookDel ? notebookDel.replace(/\n\s*/g, ' ').slice(0, 300) : '找不到删整本的分支');
   check('拒绝时带在跑任务清单（人不用自己猜是哪几个挡着）',
     Boolean(notebookDel) && /liveTasks\.map\(/.test(notebookDel), '只回了一句人话、没给清单');
-  // 任务路由的 :id 不许只当装饰：鬼目录那一侧 404（与第十九轮 stop 同一条纪律的延伸）
+  // 任务路由的 :id 不许只当装饰：鬼目录那一侧 404（与第十九轮 stop 同一条纪律的延伸）。
+  // 第二十一轮起这道门不再一条条边各写一遍——探针 21-A 实测逐边补门永远慢于探针，
+  // 28 条边只有碰巧被打中的两条有门。现在钉总门：所有带 :id 的路由共用一处存在性检查，
+  // 且它必须排在创建/导入之后、任何按 id 分发的分支之前（否则 DELETE 会把不存在的学习删成 200）。
   const tasksBlocks = [...serveSrc.matchAll(/if \(m && method === '(GET|POST)'\) \{[\s\S]*?\n {4}\}/g)]
     .map((mm) => mm[0]).filter((b) => b.includes('taskRunner.'));
-  check('任务相关路由先验学习存在（鬼目录不再一半认得一半不认得）',
-    tasksBlocks.length >= 2 && tasksBlocks.every((b) => b.includes('store.notebookExists(id)')),
-    `列出 ${tasksBlocks.length} 个任务路由块，其中没有每个都过存在性这道门`);
+  check('任务相关路由不再自带一份存在性门（总门起了作用，重复门必须拆掉）',
+    tasksBlocks.length >= 2 && tasksBlocks.every((b) => !b.includes('notebookExists(id)')),
+    '任务路由里还留着自己的那份门——两道门迟早各说各的话');
+  {
+    const gateIdx = serveSrc.indexOf('const nbIdMatch = ');
+    const idxImport = serveSrc.indexOf("'/api/notebooks/import' && method === 'POST'");
+    const idxFirstIdRoute = serveSrc.indexOf('m = /^\\/api\\/notebooks\\/([^/]+)$/');
+    check('serve.mjs 有一道带 :id 路由的总存在性门，且位置正确（创建/导入在前，删整本在后）',
+      gateIdx > -1 && idxImport > -1 && gateIdx > idxImport && idxFirstIdRoute > gateIdx,
+      `gate=${gateIdx} import=${idxImport} firstIdRoute=${idxFirstIdRoute}`);
+    const gateBody = /const nbIdMatch =[\s\S]*?\n {4}\}/.exec(serveSrc);
+    check('总门对非法 id 给 400、对不存在的学习给 404 学习不存在（口径唯一，不再一边走 409 一边挂 SSE）',
+      Boolean(gateBody) && /sendJson\(res, 400/.test(gateBody[0]) && /safeId\(id\)/.test(gateBody[0])
+      && /sendJson\(res, 404, \{ error: '学习不存在'/.test(gateBody[0]) && /notebookExists\(id\)/.test(gateBody[0]),
+      gateBody ? gateBody[0].replace(/\n+\s*/g, ' ').slice(0, 240) : '找不到总门本体');
+  }
 }
 
 // ──────────────────────────────────────────────── 唯一的 JSON 读取口：不许有第二份 readJsonSafe
@@ -659,26 +675,34 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
 {
   const tasksSrc = fs.readFileSync(path.join(app, 'server', 'tasks.mjs'), 'utf8');
   const storeSrc = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8');
+  const configSrc = fs.readFileSync(path.join(app, 'server', 'config.mjs'), 'utf8');
   const writeJob = /_writeJob\(notebookId, record\) \{[\s\S]*?\n  \}/.exec(tasksSrc);
   check('_writeJob 是唯一的 jobs 写盘口，且开口先过 notebookExists（门不在就别谈两条路径）',
     Boolean(writeJob) && /if \(!notebookExists\(notebookId\)\) return false/.test(writeJob[0]),
     writeJob ? writeJob[0].replace(/\n+\s*/g, ' ').slice(0, 200) : '找不到 _writeJob 或它没问存在性');
-  check('这道门的判据来自 store（与 assertExists 同源，不在 tasks 里另长一套）',
-    /import \{[^}]*notebookExists[^}]*\} from '\.\/store\.mjs'/.test(tasksSrc)
-    && /export function notebookExists\(id\)/.test(storeSrc),
-    'notebookExists 没从 store 导给 tasks');
+  check('这道门的判据来自地基 config（与 assertExists 同源，不在 tasks 里另长一套）',
+    /import \{[^}]*notebookExists[^}]*\} from '\.\/config\.mjs'/.test(tasksSrc)
+    && /export function notebookExists\(id\)/.test(configSrc),
+    'notebookExists 没从 config 导给 tasks');
   /*
    * "同源"不能只在注释里说：判据必须与 assertExists 用同一个常量（NOTEBOOK_FILE），
    * 也不许退化成"目录在就算在"。m15 演的正是这种退化——门与路由一起变瞎，而
    * `if (!notebookExists(...)) return false` 这一行形状一个字都没动，形状钉子照样绿。
+   * 第二十一轮判据搬进 config.mjs（notes/tasks/serve 都能引、不成环），NOTEBOOK_FILE
+   * 跟着搬：store 不再自己定义"一本学习叫什么"，它从 config 引——这一条也要钉住。
    */
-  const nbExistsBody = /export function notebookExists\(id\) \{[\s\S]*?\n\}/.exec(storeSrc);
+  const nbExistsBody = /export function notebookExists\(id\) \{[\s\S]*?\n\}/.exec(configSrc);
   const assertBody = /function assertExists\(id\) \{[\s\S]*?\n\}/.exec(storeSrc);
   const joinsNotebookFile = (body) => /fs\.existsSync\(path\.join\([^)]*NOTEBOOK_FILE\)\)/.test(body);
   check('notebookExists 的判据就是 assertExists 那一句（有 notebook.json 才算一本学习）',
     Boolean(nbExistsBody) && /safeId\(id\)/.test(nbExistsBody[0]) && joinsNotebookFile(nbExistsBody[0])
     && Boolean(assertBody) && joinsNotebookFile(assertBody[0]),
     nbExistsBody ? nbExistsBody[0].replace(/\n+\s*/g, ' ').slice(0, 200) : '找不到 notebookExists 本体');
+  check('NOTEBOOK_FILE 全仓只定义一次（在 config），store 从 config 引（判据没有第二种写法）',
+    /export const NOTEBOOK_FILE = 'notebook\.json'/.test(configSrc)
+    && !/const NOTEBOOK_FILE = 'notebook\.json'/.test(storeSrc)
+    && /import \{[\s\S]*?NOTEBOOK_FILE[\s\S]*?\} from '\.\/config\.mjs'/.test(storeSrc),
+    'store 里还有第二份 NOTEBOOK_FILE 定义，或没从 config 引');
   // 两条写盘路径必须都走这个口子：_create（开局落一份）与 _finish（收尾落终态）
   const createBody = /_create\(\{ notebookId, kind, title, instructions, parentId = null, modelRef, helper = null \}\) \{[\s\S]*?\n  \}/.exec(tasksSrc);
   const finishBody = /_finish\(record, \{ status, output, error \}\) \{[\s\S]*?\n  \}/.exec(tasksSrc);
@@ -720,6 +744,98 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     Boolean(healthDoc) && /鬼目录/.test(healthDoc[0]) && /notebook\.json/.test(healthDoc[0])
     && /只数\*\*真学习\*\*|只数真学习/.test(healthDoc[0]),
     healthDoc ? healthDoc[0].replace(/\n+/g, ' ').slice(0, 240) : '找不到体检那一节');
+}
+
+// ──────────────────────────────── 分身交付要带户口 + 一道门统口径（第二十一轮）
+//
+// 这一轮的账不是"少了一条守卫"，是**一条从来没执行过的代码路径**：宿主替分身交付时用
+// event.task?.notebookId 找归属，而 task_artifact 只带 taskId —— 归属恒 undefined，
+// 那两个 if (nid) 一次都没进过（探针 21-C 实测：先开了场、manifest 有件、props 仍为空、
+// chat 无账）。功能之所以还看得见，靠的是"查不到就广播给所有订阅者"的兜底把整份 HTML
+// 发给了每一本（探针 21-B）。形状钉子全绿，行为全错。所以这一节的钉子全部对着**行为与归属**，
+// 而不是对着分支里有没有某个函数名。
+{
+  const tasksSrc21 = fs.readFileSync(path.join(app, 'server', 'tasks.mjs'), 'utf8');
+  const notesSrc21 = fs.readFileSync(path.join(app, 'server', 'notes.mjs'), 'utf8');
+  const webSrc21 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+  const configSrc21 = fs.readFileSync(path.join(app, 'server', 'config.mjs'), 'utf8');
+
+  // 源头：事件必须自带归属
+  const emitLine = /this\.onEvent\(\{ type: 'task_artifact'[^;]*;/.exec(tasksSrc21);
+  check('task_artifact 事件自带户口（task 与 task_start/task_end 同形，publicView 那一份）',
+    Boolean(emitLine) && /task: publicView\(record\)/.test(emitLine[0]),
+    emitLine ? emitLine[0].replace(/\s+/g, ' ').slice(0, 180) : '找不到 task_artifact 的发射点');
+
+  // 宿主：按归属投递，兜底广播必须死
+  const branch21 = /if \(event\.type === 'task_artifact'\) \{([\s\S]*?)\n    \}\n/.exec(serveSrc)?.[1] || '';
+  check('投递只认事件自带的归属（广播给所有订阅者那条兜底不许复活——串台就是这么来的）',
+    /taskStreamWrite\(event\.task\.notebookId/.test(serveSrc)
+    && !/for \(const key of \[\.\.\.taskStreams\.keys\(\)\]\) taskStreamWrite/.test(serveSrc),
+    '兜底广播还活着，或者投递没改读自带归属');
+  /*
+   * 「查无归属」那一支单独抠出来钉：它只许喊话，不许投递。上一轮的兜底就是把这一支
+   * 写成"那就广播给所有人"，于是 A 的整份 HTML 发给了每一本。
+   */
+  const noOwner = /if \(!nid\) \{([\s\S]*?)\n      \}/.exec(branch21)?.[1] || '';
+  check('查无归属就不投，并且喊出来（那是编程错误，不是运行状态）',
+    /console\.error\(`\[task_artifact\] 事件不带归属/.test(noOwner) && !/taskStreamWrite/.test(noOwner),
+    noOwner ? noOwner.replace(/\s+/g, ' ').slice(0, 160) : '找不到查无归属那一支');
+  /*
+   * 关键的一条：那两个 if (nid) 的**空壳**形状与"真的执行"在源码上只差一层缩进。
+   * 上一轮的病灶就是 placeOnDesk / upsertChatMessage 各被一只恒假的 if (nid) 罩着。
+   * 所以这里钉的是：归属拿到之后交付直接执行（不再各自套一层 if (nid)）。
+   */
+  check('归属在就真的交付：上台与落账不再各自套一层恒假的 if (nid)',
+    /store\.placeOnDesk\(nid, event\.artifact\)/.test(branch21)
+    && /store\.upsertChatMessage\(nid, \{/.test(branch21)
+    && !/if \(nid\) \{/.test(branch21),
+    branch21 ? `placeOnDesk@${branch21.indexOf('placeOnDesk')} upsert@${branch21.indexOf('upsertChatMessage')}` : '没找到分支');
+  // 台面那本账要跟着交付走到浏览器（回合早结束时常驻流是唯一收件人）
+  check('task_scene 在 task_artifact 之前递到常驻流（props 闸门认这本账，账晚到这件就上不了台）',
+    branch21.indexOf("'task_scene'") >= 0
+    && branch21.indexOf('task_scene') < branch21.indexOf("type: 'artifact'")
+    && /taskStreamWrite\(nid, JSON\.stringify\(\{ type: 'task_scene'/.test(branch21),
+    branch21 ? `scene@${branch21.indexOf('task_scene')} artifact@${branch21.indexOf("type: 'artifact'")}` : '没找到分支');
+  check('前端认这份账，也认 job id 与 art id 的两个名字（占位卡那次替换是假的）',
+    webSrc21.includes("type === 'task_scene'")
+    && /completeArtifactPlaceholder\(evt\.artifact, evt\.taskId \?\? evt\.task\?\.id\)/.test(webSrc21)
+    && /artifactNodeEl\(String\(artifact\.id\)\) \|\| \(taskId \? artifactNodeEl\(String\(taskId\)\) : null\)/.test(webSrc21),
+    '没接 task_scene，或占位卡仍只按真 id 找');
+
+  // notes.mjs 那道门（第二十轮遗留 §5.1）：形状 + 判据同源，两样都要
+  const noteWrite21 = /function write\(id, data\) \{[\s\S]*?\n\}/.exec(notesSrc21);
+  check('notes 的 write() 开口先问学习还在不在（全仓最后一处裸 mkdir 补上了）',
+    Boolean(noteWrite21) && /if \(!notebookExists\(id\)\) return null;/.test(noteWrite21[0])
+    && noteWrite21[0].indexOf('notebookExists') < noteWrite21[0].indexOf('fs.mkdirSync'),
+    noteWrite21 ? noteWrite21[0].replace(/\s+/g, ' ').slice(0, 180) : '找不到 write() 本体');
+  check('saveNote 不许拿一条没落盘的记录当"已存入"',
+    /if \(!write\(id, data\)\) return null;/.test(notesSrc21), notesSrc21.slice(0, 0) || '写失败还在返回那条记录');
+  check('notes 的判据来自地基 config（不另长一套"在不在"）',
+    /import \{[^}]*notebookExists[^}]*\} from '\.\/config\.mjs'/.test(notesSrc21),
+    'notes.mjs 没从 config 引 notebookExists');
+
+  // 判据全仓只有一份：config 之外不许有人定义它，store 也不再导出一个同名影子
+  check('notebookExists 只在 config.mjs 定义一次（谁都不许再写一份，包括 store）',
+    (configSrc21.match(/export function notebookExists/g) || []).length === 1
+    && !/function notebookExists/.test(fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8'))
+    && !/function notebookExists/.test(notesSrc21)
+    && !/function notebookExists/.test(tasksSrc21)
+    && !/function notebookExists/.test(serveSrc),
+    '有第二个地方自己定义了一本学习存不存在');
+
+  // README 那两节：钉语义，不钉关键词
+  const deliverDoc = /分界线的判据是\*\*生成延迟\*\*[\s\S]{0,2400}?\n### /.exec(readmeDoc);
+  check('README 写明这句话以前是假的，并给出现在的三句口径（自带户口 / 宿主真的动手 / 占位卡认 job id）',
+    Boolean(deliverDoc) && /一次都没执行过/.test(deliverDoc[0])
+    && /task: publicView\(record\)/.test(deliverDoc[0]) && /task_scene/.test(deliverDoc[0])
+    && /job id/.test(deliverDoc[0]),
+    deliverDoc ? deliverDoc[0].replace(/\n+/g, ' ').slice(0, 200) : '找不到这一节');
+  const gateDoc = /### 一道门统口径[\s\S]{0,2000}?(?=\n### |\n## )/.exec(readmeDoc);
+  check('README 写明门长在总处（400 与 404 两句话），并说明创建/导入走在门前面',
+    Boolean(gateDoc) && /safeId/.test(gateDoc[0]) && /400/.test(gateDoc[0])
+    && /学习不存在/.test(gateDoc[0])
+    && /走在门前面/.test(gateDoc[0]) && /排在门后面/.test(gateDoc[0]),
+    gateDoc ? gateDoc[0].replace(/\n+/g, ' ').slice(0, 200) : '找不到这一节');
 }
 
 console.log(`\n${'─'.repeat(52)}`);

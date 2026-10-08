@@ -22,7 +22,7 @@ const { checkTransition, runTurn, buildTools, TOOL_NAMES, seedArtifacts, normali
   await import('../server/agent.mjs');
 const store = await import('../server/store.mjs');
 const { crc32 } = await import('../server/zip.mjs');
-const { ensureDirs, NOTEBOOKS_DIR } = await import('../server/config.mjs');
+const { ensureDirs, NOTEBOOKS_DIR, notebookExists } = await import('../server/config.mjs');
 const { jevDecide, normalizeAnswers, validateQuestions, mergeJevConfig, panelDecisionOpts, buildDecisionFetch, jevPing, DecisionError } = await import('../server/decision.mjs');
 
 ensureDirs();
@@ -1581,9 +1581,22 @@ section('7f-3. 落盘先看学习还在不在：鬼目录造不出来 + 体检�
   const runnerW = new TaskRunner({ registry, rulesText: '（写盘门探针）', onEvent: () => {} });
 
   check('还在的学习认得（notebookExists 与 assertExists 同一个判据）',
-    store.notebookExists(ghostNb) === true);
+    notebookExists(ghostNb) === true);
   check('非法 id 不算存在（不把路径穿越当"在不在"问一遍）',
-    store.notebookExists('../../settings') === false && store.notebookExists('') === false);
+    notebookExists('../../settings') === false && notebookExists('') === false);
+  /*
+   * 上面那条在"判据不再过 safeId"的退化版本下照样绿（`../../settings/notebook.json`
+   * 本就查无此文件）——那是颗只会点头的钉子。要真把「先 safeId 再问盘」这个次序钉住，
+   * 得拿一个**盘上真存在、但形状不合法**的目录来问：合法形状是判据的一部分，
+   * 不是"存在性"之外的另一回事。
+   */
+  const weirdDir = path.join(nbRoot, 'a:b');
+  fs.mkdirSync(weirdDir, { recursive: true });
+  fs.writeFileSync(path.join(weirdDir, 'notebook.json'), JSON.stringify({ id: 'a:b', title: '形状不合法的那一本' }));
+  check('盘上真有这么一个目录，但形状不合法就不算一本学习（判据先过 safeId，再问盘）',
+    fs.existsSync(path.join(weirdDir, 'notebook.json')) && notebookExists('a:b') === false,
+    'notebookExists 开始承认非合法形状的 id 了（门与 store 的口径会因此分家）');
+  fs.rmSync(weirdDir, { recursive: true, force: true });
 
   // 正常路径先验一遍：门关着时写盘该留痕，后面才知道"没留痕"真的是门起了作用
   const recBefore = runnerW._create({ notebookId: ghostNb, kind: 'background', title: '收尾之前删掉的', instructions: 'x' });
@@ -1632,11 +1645,108 @@ section('7f-3. 落盘先看学习还在不在：鬼目录造不出来 + 体检�
 
   // 判据同源：三处（assertExists / notebookExists / 体检）对"什么是一本学习"口径一致
   check('判据同源：鬼目录既不算存在、也不进 listNotebooks',
-    store.notebookExists(handGhost) === false && !store.listNotebooks().some((n) => n.id === handGhost));
+    notebookExists(handGhost) === false && !store.listNotebooks().some((n) => n.id === handGhost));
   fs.rmSync(dirOf(handGhost), { recursive: true, force: true });
   const afterGhost = store.healthCheck();
   check('清掉之后不再点名（报告跟着盘上事实走，不是历史清单）',
     !(afterGhost.ghostDirs || []).some((g) => g.notebook === handGhost), JSON.stringify(afterGhost.ghostDirs));
+}
+
+// ─────────────────── 7f-4. 分身交付要带户口：task_artifact 事件自带归属 + notes 补门（第二十一轮）
+
+section('7f-4. task_artifact 必须说得出"我是谁家的分身" + notes 写盘那道门');
+
+/*
+ * 探针 21-B / 21-C 的单元版。宿主替分身交付的制品"上台 + 落账"这一段，读代码看是齐的——
+ * placeOnDesk(nid) / upsertChatMessage(nid) 都写着；但 nid 取自 event.task?.notebookId，
+ * 而 tasks.mjs 发这个事件时只带 taskId（不带 task），于是 nid 恒 undefined：两个 if (nid)
+ * 一次都没进过，制品既不上台也不记账（实测：先开了场、manifest 有件、台面 props 仍为空、
+ * chat 无账）；归属查不到，事件又落进"广播给所有订阅者"的兜底，A 本 21KB 的整份 HTML
+ * 发给了每一本开着后台面板的浏览器。形状钉子（分支里有 placeOnDesk、顺序对）全绿——
+ * 这一节补的是**行为**：真跑一次交付制品的分身，看事件带不带户口、门执不执行。
+ */
+{
+  const artNb = store.createNotebook({ topic: '分身交制品', goal: null, pace: 'normal' }).id;
+  const dirOfArt = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', artNb);
+  // 先把场开出来：排除"没台可上"这种解释（探针 21-C 特意验过的一格）
+  store.saveSceneState(artNb, {
+    version: 1, index: 1,
+    current: { id: 'scene-01', index: 1, title: '第一幕', phase: 'teach', props: [], concepts: [] },
+    log: [],
+  });
+  const artEvents = [];
+  const artRunner = new TaskRunner({ registry, rulesText: '（归属探针）', onEvent: (e) => artEvents.push(e) });
+  faux.setResponses([
+    fauxAssistantMessage([
+      fauxToolCall(TOOL_NAMES.SHARE_ARTIFACT, {
+        title: '躲障碍', kind: 'game',
+        html: '<html><head></head><body>art21</body></html>',
+      }),
+    ], { stopReason: 'toolUse' }),
+    fauxAssistantMessage([fauxText('制品已交付。')]),
+  ]);
+  const artRec = artRunner._create({
+    notebookId: artNb, kind: 'background', title: '做个大件', instructions: '做一个小游戏并交付',
+    modelRef: { provider: 'faux', model: fauxModel.id },
+  });
+  await artRunner.run(artRec, { notebook: store.getNotebook(artNb) });
+  const artEvt = artEvents.find((e) => e.type === 'task_artifact');
+  check('场景成立：分身真的交付了一件（task_artifact 在场）', Boolean(artEvt), artEvents.map((e) => e.type).join(','));
+  check('task_artifact 自带归属：event.task.notebookId 就是派出它的那一本（宿主那两只 if (nid) 从此有 nid）',
+    artEvt?.task?.notebookId === artNb && artEvt?.task?.id === artRec.id,
+    JSON.stringify({ taskId: artEvt?.taskId, task: artEvt?.task ? { id: artEvt.task.id, nb: artEvt.task.notebookId } : null }));
+
+  // 归属在，行为就要兑现。但"上台 + 落账"是 serve.mjs 的宿主逻辑，单元测试里
+  // runner 的 onEvent 只是收事件——那两件事的真钉子住在 http-smoke §23（真服务全链路）。
+  // 这里钉得住的是：事件本身带户口、投递键取自它、兜底广播必须死。
+  // 分身交付的这件至少真的落了盘（文件 + manifest），否则后面全无从谈起。
+  const artFiles = (store.getNotebook(artNb).artifacts || []).map((a) => a.id);
+  check('分身交付的这件真的落了盘（manifest 有它——宿主上台用的是这件，不是另一件）',
+    Boolean(artEvt?.artifact?.id) && artFiles.includes(artEvt.artifact.id), JSON.stringify(artFiles));
+
+  // 跨本投递这一侧（HTTP 全链路在 http-smoke §23）：这里钉住投递键的取值纪律——
+  // 投递只认 event.task.notebookId；查无归属必须**不投**，旧兜底「广播给所有订阅者」不许复活。
+  const serveSrcForBus = fs.readFileSync(new URL('../server/serve.mjs', import.meta.url), 'utf8');
+  check('投递键直接取自事件自带的归属（不再是查不到再兜底）',
+    /taskStreamWrite\(event\.task\.notebookId/.test(serveSrcForBus)
+    && !/for \(const key of \[\.\.\.taskStreams\.keys\(\)\]\) taskStreamWrite/.test(serveSrcForBus),
+    '广播兜底还活着，或者投递没改读自带归属');
+  fs.rmSync(dirOfArt, { recursive: true, force: true });
+}
+
+/*
+ * notes.mjs 的 write()（第二十轮遗留 §5.1）：全仓最后一处不先问"学习还在不在"就往
+ * notebooks/<id>/ 下 mkdir 的写口。saveNote 在回合/分身里跑，删除与人手 rm 的窄竞态
+ * 一旦撞上，notes.json 就把删掉的整本补回一个角——和 jobs/ 那一下同形，只是这轮之前
+ * 可触达路径被两道守卫挡着。判据与 assertExists / notebookExists 同源（同一个 NOTEBOOK_FILE）。
+ */
+{
+  const { saveNote: gateSave, updateNote: gateUpdate, deleteNote: gateDelete } = await import('../server/notes.mjs');
+  const noteGateNb = store.createNotebook({ topic: '笔记门', goal: null, pace: 'normal' }).id;
+  const noteDir = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', noteGateNb);
+  const n1 = gateSave(noteGateNb, { title: '还在的时候', summary: '正常落盘', key_points: [], example: '', concepts: [] });
+  check('学习还在时 saveNote 照常落盘（门不许过严）',
+    Boolean(n1?.id) && fs.existsSync(path.join(noteDir, 'notes.json')));
+  store.deleteNotebook(noteGateNb);
+  check('删干净了', !fs.existsSync(noteDir));
+  // 迟到的那一下：分身/旧回合手里还攥着 id，收尾时补记一条笔记
+  const late = gateSave(noteGateNb, { title: '迟到的笔记', summary: '往已删的学习上写', key_points: [], example: '', concepts: [] });
+  check('学习没了就不许落盘：返回 null，一个字节都不写（鬼目录少一个来源）',
+    late === null && !fs.existsSync(noteDir), `late=${JSON.stringify(late)}`);
+  const upd = gateUpdate(noteGateNb, 'note-anything', { title: 'x' });
+  const del = gateDelete(noteGateNb, 'note-anything');
+  check('updateNote / deleteNote 在学习不在时同样查无此条（不炸盘也不造目录）',
+    upd === null && del === null && !fs.existsSync(noteDir));
+  // 判据不许漂成"目录在就算在"（第二十轮 m15 的同一种瞎）：手造一个只有空目录的鬼本，
+  // 门若问的是目录，它就会放行并把 notes.json 写进一个根本不存在的学习里。
+  fs.mkdirSync(noteDir, { recursive: true });
+  const ghostDirNote = gateSave(noteGateNb, { title: '鬼目录里写一条', summary: '只有目录没有 notebook.json', key_points: [], example: '', concepts: [] });
+  check('光有目录不算一本学习：门问的是 notebook.json 那一份判据，不是目录在不在',
+    ghostDirNote === null && !fs.existsSync(path.join(noteDir, 'notes.json')),
+    `late=${JSON.stringify(ghostDirNote)}`);
+  // 门没装上时这里会留下鬼目录（红-绿期间的第一手证据就是它），无论成败都清干净，
+  // 别让它拖累后面 12c「健康目录体检报告 ok」——那是另一颗钉子的地盘。
+  fs.rmSync(noteDir, { recursive: true, force: true });
 }
 
 // ─────────────────────────────────────── 7g. 结构化笔记（compile_notes）

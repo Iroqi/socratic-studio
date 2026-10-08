@@ -838,6 +838,7 @@ assistant 消息上写进 `chat.json`；刷新后 `renderThread()` 按时间顺�
 | `todos.json` | 本轮待办（**单独文件**，不掺进 progress） | 待办一变动就写 |
 | `patches.json` | 待确认的结构改动 | 提出/裁决时 |
 | `uploads/` `artifacts/` `jobs/` | 素材 / 落盘制品 / 任务记录（**只写不读是第十九轮修掉的洞**：重启后翻不回来、僵尸 running 无人改判；**往已删除的学习写是第二十轮堵的**：落盘先问学习还在不在，不然 `mkdir -p` 会把删掉的整本复活成鬼目录） | 各自发生时；`jobs` 读回来时如实改判 interrupted；学习不在了则拒写 |
+| `notes.json` `scene.json` | 笔记（只追加）/ 导演台那本账 | 同上两道写口；`notes.json` 那处"先问学习还在不在"的门是第二十一轮补的（第二十轮遗留 §5.1，全仓最后一处裸 `mkdir`）——写不进去返回 null，`saveNote` 不许拿一条没落盘的记录当"已存入" |
 
 **"记忆"不是把历史原样塞回上下文**，而是每回合开头把 Graph + Progress + 制品回报
 编译成一份状态快照，拼进 system prompt（`server/prompt.mjs` 的 `renderStateSnapshot`）。
@@ -937,6 +938,41 @@ assistant 消息上写进 `chat.json`；刷新后 `renderThread()` 按时间顺�
 
 这条分界线的判据是**生成延迟**：延迟可忽略的（笔记）就别上分身——多一次调用只有损耗；
 延迟以分钟计的（大件制品）必须上分身——否则学生在等。
+
+**"做好自动替换占位卡"这句话以前是假的**（2026-10-08 第二十一轮实测）。宿主替分身交付的那段
+代码（把制品摆进当前这一场、随 assistant 消息落账）读起来是齐的，但它找归属用的是
+`event.task?.notebookId`，而 `task_artifact` 事件只带 `taskId` —— 归属恒为 `undefined`，
+那两个 `if (nid)` **一次都没执行过**。制品从不上台、从不落账，用户之所以还能看见大件，
+靠的是当时那条"查不到归属就广播给所有订阅者"的兜底：A 本那整份 HTML（实测 21,626 字节）
+发给了**每一本**开着后台面板的浏览器。形状钉子全绿、功能靠串台侥幸活着，是这一轮最贵的教训。
+
+现在的口径三句话：
+
+- **事件自带户口**：`task_artifact` 与 `task_start` / `task_end` 同形（带 `task: publicView(record)`），
+  投递只认 `event.task.notebookId`。查无归属**不投**并 `console.error`——那是编程错误，不是运行状态。
+- **宿主真的动手**：上台（读最新的盘摆进当下这一场）与落账（assistant 消息）都执行；台面那本账
+  由 `task_scene` 事件跟着交付走到常驻 `task-stream`——回合早结束时那是唯一收件人，
+  不递账前端那道 props 闸门就把刚摆上去的这件砍掉。顺序仍是 scene 先于 artifact。
+- **占位卡认 job id**：`artifact_pending` 上的 id 是任务的 id，交付的那一件是 `art-*`，两个 id
+  天生不同名；替换时两个都找，那张「做好会自动替换这一张」才真的会被替换掉。
+
+### 一道门统口径：带 `:id` 的路由先问"这本还在不在"
+
+第二十一轮探针把 28 条边逐条对着**已删除的学习**打了一遍，答案是各说各的话：`answer` 409（回合的话术）、
+`plan` 409、`interrupt` 200 ok、`task-stream` 200 挂住一条永不结束的 SSE、`notes` 404 是笔记的话术、
+`tasks` 404 才是"学习不存在"。同一个 id 一半认得一半不认得。第二十轮那种"探针打到哪、门补到哪"
+永远慢一步——**门长在逐条边上就是没长**。
+
+现在 `serve.mjs` 在按 id 分发之前有一道总门：`safeId` 不过 → 400（非法的学习 id），
+`notebookExists` 不过 → 404 `{error: "学习不存在"}`。判据与 `store.assertExists` 同源，且
+`notebookExists` / `NOTEBOOK_FILE` 搬进了最底层的 `config.mjs`——要问这句话的不止 store
+（`notes.mjs` 写盘前、`tasks.mjs` 落盘前、路由开闸前），谁都不能回头 import store（成环），
+所以判据往下放，**全仓只有一份**。创建（`POST /api/notebooks`）与导入（`/api/notebooks/import`）
+走在门前面——那时 `notebook.json` 还不存在；按 id 的分支（含 `DELETE`）全部排在门后面。
+
+顺带堵上第二十轮遗留 §5.1：`notes.mjs` 的 `write()` 是全仓最后一处不先问"学习还在不在"就往
+`notebooks/<id>/` 下 `mkdir` 的写口。这一颗钉子红的时候自己在测试数据目录留下了一个鬼目录
+（`notes.json` 孤零零躺在那里），当场证明了那条遗留不是假想敌。
 
 ### 画布的尺寸：缩进一屏，而不是封顶
 

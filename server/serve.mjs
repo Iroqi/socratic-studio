@@ -18,6 +18,8 @@ import {
   HOST,
   WEB_DIR,
   DATA_DIR,
+  safeId,
+  notebookExists,
 } from './config.mjs';
 import {
   createRegistry,
@@ -274,37 +276,49 @@ const taskRunner = new TaskRunner({
   registry, // 上面 await createRegistry() 已经完成，这里直接给
   rulesText: () => loadRulesText(),
   onEvent: (event) => {
-    // 制品分身做完了：把制品推进"还在跑的回合"的 SSE，并落成一条 assistant 消息，
-    // 这样刷新页面后它照样从 chat.json 回放进当前这一场的台面上。
+    /*
+     * 制品分身做完了：把制品推进"还在跑的回合"的 SSE，并落成一条 assistant 消息，
+     * 这样刷新页面后它照样从 chat.json 回放进当前这一场的台面上。
+     *
+     * 第二十一轮的账（探针 21-B / 21-C）：这一段以前**从来没执行过**——nid 取自
+     * event.task?.notebookId，而 tasks.mjs 发 task_artifact 时只带 taskId，nid 恒
+     * undefined，下面两只 if (nid) 一次都没进：制品不上台、不落账，页面只靠兜底广播
+     * 把整份 HTML 侥幸飘到某个还开着的回合上（而飘的是**所有**本子）。修法从源头来：
+     * 事件自带归属（task 与 task_start/task_end 同形），宿主真的执行，投递只认归属。
+     */
     if (event.type === 'task_artifact') {
       const nid = event.task?.notebookId;
-      const turn = activeTurns.get(nid ?? event.artifact?.notebookId);
-      // 分身不许写台面（它拿的是旧克隆），上台这一手由宿主现读最新的盘来做：
-      // 摆进学习者**当下**这一场，不是分身记忆里那一场。
-      let deskAfter = null;
-      try {
-        if (nid) {
+      if (!nid) {
+        // 查无归属就不投（旧兜底是广播给所有订阅者——串台就是这么来的）。
+        // 这是编程错误，不是运行状态：task_artifact 必须自带 task，喊出来。
+        console.error(`[task_artifact] 事件不带归属（taskId=${event.taskId}），不投递`);
+      } else {
+        const turn = activeTurns.get(nid);
+        // 分身不许写台面（它拿的是旧克隆），上台这一手由宿主现读最新的盘来做：
+        // 摆进学习者**当下**这一场，不是分身记忆里那一场。
+        //
+        // 台面的账要跟着交付走到浏览器那一侧（第二十一轮补的这一刀）：回合还活着时
+        // turn.emit 那份 scene 够用，回合早结束（分身的主场）时活流已经没了，收件人只有
+        // 这条常驻后台流——不在这里递账，前端 pushArtifact 那道 props 闸门就把刚摆上去的
+        // 这件砍掉：服务端台上明明有它，画面上偏偏没有。顺序仍是 scene 先于 artifact。
+        try {
           const placed = store.placeOnDesk(nid, event.artifact);
-          if (placed.placed) {
-            deskAfter = placed.scene;
+          if (placed.placed) taskStreamWrite(nid, JSON.stringify({ type: 'task_scene', task: event.task, scene: placed.scene.current, log: placed.scene.log }));
+          if (placed.placed && turn?.session) {
             // 活回合内存里那一份也要跟上，不然它下一次 share_artifact 会往旧台面上摆
             // （跟 /lifetime 那一条同纪律）。
-            if (turn?.session) {
-              turn.session.scene = placed.scene;
-              turn.emit({ type: 'scene', scene: placed.scene.current, log: placed.scene.log });
-            }
+            turn.session.scene = placed.scene;
+            turn.emit({ type: 'scene', scene: placed.scene.current, log: placed.scene.log });
           }
+        } catch (err) {
+          console.error(`[task_artifact] 上台面失败: ${err?.message}`);
         }
-      } catch (err) {
-        console.error(`[task_artifact] 上台面失败: ${err?.message}`);
-      }
-      // 交付顺序：先记账（上面那一步把这件摆进当前这一场，并把 scene 事件发出去），
-      // 再把制品本身交给回合。前端那道 props 闸门认的就是这本账——账晚到一步，
-      // 这件大件就永远上不了台面（回放之前画面里根本没有它）。
-      // 和 agent.mjs 的 execShareArtifact 同一个顺序：scene 在 artifact 之前。
-      if (turn) turn.emit({ type: 'artifact', artifact: event.artifact });
-      try {
-        if (nid) {
+        // 交付顺序：先记账（上面那一步把这件摆进当前这一场，并把 scene 事件发出去），
+        // 再把制品本身交给回合。前端那道 props 闸门认的就是这本账——账晚到一步，
+        // 这件大件就永远上不了台面（回放之前画面里根本没有它）。
+        // 和 agent.mjs 的 execShareArtifact 同一个顺序：scene 在 artifact 之前。
+        if (turn) turn.emit({ type: 'artifact', artifact: event.artifact });
+        try {
           store.upsertChatMessage(nid, {
             role: 'assistant',
             content: '',
@@ -312,17 +326,14 @@ const taskRunner = new TaskRunner({
             timestamp: Date.now(),
             artifacts: [event.artifact],
           });
+        } catch (err) {
+          console.error(`[task_artifact] 落盘失败: ${err?.message}`);
         }
-      } catch (err) {
-        console.error(`[task_artifact] 落盘失败: ${err?.message}`);
       }
     }
     const payload = JSON.stringify(event);
-    const notebookId = event?.task?.notebookId;
-    if (notebookId) {
-      taskStreamWrite(notebookId, payload);
-    } else {
-      for (const key of [...taskStreams.keys()]) taskStreamWrite(key, payload);
+    if (event?.task?.notebookId) {
+      taskStreamWrite(event.task.notebookId, payload);
     }
   },
 });
@@ -797,6 +808,27 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    /*
+     * 一道门管住所有 /api/notebooks/:id/... —— 第二十一轮探针 21-A 实测：逐条边各写各的守卫，
+     * 28 条边里只有探针碰巧打中的那两条有门，剩下的对着同一本鬼学习各说各的话：
+     * answer 409、plan 409、interrupt 200、task-stream 200 挂住、notes 404、tasks 404——
+     * 同一个 id 一半认得一半不认得。第二十一轮把存在性判据收成这一处：凡是带 :id 的路由
+     * 先问一句「这本还在不在」。POST /api/notebooks 与 /api/notebooks/import 走在门前面
+     * （创建中的学习还没有 notebook.json，不能让门把它们拦下）；DELETE / 整本的路由
+     * 必须排在门之后，否则不存在的学习会被删出个 200。判据与 store.assertExists 同源
+     * （config.notebookExists，第二十轮 m15 教的：一句话只许有一个定义）。
+     */
+    const nbIdMatch = /^\/api\/notebooks\/([^/]+)/.exec(pathname);
+    if (nbIdMatch) {
+      const id = decodeURIComponent(nbIdMatch[1]);
+      if (!safeId(id)) {
+        return sendJson(res, 400, { error: `非法的学习 id：${id}` });
+      }
+      if (!notebookExists(id)) {
+        return sendJson(res, 404, { error: '学习不存在', id });
+      }
+    }
+
     m = /^\/api\/notebooks\/([^/]+)$/.exec(pathname);
     if (m && method === 'GET') {
       return sendJson(res, 200, { notebook: store.getNotebook(decodeURIComponent(m[1])) });
@@ -1070,7 +1102,6 @@ const server = http.createServer(async (req, res) => {
     m = /^\/api\/notebooks\/([^/]+)\/turn-state$/.exec(pathname);
     if (m && method === 'GET') {
       const id = decodeURIComponent(m[1]);
-      if (!store.getNotebook(id)) return sendJson(res, 404, { error: '学习不存在' });
       const turn = activeTurns.get(id);
       const active = Boolean(turn) && !turn.done;
       return sendJson(res, 200, {
@@ -1358,17 +1389,14 @@ const server = http.createServer(async (req, res) => {
     m = /^\/api\/notebooks\/([^/]+)\/tasks$/.exec(pathname);
     if (m && method === 'GET') {
       const id = decodeURIComponent(m[1]);
-      // :id 不能只当装饰（与第十九轮 stop 同一条纪律）：以前这一口不看学习存不存在，
-      // 删掉的本被分身复活成鬼目录后，GET /tasks 照样 200 往外吐记录，而 GET 整本回 404——
-      // 同一个 id 一半认得一半不认得（split-brain）。存在性判据与 assertExists 同源：
-      // 没有 notebook.json 就不算一本学习，光有目录（只有 jobs/）不算。
-      if (!store.notebookExists(id)) return sendJson(res, 404, { error: '学习不存在' });
+      // :id 不能只当装饰（与第十九轮 stop 同一条纪律）。第二十轮在这里写过一条
+      // notebookExists 门，第二十一轮把它收进路由总门：这一口（和 stop）同样受管，
+      // 鬼学习到这里已经是统一的 404 学习不存在——不存在的学习不配有一份任务列表。
       return sendJson(res, 200, { tasks: taskRunner.list({ notebookId: id }) });
     }
     m = /^\/api\/notebooks\/([^/]+)\/tasks\/([^/]+)\/stop$/.exec(pathname);
     if (m && method === 'POST') {
       const id = decodeURIComponent(m[1]);
-      if (!store.notebookExists(id)) return sendJson(res, 404, { error: '学习不存在' });
       const taskId = decodeURIComponent(m[2]);
       // :id 不能只当装饰：第十九轮探针 19-D 实测，A 本发这条请求真把 B 本的任务停了（200）。
       // 归属校验交给 TaskRunner.stop（守卫长在动手的那一侧，与第十八轮删除守卫同一条纪律），

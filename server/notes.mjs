@@ -12,7 +12,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR, writeJsonAtomic, readJsonSafe } from './config.mjs';
+import { DATA_DIR, writeJsonAtomic, readJsonSafe, notebookExists } from './config.mjs';
 
 const NOTES_FILE = 'notes.json';
 
@@ -39,7 +39,15 @@ function read(id) {
   return parsed;
 }
 
+/**
+ * 落盘那道门（第二十一轮，第二十轮遗留 §5.1 的账）：学习没了就不写。
+ * `mkdirSync(dir, { recursive: true })` 会把删掉的整本从无到有补回一个角——和 jobs/
+ * 那一下同形，只是这条路以前被删除守卫挡着可触达，窄竞态还在。判据与 assertExists /
+ * notebookExists 同源（config.mjs 的 NOTEBOOK_FILE，全仓一份）。写不进去就返回 null，
+ * 让调用方如实说"这一本已经不在了"，不抛——调用点在回合/分身收尾的必经路上，抛了会带崩主流程。
+ */
 function write(id, data) {
+  if (!notebookExists(id)) return null;
   fs.mkdirSync(dir(id), { recursive: true });
   data.updated_at = new Date().toISOString();
   writeJsonAtomic(file(id), data);
@@ -53,6 +61,8 @@ export function readNotes(id) {
 /**
  * 追加一条笔记。返回落盘后的完整记录（带 id / 时间戳），
  * 调用方直接把它推给前端，不必再读一次盘。
+ * 学习已经不在了（write 被那道门挡下）返回 null——调用方要如实说"这一本不在了"，
+ * 不许拿一条没落盘的记录当"已存入"（第二十一轮，与 jobs/ 那道门同一条纪律）。
  */
 export function saveNote(id, note) {
   const data = read(id);
@@ -66,7 +76,7 @@ export function saveNote(id, note) {
     createdAt: new Date().toISOString(),
   };
   data.notes.push(record);
-  write(id, data);
+  if (!write(id, data)) return null;
   return record;
 }
 
