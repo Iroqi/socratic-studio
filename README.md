@@ -837,7 +837,7 @@ assistant 消息上写进 `chat.json`；刷新后 `renderThread()` 按时间顺�
 | `progress.json` | mastery 状态、观察事件、制品回报（evidence/state/event） | 同上 |
 | `todos.json` | 本轮待办（**单独文件**，不掺进 progress） | 待办一变动就写 |
 | `patches.json` | 待确认的结构改动 | 提出/裁决时 |
-| `uploads/` `artifacts/` `jobs/` | 素材 / 落盘制品 / 任务记录（**只写不读是第十九轮修掉的洞**：重启后翻不回来、僵尸 running 无人改判） | 各自发生时；`jobs` 读回来时如实改判 interrupted |
+| `uploads/` `artifacts/` `jobs/` | 素材 / 落盘制品 / 任务记录（**只写不读是第十九轮修掉的洞**：重启后翻不回来、僵尸 running 无人改判；**往已删除的学习写是第二十轮堵的**：落盘先问学习还在不在，不然 `mkdir -p` 会把删掉的整本复活成鬼目录） | 各自发生时；`jobs` 读回来时如实改判 interrupted；学习不在了则拒写 |
 
 **"记忆"不是把历史原样塞回上下文**，而是每回合开头把 Graph + Progress + 制品回报
 编译成一份状态快照，拼进 system prompt（`server/prompt.mjs` 的 `renderStateSnapshot`）。
@@ -1016,14 +1016,22 @@ CSS 那两条（不许再出现 `max-height`、锚点 `top center`）在同节�
 
 左栏每条学习悬停出现 `✕`，点开一个弹层写明删的是哪一本、会带走什么（对话、概念、进度、制品、素材），
 并说明删除不可恢复、要留内容先导出。**服务端是最后一道闸**：这一本有进行中的回合时
-`DELETE /api/notebooks/<id>` 回 409（`reason: "turn-active"`），先中断或等它结束才删得掉。
+`DELETE /api/notebooks/<id>` 回 409（`reason: "turn-active"`），先中断或等它结束才删得掉；
+这一本还有**在跑的后台任务（分身）**时同样回 409（`reason: "task-active"`，响应带 `tasks` 清单），
+先停掉或等它们结束才删得掉。
 
-这一条被真实事故逼出来两次。第一次：这个入口一开始没做，用户只能去 `data/notebooks/`
+这一条被真实事故逼出来三次。第一次：这个入口一开始没做，用户只能去 `data/notebooks/`
 手动删目录——而目录可能正被服务端占用。第二次（2026-10-07 第十八轮）：这句承诺原本**只写在
 README、只兑在浏览器里**——前端只看当前标签页有没有 `state.turn`，DELETE 路由不看 `activeTurns`，
 实测回合进行中发删除照样 200：目录没了、回合还在跑、落盘全 404、那条 SSE 永远等不到终止事件。
 守卫必须站在删数据的那一侧，所以搬到了服务端，并由 `contract-consistency` 把文档这句话与
 `serve.mjs` 的 DELETE 分支绑死（摘掉守卫，文档测试当场红）。
+第三次（2026-10-08 第二十轮）：守卫只认回合、**认不出分身**。回合派完后台任务就正常收尾，
+任务还 `running`——此刻删除 200，目录没了、任务还在跑；它一收尾就往 `jobs/` 写盘，
+`mkdirSync(dir, { recursive: true })` 顺手把整个笔记本目录 mkdir 回来，于是"删掉的学习"
+被自己还在跑的分身复活成一个只有任务记录的**鬼目录**（实测：`GET` 整本 404、`GET /tasks` 却 200
+往外吐记录、体检还把它数成一本书）。现在两道闸都在服务端：删除前查在跑的分身，写 `jobs/` 前
+查学习还在不在（`notebookExists`，判据与 `assertExists` 同源）。
 顺带修一处更老的漂移：这段曾写着「点开要输入「删除」二字」——那种做法像设置密码，早已被
 弹层确认替代（`web/app.js` 注释里记着这个决定），文档一直没跟上。
 
@@ -1161,9 +1169,12 @@ agent 调 `read_artifact_evidence` 就能拿到。反过来 agent 下发的指�
   校验是白名单式的：只认七份已知 JSON 键、Graph 非空必须过严格校验（还没 DECOMPOSE 的空图放行）、
   素材路径只认 `uploads/<文件名>`、单素材 ≤ 20MB、单制品 HTML ≤ 8MB、整包 ≤ 100MB。
   **制品 id 与素材 rel 原样保留**——对话、进度、场上道具里到处引用着它们，换掉 id 等于打断整本的交叉引用。
-- **体检数据**：`GET /api/health` 只读扫一遍 `data/`，报告三件该修的事——七份 JSON 里解析失败的
-  （坏了但没被察觉的）、制品目录不在 manifest 里的（孤儿）、manifest 有记录但 `index.html` 丢了的（空壳）。
+- **体检数据**：`GET /api/health` 只读扫一遍 `data/`，报告四件该修的事——七份 JSON 里解析失败的
+  （坏了但没被察觉的）、制品目录不在 manifest 里的（孤儿）、manifest 有记录但 `index.html` 丢了的（空壳）、
+  `notebooks/` 下没有 `notebook.json` 的目录（**鬼目录**，第二十轮）。
   只报告不修（修是人的决定）。报告里只有文件/目录事实，没有学习进度数字。
+  `notebooks` 本数只数**真学习**（有 `notebook.json` 才算，判据与 `assertExists` 同源）——
+  以前看见目录就加一，被分身复活的鬼目录也跟着充数。鬼目录进 `ok`：它是此刻盘上真存在的一处不该存在。
   报告还带一份 `corruptEvidence` 证据台账（见下条），它**不算问题**、不影响 `ok`。
 - **损坏取证**（2026-10-07 第十一轮）：体检点名的损坏文件，原件拿得到——
   `GET /api/health/corrupt?path=<rel>` 原样下载（字节不重写），体检面板每行给「下载原件」键。

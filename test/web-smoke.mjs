@@ -599,6 +599,8 @@ responses.set('GET /api/notebooks', () => json({ notebooks: sampleList() }));
 responses.set('GET /api/notebooks/nb-test', () => json({ notebook: sampleNotebook() }));
 // 打开学习时会补水任务记录（第十九轮）——这里给默认空桩，避免各段落被未桩化请求扰出时序差。
 responses.set('GET /api/notebooks/nb-test/tasks', () => json({ tasks: [] }));
+// 草稿态那一本（§19）同样会被补水：每本打开的学习都要问一次 /tasks，漏桩就打到真服务上。
+responses.set('GET /api/notebooks/nb-draft/tasks', () => json({ tasks: [] }));
 responses.set('GET /api/providers', () =>
   json({
     subscriptions: [
@@ -4191,6 +4193,76 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('补水失败只是看不到历史任务，打开学习不受影响',
     st.notebook?.id === 'nb-test' && errors.length === 0, errors.join(' | '));
   responses.set('GET /api/notebooks/nb-test/tasks', () => json({ tasks: [] }));
+}
+
+// ─── 36. 删除认得出分身 + 体检看得见鬼目录（第二十轮）
+{
+  console.log('\n36. 删除认得出分身 + 体检点名鬼目录');
+  const st = appModule.__hooks.state;
+  const toastTexts = () => Array.from(doc.getElementById('toasts').children).map((t) => t.textContent);
+  const delRow = () => deepAll(doc.getElementById('simpleModal'), 'del-active-warn').map((p) => p.textContent);
+
+  // a) 弹层里那句提示：回合与分身是两笔账，只看 state.turn 会漏掉后者
+  st.notebooks = [{ id: 'nb-test', title: 'JavaScript 闭包', messageCount: 3, conceptCount: 2 }];
+  st.notebook = sampleNotebook();
+  st.turn = null; // 回合早就结束了
+  st.tasks = [
+    { id: 'job-run-1', kind: 'background', notebookId: 'nb-test', title: '预生成三道题', status: 'running' },
+    { id: 'job-done-1', kind: 'background', notebookId: 'nb-test', title: '整理长素材', status: 'done' },
+  ];
+  appModule.__hooks.confirmDeleteNotebook({ id: 'nb-test', title: 'JavaScript 闭包', messageCount: 3, conceptCount: 2 });
+  await new Promise((r) => setTimeout(r, 20));
+  check('删除弹层提示还有几个分身在跑（不看 state.turn 那一笔账）',
+    delRow().some((t) => t.includes('1 个后台任务在跑')), delRow().join(' | '));
+  check('跑完的任务不算数（提示只数还在跑的）',
+    !delRow().some((t) => /2 个后台任务/.test(t)), delRow().join(' | '));
+
+  // b) 服务端那句 409 原样递出来：客户端漏看的（别的标签页派的任务）由这一句补上
+  appModule.__hooks.closeModal('simpleModal');
+  const delBefore = requests.filter((r) => r.startsWith('DELETE')).length;
+  responses.set('DELETE /api/notebooks/nb-test', () => new Response(JSON.stringify({
+    error: '这个学习还有 1 个后台任务在跑，先停掉或等它们结束再删除。',
+    reason: 'task-active', active: true, tasks: [{ id: 'job-run-1', title: '预生成三道题' }],
+  }), { status: 409, headers: { 'Content-Type': 'application/json' } }));
+  appModule.__hooks.confirmDeleteNotebook({ id: 'nb-test', title: 'JavaScript 闭包', messageCount: 3, conceptCount: 2 });
+  await new Promise((r) => setTimeout(r, 20));
+  await deepAll(doc.getElementById('simpleModalFoot'), 'btn-danger')[0].click();
+  await new Promise((r) => setTimeout(r, 150));
+  check('被服务端拒时把那句话原样递出来（不改口径、不假装删成）',
+    toastTexts().some((t) => t.includes('后台任务在跑')), toastTexts().join(' | '));
+  check('被拒的学习留在列表里（数据没被吃掉）',
+    requests.filter((r) => r.startsWith('DELETE')).length === delBefore + 1
+    && appModule.__hooks.state.notebooks.length === 1, appModule.__hooks.state.notebooks.map((n) => n.id).join(','));
+  responses.set('DELETE /api/notebooks/nb-test', () => json({ ok: true }));
+
+  // c) 体检面板点名鬼目录，但不给"一键删除"
+  st.panelTab = 'learn';
+  appModule.__hooks.renderPanel();
+  responses.set('GET /api/health', () => json({
+    ok: false, dataDir: '/tmp/x', notebooks: 1,
+    corruptFiles: [], corruptEvidence: [], orphanArtifacts: [], missingHtml: [], quarantined: 0,
+    ghostDirs: [{ notebook: 'ghost-abc-123', contents: ['jobs'] }],
+  }));
+  const row36 = deepAll(doc.getElementById('panelBody'), 'backup-row')
+    .find((r) => Array.from(r.children).some((b) => b.textContent === '体检数据'));
+  Array.from(row36.children).find((b) => b.textContent === '体检数据').onclick();
+  await new Promise((r) => setTimeout(r, 30));
+  const hr36 = deepAll(doc.getElementById('panelBody'), 'health-result')[0];
+  check('体检面板点名鬼目录（不再"1 本学习，一切正常"）',
+    hr36.textContent.includes('鬼目录 1 处') && hr36.textContent.includes('ghost-abc-123'), hr36.textContent);
+  check('鬼目录不给一键删除键（删除不可恢复，这一处由人拍板）',
+    !deepAll(hr36, 'btn').some((b) => /鬼目录|删掉.*目录/.test(b.textContent)),
+    deepAll(hr36, 'btn').map((b) => b.textContent).join(' | '));
+  // 老服务不带 ghostDirs 字段：面板照常出"一切正常"，不炸
+  responses.set('GET /api/health', () => json({
+    ok: true, dataDir: '/tmp/x', notebooks: 1,
+    corruptFiles: [], orphanArtifacts: [], missingHtml: [], quarantined: 0,
+  }));
+  Array.from(row36.children).find((b) => b.textContent === '体检数据').onclick();
+  await new Promise((r) => setTimeout(r, 30));
+  check('老报告的 ghostDirs 缺席时兜住（新字段读取要容错）',
+    hr36.textContent.includes('一切正常') && errors.length === 0, `${hr36.textContent} | ${errors.join(' | ')}`);
+  check('这一节无异常', errors.length === 0, errors.join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

@@ -1562,6 +1562,83 @@ section('7f-2. 任务记录回读：僵尸 running 读成 interrupted + 归属�
     !fs.existsSync(path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', restoredJobs.id, 'jobs')), restoredJobs.id);
 }
 
+// ─────────────────── 7f-3. 删除的学习不许被分身复活：写盘那道门 + 鬼目录要看得见（第二十轮）
+
+section('7f-3. 落盘先看学习还在不在：鬼目录造不出来 + 体检不再把它数成一本书');
+
+/*
+ * 探针 20-A 的单元版。第十八轮的删除守卫只看 activeTurns，认不出分身：回合派完任务就收尾，
+ * 任务还 running 时删除照样 200。任务一收尾 _finish 就往 jobs/ 写盘，而写盘用的是
+ * `mkdirSync(dir, { recursive: true })`——它会把整个笔记本目录从无到有 mkdir 回来，
+ * 只剩一份 jobs/*.json 的"鬼目录"就是这么来的。
+ * 这一节验两道门：写之前先问「这一本还在吗」（notebookExists，判据与 assertExists 同源），
+ * 以及体检那张嘴不再把鬼目录当一本学习。
+ */
+{
+  const ghostNb = store.createNotebook({ topic: '删掉还活着（单元）', goal: null, pace: 'normal' }).id;
+  const nbRoot = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks');
+  const dirOf = (id) => path.join(nbRoot, id);
+  const runnerW = new TaskRunner({ registry, rulesText: '（写盘门探针）', onEvent: () => {} });
+
+  check('还在的学习认得（notebookExists 与 assertExists 同一个判据）',
+    store.notebookExists(ghostNb) === true);
+  check('非法 id 不算存在（不把路径穿越当"在不在"问一遍）',
+    store.notebookExists('../../settings') === false && store.notebookExists('') === false);
+
+  // 正常路径先验一遍：门关着时写盘该留痕，后面才知道"没留痕"真的是门起了作用
+  const recBefore = runnerW._create({ notebookId: ghostNb, kind: 'background', title: '收尾之前删掉的', instructions: 'x' });
+  check('场景成立：学习还在时 _create 落了盘',
+    fs.existsSync(path.join(dirOf(ghostNb), 'jobs', `${recBefore.id}.json`)));
+
+  // 删掉整本 → 分身这时才收尾（探针 20-A 里那一步）
+  store.deleteNotebook(ghostNb);
+  const ghost = (() => {
+    try {
+      runnerW._finish(recBefore, { status: 'stopped', output: '' });
+    } catch (err) {
+      return { threw: err.message };
+    }
+    return { dirBack: fs.existsSync(dirOf(ghostNb)) };
+  })();
+  check('收尾写盘不再把删掉的目录 mkdir 回来（鬼目录的源头堵住了）',
+    ghost.dirBack === false, JSON.stringify(ghost));
+  check('这道门明说没落下去（返回 false，调用方不用猜），内存里的记录照常收尾',
+    runnerW._writeJob(ghostNb, recBefore) === false && runnerW.get(recBefore.id)?.status === 'stopped',
+    `门返回 ${runnerW._writeJob(ghostNb, recBefore)}，状态 ${runnerW.get(recBefore.id)?.status}`);
+
+  // 另一头：学习不在了就不该再有新任务落盘（重启后从盘上翻出僵尸、再派一次这类路径）
+  const recAfter = runnerW._create({ notebookId: `${ghostNb}-nope`, kind: 'background', title: '派给不存在的学习', instructions: 'x' });
+  check('给不存在的学习派任务不落盘（也不会顺手造一个目录）',
+    fs.existsSync(path.join(dirOf(`${ghostNb}-nope`))) === false);
+  fs.rmSync(dirOf(recAfter.notebookId), { recursive: true, force: true });
+
+  // 体检这一侧：手工造一个鬼目录（等价于第二十轮之前的盘），它不该被数成一本书
+  const handGhost = 'ghost-probe-aaaaaa';
+  fs.mkdirSync(path.join(dirOf(handGhost), 'jobs'), { recursive: true });
+  fs.writeFileSync(path.join(dirOf(handGhost), 'jobs', 'job-ghost-1.json'),
+    JSON.stringify({ id: 'job-ghost-1', kind: 'background', notebookId: handGhost, status: 'done' }));
+  const beforeGhost = store.healthCheck();
+  check('鬼目录被体检点名（凭空冒出的目录不再是无人认领的事）',
+    (beforeGhost.ghostDirs || []).some((g) => g.notebook === handGhost), JSON.stringify(beforeGhost.ghostDirs));
+  check('点名的条目带目录里的东西（人不用自己翻盘就知道里面是什么）',
+    (beforeGhost.ghostDirs || []).find((g) => g.notebook === handGhost)?.contents?.includes('jobs') === true,
+    JSON.stringify((beforeGhost.ghostDirs || []).find((g) => g.notebook === handGhost)));
+  check('鬼目录不充进 notebooks 本数', (() => {
+    const real = fs.readdirSync(nbRoot).filter((n) => fs.existsSync(path.join(nbRoot, n, 'notebook.json'))).length;
+    return beforeGhost.notebooks === real;
+  })(), JSON.stringify({ reported: beforeGhost.notebooks }));
+  check('鬼目录进 ok=false（此刻盘上真存在的一处不该存在，不是往事）',
+    beforeGhost.ok === false, JSON.stringify({ ok: beforeGhost.ok, ghosts: (beforeGhost.ghostDirs || []).length }));
+
+  // 判据同源：三处（assertExists / notebookExists / 体检）对"什么是一本学习"口径一致
+  check('判据同源：鬼目录既不算存在、也不进 listNotebooks',
+    store.notebookExists(handGhost) === false && !store.listNotebooks().some((n) => n.id === handGhost));
+  fs.rmSync(dirOf(handGhost), { recursive: true, force: true });
+  const afterGhost = store.healthCheck();
+  check('清掉之后不再点名（报告跟着盘上事实走，不是历史清单）',
+    !(afterGhost.ghostDirs || []).some((g) => g.notebook === handGhost), JSON.stringify(afterGhost.ghostDirs));
+}
+
 // ─────────────────────────────────────── 7g. 结构化笔记（compile_notes）
 
 section('7g. 结构化笔记：compile_notes 落 notes.json');

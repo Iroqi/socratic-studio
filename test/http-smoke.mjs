@@ -891,6 +891,134 @@ try {
     const escape20 = await jfetch(`${BASE}/api/health/corrupt?path=${encodeURIComponent('notebooks/../credentials.json')}`);
     check('借台账形状的穿越照旧被拒（白名单先于路径解析）', escape20.status === 400, `status=${escape20.status}`);
   }
+
+  console.log('\n22. 删除认得出分身：任务还在跑不给删，收尾也不许把目录 mkdir 回来（真服务）');
+  /*
+   * 第二十轮探针 20-A 的真服务版。第十八轮的守卫只看 activeTurns，第十九轮的落盘只管写：
+   * 于是「回合派完后台任务就正常收尾 + 任务还 running」这一格，删除照旧 200——目录没了、
+   * 任务还在跑，它一收尾就往 jobs/ 写盘，mkdirSync(recursive) 把整个笔记本目录复活成
+   * 只有任务记录的鬼目录；同一时刻 GET 整本 404 而 GET /tasks 200（split-brain），
+   * 体检还把它数成一本书、ok=true。
+   *
+   * faux 队列按「谁先发起 provider 调用」消费，实测这条顺序恒定：回合第 1 调（派任务）
+   * → 任务第 1 调（问一句然后卡住）→ 回合第 2 调（纯正文收尾）。顺序写反就撞不出这一格。
+   */
+  {
+    const ghostNb = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '删掉还活着', goal: null }) })).data.notebook.id;
+    const ghostDir = path.join(dataDir, 'notebooks', ghostNb);
+    await jfetch(`${BASE}/api/__faux`, { method: 'POST', headers: H, body: scriptBody([
+      [{ type: 'text', text: '我把出题挂到后台。' },
+       { type: 'toolCall', name: 'run_background_task', arguments: { title: '永远在跑的分身', instructions: '问一个问题然后等答案，不要继续' } }],
+      [{ type: 'toolCall', name: 'ask_user_question', arguments: { id: 'q-hang22', concept_id: 'none', question: '还在吗？', options: [{ label: '在' }] }, stopReason: 'toolUse' }],
+      [{ type: 'text', text: '挂在后台了，这边先继续。' }],
+    ]) });
+    const turn22 = await fetch(`${BASE}/api/notebooks/${ghostNb}/turn`, {
+      method: 'POST', headers: H,
+      body: JSON.stringify({ message: '挂个后台任务', model: { provider: 'faux', model: fauxModelId } }),
+    });
+    const evs22 = await readSSE(turn22, { deadlineMs: 30000 });
+    // 这一格要的是「回合已收尾 + 任务还 running」。回合抢走了 ask 的话它会一直挂着，
+    // 那属于 §19 那一格（409 reason=turn-active）——这里如实跳过，不硬造场景。
+    const turnDone22 = evs22.some((e) => e.type === 'turn_end');
+    const taskId22 = JSON.stringify(evs22).match(/"task_id":"([^"]+)"/)?.[1];
+    check('回合派完任务后正常收尾（探针场景成立）',
+      turnDone22 === true && Boolean(taskId22), `turn_end=${turnDone22} task=${taskId22} types=${evs22.map((e) => e.type).join(',')}`);
+    await sleep(400);
+    const during22 = (await jfetch(`${BASE}/api/notebooks/${ghostNb}/tasks`)).data;
+    const st22 = during22.tasks?.find((t) => t.id === taskId22)?.status;
+    check('任务此刻确实还 running（不是撞成 done 了）', st22 === 'running', `status=${st22}`);
+
+    const delBusy = await jfetch(`${BASE}/api/notebooks/${ghostNb}`, { method: 'DELETE' });
+    check('任务在跑时删除被服务端拒（409，守卫认得出分身了）',
+      delBusy.status === 409, `status=${delBusy.status} body=${JSON.stringify(delBusy.data)}`);
+    check('409 带 reason=task-active 与在跑清单（前端能分流，不靠猜文案）',
+      delBusy.data?.reason === 'task-active' && Array.isArray(delBusy.data?.tasks)
+      && delBusy.data.tasks.some((t) => t.id === taskId22) && String(delBusy.data?.error || '').includes('后台任务'),
+      JSON.stringify(delBusy.data));
+    check('被拒的删除不吃数据（整本还打得到）',
+      (await jfetch(`${BASE}/api/notebooks/${ghostNb}`)).status === 200);
+
+    const stop22 = await jfetch(`${BASE}/api/notebooks/${ghostNb}/tasks/${taskId22}/stop`, { method: 'POST' });
+    check('停掉它才有删除的资格（stop 200）', stop22.status === 200 && stop22.data?.ok === true, JSON.stringify(stop22.data));
+    await sleep(1500); // 让它走 abort → _finish → 落盘，这一段正是过去复活鬼目录的那一下
+    const delOk22 = await jfetch(`${BASE}/api/notebooks/${ghostNb}`, { method: 'DELETE' });
+    check('任务收尾后删除成功（200 ok）', delOk22.status === 200 && delOk22.data?.ok === true, `status=${delOk22.status}`);
+    await sleep(600); // 再等一拍：任何迟到的写盘都会把目录 mkdir 回来，这段等待是给"复活"留的时间
+    /*
+     * 这一条钉的是**删除那一侧**：守卫放行之后目录要真的清干净、不再冒回来（走的是
+     * deleteNotebook 的 rmSync 与"没有迟到的写"这两件事）。
+     * 写盘那道门（`_writeJob` 先问 notebookExists）的行为钉子住在 run.mjs 7f-3——那里能直接
+     * 构造"删完之后那一下迟到的收尾写"；HTTP 这一侧构造不出来：任务还在跑时删除会被守卫拒，
+     * 于是写与删永远排不成探针 20-A 那个顺序。别把这条当成写盘门的证据。
+     */
+    check('守卫放行后的删除不留鬼目录（删干净了，也没有迟到的写冒回来）',
+      !fs.existsSync(ghostDir), ghostDir);
+
+    /*
+     * 先钉一条这个守卫的边界：僵尸 running（第十九轮读回来一律改判 interrupted）**不许**挡住删除。
+     * 挡住的话，重启过一次的服务里每一本带僵尸任务的学习都再也删不掉——而 interrupted 的任务
+     * 根本不会再写盘，鬼都造不出来。守卫只认真还在跑的那几个。
+     */
+    {
+      const zNb = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '僵尸挡不挡删除', goal: null }) })).data.notebook.id;
+      const zDir = path.join(dataDir, 'notebooks', zNb, 'jobs');
+      fs.mkdirSync(zDir, { recursive: true });
+      const zId = `job-${Date.now().toString(36)}-z`;
+      fs.writeFileSync(path.join(zDir, `${zId}.json`), JSON.stringify({
+        id: zId, kind: 'background', notebookId: zNb, parentId: null, title: '跟旧进程一起没掉的任务',
+        instructions: 'x', helper: null, status: 'running', model: null,
+        createdAt: new Date().toISOString(), finishedAt: null, output: '', error: null,
+      }, null, 2));
+      const zList = (await jfetch(`${BASE}/api/notebooks/${zNb}/tasks`)).data;
+      check('场景成立：盘上那条 running 被读成 interrupted（本机没句柄）',
+        zList.tasks?.find((t) => t.id === zId)?.status === 'interrupted', JSON.stringify(zList.tasks));
+      const zDel = await jfetch(`${BASE}/api/notebooks/${zNb}`, { method: 'DELETE' });
+      check('已中断的任务不挡删除（否则重启后这些本永远删不掉）',
+        zDel.status === 200 && zDel.data?.ok === true, `status=${zDel.status} ${JSON.stringify(zDel.data)}`);
+      check('删掉带僵尸任务的本之后盘上查无此目录',
+        !fs.existsSync(path.join(dataDir, 'notebooks', zNb)), path.join(dataDir, 'notebooks', zNb));
+    }
+
+    // 手工造一个鬼目录（等价于第二十轮之前那台服务的盘）：写盘那道门堵的是新账，
+    // 这一半验的是"旧账/外部造出来的鬼"在读盘与体检这一侧怎么如实呈现。
+    /*
+     * 体检的 ok 要能归因：前面 §15 故意把主 notebook 的 chat.json 写坏过（取证一节要用），
+     * 那份损坏到现在还在——先治好它，ok 才回到 true，之后"造鬼 → false → 清鬼 → true"
+     * 这三态才全部只由 ghostDirs 决定（m09：把 ghostDirs 摘出 ok 判定，这里就红）。
+     */
+    fs.writeFileSync(path.join(dataDir, 'notebooks', id, 'chat.json'), JSON.stringify({ version: 1, messages: [] }));
+    const repHealed = (await jfetch(`${BASE}/api/health`)).data;
+    check('治好先前那处损坏后体检回到 ok=true（下面的 false 才怪得在鬼目录头上）',
+      repHealed.ok === true && (repHealed.ghostDirs || []).length === 0, JSON.stringify(repHealed.ok));
+    const ghost2 = `${ghostNb}-ghost`;
+    fs.mkdirSync(path.join(dataDir, 'notebooks', ghost2, 'jobs'), { recursive: true });
+    fs.writeFileSync(path.join(dataDir, 'notebooks', ghost2, 'jobs', 'job-muz0000-1.json'),
+      JSON.stringify({ id: 'job-muz0000-1', kind: 'background', notebookId: ghost2, status: 'done' }, null, 2));
+    const ghostTasks = await jfetch(`${BASE}/api/notebooks/${ghost2}/tasks`);
+    check('鬼目录的 GET /tasks 回 404（:id 不能只当装饰，不再 split-brain）',
+      ghostTasks.status === 404 && ghostTasks.data?.error === '学习不存在', `status=${ghostTasks.status} ${JSON.stringify(ghostTasks.data)}`);
+    const ghostStop = await jfetch(`${BASE}/api/notebooks/${ghost2}/tasks/job-muz0000-1/stop`, { method: 'POST' });
+    check('鬼目录的 stop 也回 404（不给已删的学习派新动作）', ghostStop.status === 404, `status=${ghostStop.status}`);
+    const repGhost = (await jfetch(`${BASE}/api/health`)).data;
+    const ghostEntry = repGhost.ghostDirs?.find((g) => g.notebook === ghost2);
+    check('体检点名鬼目录，并报出里面有什么（凭空多出的目录不再是无人认领的事）',
+      Boolean(ghostEntry) && (ghostEntry.contents || []).includes('jobs'), JSON.stringify(repGhost.ghostDirs));
+    // 本数只数真学习：判据用盘上事实独立算一遍，不跟被测代码共用同一个表达式
+    const realNbs = fs.readdirSync(path.join(dataDir, 'notebooks'))
+      .filter((n) => fs.existsSync(path.join(dataDir, 'notebooks', n, 'notebook.json'))).length;
+    check('鬼目录不充数（体检的 notebooks 只数有 notebook.json 的目录）',
+      repGhost.notebooks === realNbs, JSON.stringify({ reported: repGhost.notebooks, real: realNbs }));
+    // 归因链的中间那一格：此刻盘上只有鬼目录这一处新事实，ok 必须由它翻下来
+    check('有鬼目录时体检不许说 ok=true（报了却不用管，等于没报）',
+      repGhost.ok === false, JSON.stringify({ ok: repGhost.ok, ghosts: (repGhost.ghostDirs || []).map((g) => g.notebook) }));
+    const ghostDel = await jfetch(`${BASE}/api/notebooks/${ghost2}`, { method: 'DELETE' });
+    check('拿鬼目录当学习删：404（判据与 assertExists 同源）', ghostDel.status === 404, `status=${ghostDel.status}`);
+    fs.rmSync(path.join(dataDir, 'notebooks', ghost2), { recursive: true, force: true });
+    const repClean = (await jfetch(`${BASE}/api/health`)).data;
+    check('鬼目录清掉之后不再点名、体检回到 ok=true（这一路 true→false→true 只由 ghostDirs 决定）',
+      !(repClean.ghostDirs || []).some((g) => g.notebook === ghost2) && repClean.ok === true,
+      JSON.stringify({ ok: repClean.ok, ghosts: repClean.ghostDirs }));
+  }
 } finally {
   server.kill();
   await sleep(400);

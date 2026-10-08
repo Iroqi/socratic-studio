@@ -476,12 +476,21 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
 // （前端看当前标签页有没有 state.turn）。服务端 DELETE 路由不看 activeTurns，实测回合进行中照删 200，
 // 于是"文档有这句话"与"真在服务端兑"被文档测试当成同一件事放过了。这一节把文档那句话与
 // serve.mjs 里 DELETE 分支的真实守卫绑死：谁把守卫从服务端摘掉，这条就红。
+//
+// 第二十轮同一类病换了个主语：守卫认得回合、认不出分身。回合派完后台任务就收尾，任务还 running
+// 时删除照旧 200，任务一收尾就往 jobs/ 写盘（mkdirSync recursive）把删掉的学习复活成鬼目录。
+// 所以这一节现在钉两笔账：文档与代码都得同时认「回合」和「后台任务」，摘掉任何一边都红。
 {
-  const delSectionMatch = /### 删除会话[\s\S]{0,900}?###/.exec(readmeDoc);
+  // 窗口按整节取（到下一个 ### 为止）：这段历史越写越长，窗口收窄会把钉子本身弄断
+  const delSectionMatch = /### 删除会话[\s\S]*?\n###/.exec(readmeDoc);
   check('README「删除会话」一节仍在承诺回合中不许删（并写明兑在哪一侧）',
     Boolean(delSectionMatch) && /进行中的回合/.test(delSectionMatch[0])
     && /409/.test(delSectionMatch[0]) && /turn-active/.test(delSectionMatch[0]),
     delSectionMatch ? delSectionMatch[0].replace(/\n+/g, ' ').slice(0, 200) : '找不到该节');
+  check('README 同样承诺"还有后台任务在跑也不许删"（第二笔账不能只在代码里兑）',
+    Boolean(delSectionMatch) && /task-active/.test(delSectionMatch[0])
+    && /后台任务/.test(delSectionMatch[0]),
+    delSectionMatch ? delSectionMatch[0].replace(/\n+/g, ' ').slice(0, 240) : '找不到该节');
   // serve.mjs 里有好几条 DELETE 分支（providers / endpoints / notes / notebook），
   // 要盯的是删整本那一条——用 store.deleteNotebook 认出它，再检查守卫在不在它身体里。
   const delBranches = [...serveSrc.matchAll(/if \(m && method === 'DELETE'\) \{[\s\S]*?\n {4}\}/g)]
@@ -493,6 +502,23 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     notebookDel ? notebookDel.replace(/\n\s*/g, ' ').slice(0, 260) : `找不到删整本的分支（共 ${delBranches.length} 条 DELETE 分支）`);
   check('守卫给的错误带 reason=turn-active（前端能分流，不靠猜文案）',
     Boolean(notebookDel) && notebookDel.includes('turn-active'), notebookDel ? notebookDel.slice(0, 200) : '');
+  /*
+   * 分身那一笔账同样要在删数据那一侧兑，并且**只认真还在跑的**：判据走 statusFor 之后的
+   * publicView（第十八、十九轮同一条纪律——僵尸 running 不许挡删除，否则重启后每一本
+   * 带僵尸任务的学习都再也删不掉）。把 filter 的 'running' 摘掉、或整段守卫删掉，这里就红。
+   */
+  check('DELETE 分支真的问过 taskRunner 这一本还有没有在跑的任务（守卫认得出分身）',
+    Boolean(notebookDel) && /taskRunner\.list\(\{ notebookId: id \}\)/.test(notebookDel)
+    && /t\.status === 'running'/.test(notebookDel) && notebookDel.includes('task-active'),
+    notebookDel ? notebookDel.replace(/\n\s*/g, ' ').slice(0, 300) : '找不到删整本的分支');
+  check('拒绝时带在跑任务清单（人不用自己猜是哪几个挡着）',
+    Boolean(notebookDel) && /liveTasks\.map\(/.test(notebookDel), '只回了一句人话、没给清单');
+  // 任务路由的 :id 不许只当装饰：鬼目录那一侧 404（与第十九轮 stop 同一条纪律的延伸）
+  const tasksBlocks = [...serveSrc.matchAll(/if \(m && method === '(GET|POST)'\) \{[\s\S]*?\n {4}\}/g)]
+    .map((mm) => mm[0]).filter((b) => b.includes('taskRunner.'));
+  check('任务相关路由先验学习存在（鬼目录不再一半认得一半不认得）',
+    tasksBlocks.length >= 2 && tasksBlocks.every((b) => b.includes('store.notebookExists(id)')),
+    `列出 ${tasksBlocks.length} 个任务路由块，其中没有每个都过存在性这道门`);
 }
 
 // ──────────────────────────────────────────────── 唯一的 JSON 读取口：不许有第二份 readJsonSafe
@@ -622,6 +648,78 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     jobsDoc ? jobsDoc[0].replace(/\n+/g, ' ').slice(0, 220) : '找不到这一节');
   check('README 写明导出带 jobs、导入有意无视（这条"不做"要有名分）',
     /导入.{0,16}有意无视/.test(readmeDoc), 'jobs 的导出/导入口径没进文档');
+}
+
+// ──────────────────────────────────────────────── 写盘那道门：学习不在了就不许 mkdir 回来（第二十轮）
+//
+// 探针 20-A 的根因是一段看起来无害的代码：`fs.mkdirSync(dir, { recursive: true })` 在写 jobs/
+// 之前把目录"顺手补上"。笔记本被删掉之后这一补就把整本复活成鬼目录。修法是把两条写盘路径
+// 都收进同一个口子，口子上先问一句「这一本还在吗」。这一节钉三件事：口子存在、两条路径都走它、
+// 判据与 assertExists 同源（不是另起一套"目录在不在"）。
+{
+  const tasksSrc = fs.readFileSync(path.join(app, 'server', 'tasks.mjs'), 'utf8');
+  const storeSrc = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8');
+  const writeJob = /_writeJob\(notebookId, record\) \{[\s\S]*?\n  \}/.exec(tasksSrc);
+  check('_writeJob 是唯一的 jobs 写盘口，且开口先过 notebookExists（门不在就别谈两条路径）',
+    Boolean(writeJob) && /if \(!notebookExists\(notebookId\)\) return false/.test(writeJob[0]),
+    writeJob ? writeJob[0].replace(/\n+\s*/g, ' ').slice(0, 200) : '找不到 _writeJob 或它没问存在性');
+  check('这道门的判据来自 store（与 assertExists 同源，不在 tasks 里另长一套）',
+    /import \{[^}]*notebookExists[^}]*\} from '\.\/store\.mjs'/.test(tasksSrc)
+    && /export function notebookExists\(id\)/.test(storeSrc),
+    'notebookExists 没从 store 导给 tasks');
+  /*
+   * "同源"不能只在注释里说：判据必须与 assertExists 用同一个常量（NOTEBOOK_FILE），
+   * 也不许退化成"目录在就算在"。m15 演的正是这种退化——门与路由一起变瞎，而
+   * `if (!notebookExists(...)) return false` 这一行形状一个字都没动，形状钉子照样绿。
+   */
+  const nbExistsBody = /export function notebookExists\(id\) \{[\s\S]*?\n\}/.exec(storeSrc);
+  const assertBody = /function assertExists\(id\) \{[\s\S]*?\n\}/.exec(storeSrc);
+  const joinsNotebookFile = (body) => /fs\.existsSync\(path\.join\([^)]*NOTEBOOK_FILE\)\)/.test(body);
+  check('notebookExists 的判据就是 assertExists 那一句（有 notebook.json 才算一本学习）',
+    Boolean(nbExistsBody) && /safeId\(id\)/.test(nbExistsBody[0]) && joinsNotebookFile(nbExistsBody[0])
+    && Boolean(assertBody) && joinsNotebookFile(assertBody[0]),
+    nbExistsBody ? nbExistsBody[0].replace(/\n+\s*/g, ' ').slice(0, 200) : '找不到 notebookExists 本体');
+  // 两条写盘路径必须都走这个口子：_create（开局落一份）与 _finish（收尾落终态）
+  const createBody = /_create\(\{ notebookId, kind, title, instructions, parentId = null, modelRef, helper = null \}\) \{[\s\S]*?\n  \}/.exec(tasksSrc);
+  const finishBody = /_finish\(record, \{ status, output, error \}\) \{[\s\S]*?\n  \}/.exec(tasksSrc);
+  check('_create 落盘走这道门（不再直接 mkdirSync 造目录）',
+    Boolean(createBody) && /this\._writeJob\(notebookId, record\)/.test(createBody[0])
+    && !/fs\.mkdirSync/.test(createBody[0]),
+    createBody ? createBody[0].replace(/\n+\s*/g, ' ').slice(0, 200) : '找不到 _create 本体');
+  check('_finish 落盘走这道门（探针 20-A 里那一下复活就是它）',
+    Boolean(finishBody) && /this\._writeJob\(record\.notebookId, record\)/.test(finishBody[0])
+    && !/fs\.mkdirSync/.test(finishBody[0]),
+    finishBody ? finishBody[0].replace(/\n+\s*/g, ' ').slice(0, 200) : '找不到 _finish 本体');
+
+  // 体检这一侧：鬼目录既进清单也进 ok，本数不再被它充
+  const healthBody = /export function healthCheck\(\) \{[\s\S]*?\n\}/.exec(storeSrc);
+  check('体检把没有 notebook.json 的目录单列为 ghostDirs（判据同 assertExists）',
+    Boolean(healthBody) && /ghostDirs/.test(healthBody[0])
+    && /NOTEBOOK_FILE/.test(healthBody[0]) && /ghostDirs\.push\(/.test(healthBody[0]),
+    healthBody ? healthBody[0].replace(/\n+\s*/g, ' ').slice(0, 200) : '找不到 healthCheck 本体');
+  check('本数只数真学习（ghost 目录 continue，不再 notebooks += 1）',
+    Boolean(healthBody) && /notebooks \+= 1/.test(healthBody[0])
+    && /ghostDirs\.push\([\s\S]{0,200}\n\s*continue;/.test(healthBody[0]),
+    '鬼目录又开始充本数了');
+  check('ghostDirs 进 ok 判定（此刻盘上真存在的一处不该存在，不是往事）',
+    Boolean(healthBody) && /ghostDirs\.length === 0/.test(healthBody[0]), '报告了但没人需要管');
+
+  // 前端这一侧：读新字段要兜住老服务，而且只点名、不给一键删除
+  const webApp = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+  check('前端读 ghostDirs 带兜底（老服务没这个字段不许炸面板）',
+    /Array\.isArray\(report\.ghostDirs\)/.test(webApp), '直接当数组用了');
+  check('前端点名鬼目录并说明要人自己确认（不给一键删除的键）',
+    /鬼目录/.test(webApp) && /手动删掉这个目录/.test(webApp), '面板没有鬼目录出口');
+  // 删除弹层这一侧：回合与分身两笔账都要提，客户端那句不再是唯一的一道闸
+  check('删除弹层也提"后台任务还在跑"这一笔（与 state.turn 那句并列）',
+    /个后台任务在跑/.test(webApp), '弹层还只认回合');
+
+  // README：鬼目录进体检清单这件事得写在文档里（钉语义，不只钉词）
+  const healthDoc = /- \*\*体检数据\*\*[\s\S]{0,700}/.exec(readmeDoc);
+  check('README 体检一节写了第四件该修的事（鬼目录）与本数只数真学习',
+    Boolean(healthDoc) && /鬼目录/.test(healthDoc[0]) && /notebook\.json/.test(healthDoc[0])
+    && /只数\*\*真学习\*\*|只数真学习/.test(healthDoc[0]),
+    healthDoc ? healthDoc[0].replace(/\n+/g, ' ').slice(0, 240) : '找不到体检那一节');
 }
 
 console.log(`\n${'─'.repeat(52)}`);

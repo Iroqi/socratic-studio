@@ -92,6 +92,17 @@ function assertExists(id) {
 }
 
 /**
+ * 这一本还在吗？非抛版，判据与 assertExists 同源（有 notebook.json 才算一本学习）：
+ * 光看目录存在不够——被分身复活出来的鬼目录（只有 jobs/，没有 notebook.json）也得算"没了"。
+ * 写后台任务记录、开任务接口之前都要过这一道，免得往已经删掉的学习上继续落盘、把目录 mkdir 回来。
+ */
+export function notebookExists(id) {
+  const safe = safeId(id);
+  if (!safe) return false;
+  return fs.existsSync(path.join(NOTEBOOKS_DIR, safe, NOTEBOOK_FILE));
+}
+
+/**
  * 整本导出要看任务记录，但 store 不该反过来依赖 tasks.mjs（它 import 了 agent.mjs，
  * 接上就成环）。路由层启动时用下面这个 setter 注一个"给我这一本的任务快照"的函数进来。
  */
@@ -1116,6 +1127,7 @@ export function healthCheck() {
   const corruptEvidence = [];
   const orphanArtifacts = [];
   const missingHtml = [];
+  const ghostDirs = [];
   let notebooks = 0;
   if (fs.existsSync(NOTEBOOKS_DIR)) {
     for (const id of fs.readdirSync(NOTEBOOKS_DIR)) {
@@ -1127,6 +1139,24 @@ export function healthCheck() {
         continue;
       }
       if (!stat.isDirectory()) continue;
+      /*
+       * 「一本学习」的判据和 assertExists / notebookExists 同源：目录里有 notebook.json 才算。
+       * 过去这里只要有个目录就 notebooks += 1——于是被分身复活的鬼目录（只有 jobs/，
+       * 没有 notebook.json）既被数进"本数"，又不出现在任何问题清单里（探针 20-A：
+       * 删剩一本的盘报"2 本学习，一切正常"，可那本 GET 整本是 404）。
+       * 鬼目录单独点名：它不是学习，是盘上一处不该存在的东西。只报告、不删——
+       * 删除不可恢复，体检这张嘴历来只说事实。
+       */
+      if (!fs.existsSync(path.join(dir, NOTEBOOK_FILE))) {
+        let entries = [];
+        try {
+          entries = fs.readdirSync(dir);
+        } catch {
+          /* 边扫边被外部动过，就报空清单 */
+        }
+        ghostDirs.push({ notebook: id, contents: entries.slice(0, 8) });
+        continue;
+      }
       notebooks += 1;
 
       for (const name of HEALTH_FILES) {
@@ -1185,13 +1215,16 @@ export function healthCheck() {
     }
   }
   return {
-    ok: corruptFiles.length === 0 && orphanArtifacts.length === 0 && missingHtml.length === 0,
+    // 鬼目录进 ok：它是此刻盘上真存在着的一处不该存在的东西（不像证据台账那样只是往事）。
+    // 不进 ok 就等于"报了但没人需要管"，而这正是探针 20-A 抓到它时它的样子。
+    ok: corruptFiles.length === 0 && orphanArtifacts.length === 0 && missingHtml.length === 0 && ghostDirs.length === 0,
     dataDir: DATA_DIR,
     notebooks,
     corruptFiles,
     corruptEvidence,
     orphanArtifacts,
     missingHtml,
+    ghostDirs,
     quarantined,
   };
 }

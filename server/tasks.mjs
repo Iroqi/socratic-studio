@@ -14,8 +14,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, SETTINGS_FILE, CREDENTIALS_FILE, readJsonSafe } from './config.mjs';
+import { notebookExists } from './store.mjs';
 import { runTurn } from './agent.mjs';
 import { panelDecisionOpts } from './decision.mjs';
+
+/*
+ * store.mjs 不 import tasks/agent（第十九轮注释里那条"反向依赖会成环"说的是 store→tasks），
+ * tasks→store 是顺着已有依赖图走的（agent→store 早就在），这一口不会成环。
+ */
 
 /*
  * 这里原来有一份**局部的** readJsonSafe（同名遮蔽了 config.mjs 导出的那一份）：
@@ -145,6 +151,21 @@ export class TaskRunner {
     return { ...record };
   }
 
+  /**
+   * 往 jobs/ 落一份记录。学习已经不在（没有 notebook.json）就一枪不发——
+   * `mkdirSync(dir, { recursive: true })` 会把整个笔记本目录（连带 jobs/）从无到有 mkdir 回来，
+   * 于是"删掉的学习"被一个还在收尾的分身复活成鬼目录（探针 20-A：只有 jobs/*.json、
+   * GET 整本 404、GET /tasks 却 200、体检还把它数成一本书）。落盘纪律的第一条是
+   * **别往不该存在的目录里写**。
+   */
+  _writeJob(notebookId, record) {
+    if (!notebookExists(notebookId)) return false;
+    const dir = this.jobsDir(notebookId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${record.id}.json`), `${JSON.stringify(record, null, 2)}\n`);
+    return true;
+  }
+
   /** 建一条任务记录并落一个文件，重启后还能翻出来（_hydrate 负责翻）。 */
   _create({ notebookId, kind, title, instructions, parentId = null, modelRef, helper = null }) {
     const id = nextId(kind === 'subagent' ? 'sub' : 'job');
@@ -164,9 +185,11 @@ export class TaskRunner {
       error: null,
     };
     this.tasks.set(id, record);
-    const dir = this.jobsDir(notebookId);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `${id}.json`), `${JSON.stringify(record, null, 2)}\n`);
+    try {
+      this._writeJob(notebookId, record);
+    } catch {
+      /* 落盘失败不影响主流程 */
+    }
     this.onEvent({ type: 'task_start', task: publicView(record) });
     return record;
   }
@@ -177,9 +200,7 @@ export class TaskRunner {
     if (output !== undefined) record.output = String(output).slice(0, 20000);
     if (error !== undefined) record.error = String(error).slice(0, 4000);
     try {
-      const dir = this.jobsDir(record.notebookId);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, `${record.id}.json`), `${JSON.stringify(record, null, 2)}\n`);
+      this._writeJob(record.notebookId, record);
     } catch {
       /* 落盘失败不影响主流程 */
     }

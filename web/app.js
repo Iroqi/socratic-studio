@@ -403,10 +403,18 @@ function confirmDeleteNotebook(nb) {
     el('p', null, `即将永久删除「${name}」——${nb.messageCount || 0} 轮对话、${nb.conceptCount || 0} 个概念、学习进度、制品和素材。`),
   );
   wrap.append(el('p', 'del-warn', '删除不可恢复。要保留内容，请先把素材或制品另存出去。'));
+  // 回合与分身是两笔账（第二十轮）：回合早就结束了、任务还在跑，客户端只看 state.turn
+  // 就看不见这一笔。这里照旧只做提示，真正的闸在服务端 DELETE 那一侧（409 reason=task-active）。
+  const runningTasks = state.notebook?.id === nb.id
+    ? (state.tasks || []).filter((t) => t.status === 'running')
+    : [];
   if (state.notebook?.id === nb.id) {
     wrap.append(el('p', 'del-active-warn', '这是当前打开的学习，删除后会回到空白状态。'));
     if (state.turn) {
       wrap.append(el('p', 'del-active-warn', '这个学习有正在进行的回合，先中断或等它结束。'));
+    }
+    if (runningTasks.length) {
+      wrap.append(el('p', 'del-active-warn', `这个学习还有 ${runningTasks.length} 个后台任务在跑，先停掉或等它们结束。`));
     }
   }
 
@@ -424,6 +432,7 @@ function confirmDeleteNotebook(nb) {
       try {
         await api('DELETE', `/api/notebooks/${nb.id}`);
       } catch (err) {
+        // 服务端那句 409 的话（回合 / 后台任务各有各的说法）原样递给学习者，不在这里改口径
         toast(`删除失败：${err.message}`, true);
         return false;
       }
@@ -3683,6 +3692,14 @@ function renderBackupPanel(body) {
     if (report.corruptFiles.length) issues.push(`损坏文件 ${report.corruptFiles.length} 处：${report.corruptFiles.slice(0, 3).join('、')}${report.corruptFiles.length > 3 ? '…' : ''}`);
     if (report.orphanArtifacts.length) issues.push(`孤儿制品 ${report.orphanArtifacts.length} 件（manifest 外）`);
     if (report.missingHtml.length) issues.push(`缺 HTML 的制品 ${report.missingHtml.length} 件`);
+    /*
+     * 鬼目录（第二十轮）：被删掉的学习又被自己还在跑的分身从盘上 mkdir 回来，只剩一份
+     * jobs/*.json。以前体检只要看见目录就当一本书数进本数——这本"书"GET 整本是 404，
+     * 报告里却既不出问题也不点名。这里点名它，但不给"一键删除"的键：删除不可恢复，
+     * 这一处该由人自己确认了再动手（写盘那一侧的门已经堵住，新账不会再产生）。
+     */
+    const ghosts = Array.isArray(report.ghostDirs) ? report.ghostDirs : [];
+    if (ghosts.length) issues.push(`鬼目录 ${ghosts.length} 处（只有任务记录、没有 notebook.json，不算一本学习）`);
     // 已修复文件的存证（第十八轮）：原件被下一次原子写治好后 corruptFiles 清空，
     // 但 `.corrupt-*` 副本还在盘上。过去这条下载口只认"当下还坏着"的清单，治好了就查无实据——
     // 人最想看"当时坏成什么样"的时刻，恰恰是修好之后。台账按盘上事实列，不看原件坏不坏。
@@ -3754,6 +3771,10 @@ function renderBackupPanel(body) {
         eList.append(row);
       }
       healthResult.append(eList);
+    }
+    if (ghosts.length) {
+      const names = ghosts.slice(0, 3).map((g) => `${g.notebook}/（${(g.contents || []).join('、') || '空'}）`).join('、');
+      healthResult.append(el('div', 'health-list', `鬼目录：${names}${ghosts.length > 3 ? '…' : ''}——确认没有要留的东西后再手动删掉这个目录。`));
     }
     if (report.orphanArtifacts.length) {
       const names = report.orphanArtifacts.slice(0, 3).map((a) => `${a.notebook}/${a.id}`).join('、');
@@ -5084,6 +5105,7 @@ boot().catch((err) => toast(`启动失败：${err.message}`, true));
 export const __hooks = {
   state,
   hydrateTasks,
+  confirmDeleteNotebook,
   stateWord,
   toast,
   consumeSse,

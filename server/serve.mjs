@@ -825,6 +825,23 @@ const server = http.createServer(async (req, res) => {
           active: true,
         });
       }
+      /*
+       * 第十八轮的守卫只认回合，认不出**分身**（第十九轮之后 GET /tasks 能翻出记录，
+       * 这个盲区才看得见）：回合派完后台任务就正常收尾，任务还 running——此刻删除照样 200。
+       * 目录没了，任务还在跑；它一结束 _finish 就往 jobs/ 写盘（mkdirSync recursive），
+       * 删掉的学习从盘上复活成一个只有任务记录的鬼目录（探针 20-A 实测：鬼目录 +
+       * GET /tasks 200 带数据 + 体检 ok=true）。删除的承诺要兑给所有还在动手的活，
+       * 不只兑给回合。reason=task-active 让前端分流（回合与分身各说各的话）。
+       */
+      const liveTasks = taskRunner.list({ notebookId: id }).filter((t) => t.status === 'running');
+      if (liveTasks.length) {
+        return sendJson(res, 409, {
+          error: `这个学习还有 ${liveTasks.length} 个后台任务在跑，先停掉或等它们结束再删除。`,
+          reason: 'task-active',
+          active: true,
+          tasks: liveTasks.map((t) => ({ id: t.id, title: t.title })),
+        });
+      }
       return sendJson(res, 200, store.deleteNotebook(id));
     }
 
@@ -1341,11 +1358,17 @@ const server = http.createServer(async (req, res) => {
     m = /^\/api\/notebooks\/([^/]+)\/tasks$/.exec(pathname);
     if (m && method === 'GET') {
       const id = decodeURIComponent(m[1]);
+      // :id 不能只当装饰（与第十九轮 stop 同一条纪律）：以前这一口不看学习存不存在，
+      // 删掉的本被分身复活成鬼目录后，GET /tasks 照样 200 往外吐记录，而 GET 整本回 404——
+      // 同一个 id 一半认得一半不认得（split-brain）。存在性判据与 assertExists 同源：
+      // 没有 notebook.json 就不算一本学习，光有目录（只有 jobs/）不算。
+      if (!store.notebookExists(id)) return sendJson(res, 404, { error: '学习不存在' });
       return sendJson(res, 200, { tasks: taskRunner.list({ notebookId: id }) });
     }
     m = /^\/api\/notebooks\/([^/]+)\/tasks\/([^/]+)\/stop$/.exec(pathname);
     if (m && method === 'POST') {
       const id = decodeURIComponent(m[1]);
+      if (!store.notebookExists(id)) return sendJson(res, 404, { error: '学习不存在' });
       const taskId = decodeURIComponent(m[2]);
       // :id 不能只当装饰：第十九轮探针 19-D 实测，A 本发这条请求真把 B 本的任务停了（200）。
       // 归属校验交给 TaskRunner.stop（守卫长在动手的那一侧，与第十八轮删除守卫同一条纪律），
