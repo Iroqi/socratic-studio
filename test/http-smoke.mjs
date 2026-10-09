@@ -1193,6 +1193,130 @@ try {
     check('受门管的这条（tasks）对活学习照旧 200（拆重复门没把功能拆掉）',
       aliveB24.status === 200, `status=${aliveB24.status}`);
   }
+
+  /*
+   * ── 25. 身份与元数据：PATCH 走白名单，读侧说的地址一定打得开（第二十二轮）
+   *
+   * 探针 22-A 实测过修复前的形状：`PATCH /api/notebooks/:id` 把整个请求体原样并进
+   * notebook.json，一条请求就能改掉这本学习的身份（id）、清掉它的身份（id:null →
+   * 从列表消失而 GET 照旧 200）、塞进任意键（junkKey / activeModel / credentials），
+   * 甚至发一个字符串体也能把 "0":"h","1":"e" 这种字符键写进元数据。
+   * 参照物是同一族门口径不一：/api/settings 与 /api/config/import 都白名单清洗过，
+   * 唯独这条"离用户最近"的边（重命名天天在点）没有；而读侧又信盘上那行 meta.id，
+   * 两边一错开，列表就发出点进去 400 / 404 的地址。
+   */
+  {
+    const nb25 = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ title: '元数据探针', topic: '正则表达式' }) })).data.notebook.id;
+    const meta25 = () => JSON.parse(fs.readFileSync(path.join(dataDir, 'notebooks', nb25, 'notebook.json'), 'utf8'));
+
+    const renamed25 = await jfetch(`${BASE}/api/notebooks/${nb25}`, { method: 'PATCH', headers: H, body: JSON.stringify({ title: '真的改了个名' }) });
+    check('改标题照常落盘（白名单不许把正事挡掉）',
+      renamed25.status === 200 && renamed25.data?.notebook?.title === '真的改了个名' && meta25().title === '真的改了个名',
+      `status=${renamed25.status}`);
+
+    const idHijack = await jfetch(`${BASE}/api/notebooks/${nb25}`, { method: 'PATCH', headers: H, body: JSON.stringify({ id: 'somebody-else' }) });
+    check('改身份这条路不存在：盘上 id 仍是目录名（一次 PATCH 不能把这本变成别人）',
+      idHijack.status === 200 && meta25().id === nb25, `落盘 id=${meta25().id}`);
+    check('返回体里的 id 也是地址（前端拿它当后续请求的键，不能是别人）',
+      idHijack.data?.notebook?.id === nb25, `返回 id=${idHijack.data?.notebook?.id}`);
+
+    const wipeId = await jfetch(`${BASE}/api/notebooks/${nb25}`, { method: 'PATCH', headers: H, body: JSON.stringify({ id: null, title: '还在的标题' }) });
+    const listed25 = (await jfetch(`${BASE}/api/notebooks`)).data.notebooks;
+    check('抹掉身份抹不掉这本（列表发的地址一定打得开——22-A 实测修复前它从列表消失）',
+      wipeId.status === 200 && listed25.some((n) => n.id === nb25), `列表含它=${listed25.some((n) => n.id === nb25)}`);
+    check('按列表给的地址取整本取得到（同一句话，不是 404）',
+      (await jfetch(`${BASE}/api/notebooks/${nb25}`)).status === 200);
+
+    const junk = await jfetch(`${BASE}/api/notebooks/${nb25}`, { method: 'PATCH', headers: H, body: JSON.stringify({
+      title: '清垃圾', anything: { nested: [1, 2, 3] }, activeModel: 'evil/x', credentials: { deepseek: 'sk-look-alike' }, topic: '顺手改主题',
+    }) });
+    const metaKeys = Object.keys(meta25()).sort().join(',');
+    check('垃圾键一个都进不了元数据（settings/config/import 同族门口径，这条不能例外）',
+      junk.status === 200
+      && !('anything' in meta25()) && !('activeModel' in meta25()) && !('credentials' in meta25()),
+      `落盘键=${metaKeys}`);
+    check('topic 不在白名单（建本时定过一次，之后改它走对话，不走这条）',
+      meta25().topic === '正则表达式', `topic=${meta25().topic}`);
+
+    // 列表给出去的字段要跟着体检对上：垃圾键既进不了盘，也就进不了导出包
+    const bundle25 = (await jfetch(`${BASE}/api/notebooks/${nb25}/export`)).data;
+    check('导出包里也没有垃圾键（脏数据不随备份旅行到别的机器）',
+      !('credentials' in (bundle25.files?.['notebook.json'] || {})) && bundle25.source?.id === nb25,
+      `source.id=${bundle25.source?.id}`);
+
+    /*
+     * 手改盘上那一行（旧数据 / 人手改盘的形状）：新写的 PATCH 已经改不动 id 了，
+     * 所以"读侧到底取哪一个"这件事只能这样造出来验。变异 m8（source.id 取回 meta.id）
+     * 在第一版这里照样绿——因为那时盘上那行还等于地址，两个来源说得同一句话，
+     * 那条钉子其实只会点头。分家之后再问一遍，才是真的在问。
+     */
+    const driftOnDisk = (v) => fs.writeFileSync(path.join(dataDir, 'notebooks', nb25, 'notebook.json'),
+      JSON.stringify({ ...meta25(), id: v }, null, 2));
+    driftOnDisk('somebody-else');
+    const listedDrift = (await jfetch(`${BASE}/api/notebooks`)).data.notebooks;
+    check('盘上那行改了名，列表发的仍是目录（读侧不跟着盘上漂）',
+      listedDrift.some((n) => n.id === nb25 && n.title === '清垃圾'),
+      listedDrift.map((n) => `${n.id}(${n.title})`).join(','));
+    check('导出包的 source.id 也是地址（备份带去别的机器，那边只有目录名对得上）',
+      (await jfetch(`${BASE}/api/notebooks/${nb25}/export`)).data.source?.id === nb25,
+      '导出包开始把盘上那行当身份发出去了');
+    driftOnDisk(null);
+    const listedNull = (await jfetch(`${BASE}/api/notebooks`)).data.notebooks;
+    check('盘上那行是 null 也不从列表消失（地址来自目录——22-A 修复前它就这样隐身）',
+      listedNull.some((n) => n.id === nb25 && n.title === '清垃圾'),
+      listedNull.map((n) => `${n.id}(${n.title})`).join(','));
+    check('隐身的那本按地址照样取得到（GET 200，返回体里的 id 是地址）',
+      (await jfetch(`${BASE}/api/notebooks/${nb25}`)).data?.notebook?.id === nb25,
+      'GET 开始回盘上那行了');
+    // 那行整个不存在（第三种形状：字段缺，不是值错）
+    const noIdKey = { ...meta25() };
+    delete noIdKey.id;
+    fs.writeFileSync(path.join(dataDir, 'notebooks', nb25, 'notebook.json'), JSON.stringify(noIdKey, null, 2));
+    check('盘上压根没写 id 的那本也在列表里（三种形状一个口径）',
+      (await jfetch(`${BASE}/api/notebooks`)).data.notebooks.some((n) => n.id === nb25 && n.title === '清垃圾'),
+      '列表又开始按那行字段收人了');
+    const healthDrift = (await jfetch(`${BASE}/api/health`)).data;
+    check('体检把这一处分家点名（隐身修好了不等于没这回事）',
+      (healthDrift.identityDrift || []).some((d) => d.notebook === nb25 && d.metaId === null),
+      JSON.stringify(healthDrift.identityDrift || []));
+    driftOnDisk(nb25);
+    check('补回地址之后体检不再点名（判据跟着盘上事实走，不是历史清单）',
+      !((await jfetch(`${BASE}/api/health`)).data.identityDrift || []).some((d) => d.notebook === nb25),
+      '错位清不掉——报告变成历史清单了');
+
+    // 非对象请求体：这一族门以前各说各话（/api/settings 字符串体 500、数组体 200 静默吞）
+    for (const [label, bodyText] of [['字符串体', '"hello"'], ['数组体', '["a","b"]'], ['null 体', 'null'], ['数字体', '42']]) {
+      const r = await jfetch(`${BASE}/api/notebooks/${nb25}`, { method: 'PATCH', headers: H, body: bodyText });
+      check(`PATCH ${label} 给 400（不再把字符键写进元数据，也不再抛未捕获异常）`,
+        r.status === 400, `status=${r.status} body=${JSON.stringify(r.data)}`);
+    }
+    check('非对象体之后元数据没被写过（400 是拒了，不是收了再说错）',
+      meta25().title === '清垃圾' && !('0' in meta25()), `落盘键=${Object.keys(meta25()).join(',')}`);
+
+    // 同一道收口管到全族：/api/settings 那条字符串体以前是 500
+    const settingsStr = await fetch(`${BASE}/api/settings`, { method: 'PUT', headers: H, body: '"oops"' });
+    check('PUT /api/settings 字符串体也是 400（以前 500：Cannot use in operator）',
+      settingsStr.status === 400, `status=${settingsStr.status}`);
+    const settingsArr = await fetch(`${BASE}/api/settings`, { method: 'PUT', headers: H, body: '[1,2]' });
+    check('PUT /api/settings 数组体同样 400（以前 200 静默吞掉一次请求）',
+      settingsArr.status === 400, `status=${settingsArr.status}`);
+
+    // 形状不合法的目录（探针 22-E）：列表不许发一张点进去 400 的地址
+    const weird25 = 'c:d';
+    fs.mkdirSync(path.join(dataDir, 'notebooks', weird25), { recursive: true });
+    fs.writeFileSync(path.join(dataDir, 'notebooks', weird25, 'notebook.json'),
+      JSON.stringify({ id: weird25, title: '形状不合法的一本', createdAt: '2026-10-09T00:00:00.000Z', updatedAt: '2026-10-09T00:00:00.000Z' }, null, 2));
+    const listWeird = (await jfetch(`${BASE}/api/notebooks`)).data.notebooks;
+    check('非法形状的目录不进列表（22-E：列表发它 = 发一张点进去 400 的链接）',
+      !listWeird.some((n) => n.id === weird25), listWeird.map((n) => n.id).join(','));
+    const healthWeird = (await jfetch(`${BASE}/api/health`)).data;
+    check('体检仍然数得着它（不列表 ≠ 不存在——盘上这一处该被看见）',
+      healthWeird.ghostDirs.some((g) => g.notebook === weird25) || (healthWeird.unaddressableDirs || []).some((g) => g.notebook === weird25),
+      `ghostDirs=${JSON.stringify(healthWeird.ghostDirs)} 不可寻址=${JSON.stringify(healthWeird.unaddressableDirs || [])}`);
+    fs.rmSync(path.join(dataDir, 'notebooks', weird25), { recursive: true, force: true });
+
+    await jfetch(`${BASE}/api/notebooks/${nb25}`, { method: 'DELETE' });
+  }
 } finally {
   server.kill();
   await sleep(400);

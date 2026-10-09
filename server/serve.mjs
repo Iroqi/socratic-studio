@@ -216,13 +216,28 @@ async function readBody(req, limitBytes = 25 * 1024 * 1024) {
   }
   if (!chunks.length) return {};
   const raw = Buffer.concat(chunks).toString('utf8');
+  let parsed;
   try {
-    return JSON.parse(raw);
+    parsed = JSON.parse(raw);
   } catch {
     const err = new Error('请求体不是合法 JSON');
     err.status = 400;
     throw err;
   }
+  /*
+   * 请求体必须是 JSON 对象（第二十二轮）。这一道收口以前不在：全仓 18 个调用点都只按
+   * `body.xxx` 取值，却没有一处问过"body 到底是不是对象"，于是每条边各说各话——
+   * 字符串体喂给 `key in body` 抛未捕获 TypeError（500），喂给 `{...meta, ...body}`
+   * 把 "0":"h","1":"e" 这种字符键写进元数据（200），数组体被静默吞掉。
+   * 与其在 18 个地方各补一句（第二十一轮的教训：门长在逐条边上就是没长），
+   * 在唯一的读口收一次。合法的空体仍走上面那条 `return {}`，不受影响。
+   */
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    const err = new Error('请求体必须是 JSON 对象');
+    err.status = 400;
+    throw err;
+  }
+  return parsed;
 }
 
 function serveStatic(req, res, pathname) {

@@ -3723,6 +3723,19 @@ function renderBackupPanel(body) {
      */
     const ghosts = Array.isArray(report.ghostDirs) ? report.ghostDirs : [];
     if (ghosts.length) issues.push(`鬼目录 ${ghosts.length} 处（只有任务记录、没有 notebook.json，不算一本学习）`);
+    /*
+     * 身份这笔账（第二十二轮）：一本学习的地址是它的目录名，盘上 notebook.json 里那行 id
+     * 只是留档。两件事都要看得见：
+     * ① 目录名形状不合法（路由那道门先过 safeId，这种目录一律 400）——里面那份 notebook.json
+     *    是本应用打不开的死数据，所以它不进本数、也不进列表（列表不许发点不开的行）；
+     * ② 盘上那行 id 与目录名分家——现在读侧以地址为准，界面不会再被带偏，但这一处多半是
+     *    人手改过盘留下的，改回去之前它该被看见。
+     * 都不给"一键修"的键：改盘上那行 id 或删目录都是动数据，由人拍板（下一次写入会自己对齐）。
+     */
+    const unaddressable = Array.isArray(report.unaddressableDirs) ? report.unaddressableDirs : [];
+    if (unaddressable.length) issues.push(`打不开的目录 ${unaddressable.length} 处（名字不合本应用的规矩，不算一本学习）`);
+    const drift = Array.isArray(report.identityDrift) ? report.identityDrift : [];
+    if (drift.length) issues.push(`盘上写的 id 与目录名对不上 ${drift.length} 处（地址以目录名为准，那一行只是留档）`);
     // 已修复文件的存证（第十八轮）：原件被下一次原子写治好后 corruptFiles 清空，
     // 但 `.corrupt-*` 副本还在盘上。过去这条下载口只认"当下还坏着"的清单，治好了就查无实据——
     // 人最想看"当时坏成什么样"的时刻，恰恰是修好之后。台账按盘上事实列，不看原件坏不坏。
@@ -3798,6 +3811,14 @@ function renderBackupPanel(body) {
     if (ghosts.length) {
       const names = ghosts.slice(0, 3).map((g) => `${g.notebook}/（${(g.contents || []).join('、') || '空'}）`).join('、');
       healthResult.append(el('div', 'health-list', `鬼目录：${names}${ghosts.length > 3 ? '…' : ''}——确认没有要留的东西后再手动删掉这个目录。`));
+    }
+    if (unaddressable.length) {
+      const names = unaddressable.slice(0, 3).map((g) => `${g.notebook}/（${(g.contents || []).join('、') || '空'}）`).join('、');
+      healthResult.append(el('div', 'health-list', `打不开的目录：${names}${unaddressable.length > 3 ? '…' : ''}——名字里有本应用不许的字符，所以进不了列表；里面的东西还在盘上，要留就自己挪走。`));
+    }
+    if (drift.length) {
+      const names = drift.slice(0, 3).map((d) => `${d.notebook}（盘上写着 ${JSON.stringify(d.metaId)}）`).join('、');
+      healthResult.append(el('div', 'health-list', `身份对不上：${names}${drift.length > 3 ? '…' : ''}——访问这一本用的是目录名，盘上那一行改不改都不影响打开它。`));
     }
     if (report.orphanArtifacts.length) {
       const names = report.orphanArtifacts.slice(0, 3).map((a) => `${a.notebook}/${a.id}`).join('、');

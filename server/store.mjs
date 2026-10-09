@@ -139,14 +139,51 @@ function emptyChat() {
 
 // ---------------------------------------------------------------- notebook CRUD
 
+/**
+ * 一本学习的**身份只有一个来源：目录名**。
+ *
+ * 第二十二轮之前它有两个来源：动手的一侧（路由与 store 的 assertExists →
+ * notebooks/<目录名>）用目录名，对外报身份的一侧（列表 / GET 整本 / 导出包）用盘上
+ * `notebook.json` 里那行 `meta.id`。写侧 PATCH 又把整个请求体原样并进 meta，于是那行
+ * 字段可以被任意改写——两边一错开，界面就拿到一个打不开的地址（探针 22-A/22-C/22-E/22-H
+ * 实测）：改成别人的名字 → 列表两行同一个 id，点哪行开的都是同一本；改成 null → 这本从
+ * 列表消失而 GET 照旧 200；目录名形状不合法 → 列表照发，点进去 400。
+ *
+ * 现在读侧一律以地址为准，meta.id 只是留档；写侧每次经过 touchNotebook 都被补回地址，
+ * 盘上漂了的旧数据下一次写入就自己对齐（体检也会把没对齐的那处点名）。
+ */
+const META_TITLE_MAX = 120;
+
+/**
+ * 元数据写口的白名单清洗（第二十二轮）。守卫站在动手这一侧，不站在按钮那一侧——
+ * 与第十八轮的删除守卫同一条纪律：路由传进来什么不重要，落盘的是清洗后的那一份。
+ * title 之外的字段一概不动：topic/goal/learner 是建本时定过的，之后改它们走对话
+ * （CLARIFY 是老师的事），不有一条 UI 通道该绕过它去写 meta。
+ */
+function sanitiseMetaPatch(patch) {
+  const clean = {};
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return clean;
+  if (typeof patch.title === 'string') {
+    const title = patch.title.trim().slice(0, META_TITLE_MAX);
+    if (title) clean.title = title;
+  }
+  return clean;
+}
+
 export function listNotebooks() {
   if (!fs.existsSync(NOTEBOOKS_DIR)) return [];
   const out = [];
   for (const name of fs.readdirSync(NOTEBOOKS_DIR)) {
     const file = path.join(NOTEBOOKS_DIR, name, NOTEBOOK_FILE);
     if (!fs.existsSync(file)) continue;
+    /*
+     * 不可寻址的目录不进列表（探针 22-E）：路由那道总门先过 safeId，形状不合法的 id 一律 400，
+     * 所以把这种目录发给前端等于发一张点不开的行。它不是"不存在"——体检单独点名它
+     * （unaddressableDirs），这一处该由人看一眼。
+     */
+    if (!safeId(name)) continue;
     const meta = readJsonSafe(file, null);
-    if (!meta?.id) continue;
+    if (!meta) continue;
     const progress = readJsonSafe(path.join(NOTEBOOKS_DIR, name, PROGRESS_FILE), emptyProgress());
     const graph = readJsonSafe(path.join(NOTEBOOKS_DIR, name, GRAPH_FILE), null);
     let messageCount = 0;
@@ -164,7 +201,10 @@ export function listNotebooks() {
       }
     }
     out.push({
-      id: meta.id,
+      // 身份取自目录名，不取自 meta.id（第二十二轮）：这一行的 id 就是前端接下来要打的地址，
+      // 它必须打得开。盘上那行字段只是留档，漂了也不能把地址带偏（探针 22-C 实测：
+      // 两本撞同一个 meta.id 时列表发的是同一个地址，点哪一行开的都是同一本）。
+      id: name,
       title: meta.title || '未命名',
       topic: graph?.meta?.topic || meta.topic || '',
       createdAt: meta.createdAt,
@@ -186,7 +226,9 @@ export function createNotebook({ title, topic, goal, background, pace }) {
   const now = new Date().toISOString();
   const meta = {
     id,
-    title: title || topic || '新学习',
+    // 标题在这里就收口（探针 22-D）：导入侧一直 clamp 到 120，建本与改名不 clamp，
+    // 同一份数据三条路三个口径。前端 maxLength=120 只是挡住了那条 UI，挡不住接口。
+    title: String(title || topic || '新学习').trim().slice(0, META_TITLE_MAX),
     topic: topic || '',
     goal: goal || null,
     learner: { background: background || null, pace: pace || 'normal' },
@@ -220,6 +262,11 @@ export function getNotebook(id) {
   const artifacts = listArtifacts(id);
   return {
     ...meta,
+    // 地址覆盖盘上那行字段（第二十二轮）：调用方拿这份 notebook 之后要做的事——前端把它当
+    // 后续请求的键、agent 与分身拿 notebook.id 当落盘键（saveArtifact / appendPatch /
+    // appendDecisionJournal / spawnSubagent）——全部必须落在这一本自己家里。探针 22-H 实测：
+    // 两本的 meta.id 撞名时，以列表给的地址动手，账会写进别人家目录。
+    id,
     graph,
     progress,
     patches,
@@ -240,7 +287,9 @@ export function getNotebook(id) {
 export function touchNotebook(id, patch = {}) {
   const dir = assertExists(id);
   const meta = readJsonSafe(path.join(dir, NOTEBOOK_FILE), {});
-  const next = { ...meta, ...patch, updatedAt: new Date().toISOString() };
+  // 落盘的是清洗后的那一份（sanitiseMetaPatch 的注释里写了为什么守卫在这一侧）。
+  // id 由这里补回地址：盘上漂了的旧数据不需要人手工修，下一次写入自己对齐。
+  const next = { ...meta, ...sanitiseMetaPatch(patch), id, updatedAt: new Date().toISOString() };
   writeJsonAtomic(path.join(dir, NOTEBOOK_FILE), next);
   return next;
 }
@@ -881,7 +930,9 @@ export function exportNotebook(id) {
     format: EXPORT_FORMAT,
     version: EXPORT_VERSION,
     exportedAt: new Date().toISOString(),
-    source: { id: meta.id || id, title: meta.title || null, topic: meta.topic || null },
+    // source.id 也报地址：备份是带到别的机器去的东西，那里没有"这一本的 meta 写着什么"
+    // 可问，只有目录名对得上。探针 22-D 实测：修复前垃圾键与改掉的身份一起随导出旅行。
+    source: { id, title: meta.title || null, topic: meta.topic || null },
     files,
     uploads,
     artifacts,
@@ -1128,6 +1179,10 @@ export function healthCheck() {
   const orphanArtifacts = [];
   const missingHtml = [];
   const ghostDirs = [];
+  // 第二十二轮新增两笔账：目录名形状不合法（本应用打不开的那份 notebook.json）
+  // 与"盘上那行 id 与地址分家"。
+  const unaddressableDirs = [];
+  const identityDrift = [];
   let notebooks = 0;
   if (fs.existsSync(NOTEBOOKS_DIR)) {
     for (const id of fs.readdirSync(NOTEBOOKS_DIR)) {
@@ -1157,7 +1212,34 @@ export function healthCheck() {
         ghostDirs.push({ notebook: id, contents: entries.slice(0, 8) });
         continue;
       }
+      /*
+       * 不可寻址的目录（探针 22-E，第二十二轮）：路由那道总门先过 safeId，形状不合法的
+       * id 一律 400，所以这种目录里那份 notebook.json 是本应用永远打不开的死数据。
+       * 它不进本数（数成一本书 = 假装它打得开），单独点名，并进 ok——与鬼目录同一条口径：
+       * 此刻盘上真存在着一处不该存在的东西，报了却没人需要管就是白报。
+       */
+      if (!safeId(id)) {
+        let entries2 = [];
+        try {
+          entries2 = fs.readdirSync(dir);
+        } catch {
+          /* 同上 */
+        }
+        unaddressableDirs.push({ notebook: id, contents: entries2.slice(0, 8) });
+        continue;
+      }
       notebooks += 1;
+
+      /*
+       * 身份错位（探针 22-C）：盘上 notebook.json 里写的 id 与目录名分家。修复前读侧信的是
+       * 那行字段，错位会让列表发一张打不开的链接（点进去 400 / 404，或点开别人的那本）。
+       * 现在读侧一律以目录名为地址，所以错位不再让界面坏掉——但它是盘上一处该看一眼的事实
+       * （多半被人手改过盘，或旧数据），点名它，等下一次 touchNotebook 自己对齐。
+       */
+      const metaForDrift = readJsonSafe(path.join(dir, NOTEBOOK_FILE), null);
+      if (metaForDrift && metaForDrift.id !== id) {
+        identityDrift.push({ notebook: id, metaId: typeof metaForDrift.id === 'string' ? metaForDrift.id : null });
+      }
 
       for (const name of HEALTH_FILES) {
         const f = path.join(dir, name);
@@ -1217,7 +1299,9 @@ export function healthCheck() {
   return {
     // 鬼目录进 ok：它是此刻盘上真存在着的一处不该存在的东西（不像证据台账那样只是往事）。
     // 不进 ok 就等于"报了但没人需要管"，而这正是探针 20-A 抓到它时它的样子。
-    ok: corruptFiles.length === 0 && orphanArtifacts.length === 0 && missingHtml.length === 0 && ghostDirs.length === 0,
+    // 不可寻址的目录与身份错位同理进 ok（第二十二轮）：都是此刻盘上的事实，不是往事。
+    ok: corruptFiles.length === 0 && orphanArtifacts.length === 0 && missingHtml.length === 0
+      && ghostDirs.length === 0 && unaddressableDirs.length === 0 && identityDrift.length === 0,
     dataDir: DATA_DIR,
     notebooks,
     corruptFiles,
@@ -1225,6 +1309,8 @@ export function healthCheck() {
     orphanArtifacts,
     missingHtml,
     ghostDirs,
+    unaddressableDirs,
+    identityDrift,
     quarantined,
   };
 }

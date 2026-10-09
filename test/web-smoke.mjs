@@ -4358,6 +4358,52 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   st37.notebook = sampleNotebook();
 }
 
+// ─── 38. 身份这笔账看得见：体检面板点名"打不开的目录"与"盘上 id 对不上"（第二十二轮）
+{
+  console.log('\n38. 体检面板接住身份这两笔新账（写了没人读=没写）');
+  const st38 = appModule.__hooks.state;
+  const errsBefore38 = errors.length;
+  st38.panelTab = 'learn';
+  appModule.__hooks.renderPanel();
+  const row38 = deepAll(doc.getElementById('panelBody'), 'backup-row')
+    .find((r) => Array.from(r.children).some((b) => b.textContent === '体检数据'));
+  check('备份区那颗「体检数据」还在（这一节靠它，别改了名字就把钉子架空）', Boolean(row38));
+
+  responses.set('GET /api/health', () => json({
+    ok: false, dataDir: '/tmp/x', notebooks: 2,
+    corruptFiles: [], corruptEvidence: [], orphanArtifacts: [], missingHtml: [], quarantined: 0,
+    ghostDirs: [],
+    unaddressableDirs: [{ notebook: 'a:b', contents: ['notebook.json'] }],
+    identityDrift: [{ notebook: 'topic-x-000001', metaId: 'topic-y-999999' }],
+  }));
+  Array.from(row38.children).find((b) => b.textContent === '体检数据').onclick();
+  await new Promise((r) => setTimeout(r, 30));
+  const hr38 = deepAll(doc.getElementById('panelBody'), 'health-result')[0];
+  check('面板点名打不开的目录（不进列表 ≠ 不存在，盘上这一处要看得见）',
+    hr38.textContent.includes('打不开的目录 1 处') && hr38.textContent.includes('a:b'), hr38.textContent);
+  check('面板点名身份对不上（带目录名与盘上那行值——取证要能定位到具体哪一本）',
+    hr38.textContent.includes('topic-x-000001') && hr38.textContent.includes('topic-y-999999'), hr38.textContent);
+  check('不说一键修：改盘上那行与删目录都是动数据，由人拍板',
+    !deepAll(hr38, 'btn').some((b) => /修好|一键|删掉这本|对齐身份/.test(b.textContent)),
+    deepAll(hr38, 'btn').map((b) => b.textContent).join(' | '));
+  // 面板那句汇总不许说"一切正常"——新字段进了 ok 却不进这句话就是白报
+  check('有新账时汇总行不许说"一切正常"（口径与 ghostDirs 那条一致）',
+    !hr38.textContent.includes('一切正常'), hr38.textContent);
+
+  // 老服务（报告里没有这两个键）：面板照常出结论，不炸
+  responses.set('GET /api/health', () => json({
+    ok: true, dataDir: '/tmp/x', notebooks: 1,
+    corruptFiles: [], corruptEvidence: [], orphanArtifacts: [], missingHtml: [], quarantined: 0,
+    ghostDirs: [],
+  }));
+  Array.from(row38.children).find((b) => b.textContent === '体检数据').onclick();
+  await new Promise((r) => setTimeout(r, 30));
+  check('老报告缺这两个字段时兜住（读取要容错，不许把面板炸掉）',
+    hr38.textContent.includes('一切正常') && errors.length === errsBefore38,
+    `${hr38.textContent} | ${errors.slice(errsBefore38).join(' | ')}`);
+  check('这一节无异常', errors.length === errsBefore38, errors.slice(errsBefore38).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

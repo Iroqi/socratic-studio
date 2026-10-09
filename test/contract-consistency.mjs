@@ -838,6 +838,119 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     gateDoc ? gateDoc[0].replace(/\n+/g, ' ').slice(0, 200) : '找不到这一节');
 }
 
+// ──────────────────────────────── 身份只有一个来源：地址是目录名（第二十二轮）
+//
+// 上一轮那道门管的是"这本还在不在"，没人管"这一本是谁"：动手的一侧用目录名
+// （assertExists → notebooks/<URL 那个 id>），报身份的一侧用盘上那行 meta.id
+// （列表每行 / GET 整本 / 导出 source.id），而写侧 PATCH 把整个请求体原样并进 meta。
+// 探针 22-C 实测：一条 PATCH 让列表出现两行同一个 id，点哪行开的都是同一本；
+// 22-A 实测：id:null 让这本从列表消失而 GET 照旧 200；垃圾键随导出旅行。
+// 这一节的钉子全部对着**读侧取哪一个、写侧认哪几个键**，不认注释。
+{
+  const storeSrc22 = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8');
+  const webSrc22 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+
+  // 读侧：三处出口都必须说目录名那一个地址
+  const listFn22 = /export function listNotebooks\(\) \{[\s\S]*?\n\}/.exec(storeSrc22)?.[0] || '';
+  check('列表每行的 id 取自目录名（不是 meta.id——它是前端下一步要打的地址）',
+    /id: name,/.test(listFn22) && !/id: meta\.id,/.test(listFn22),
+    listFn22 ? listFn22.split('\n').filter((l) => /id: /.test(l)).join(' / ').slice(0, 160) : '找不到 listNotebooks');
+  const getFn22 = /export function getNotebook\(id\) \{[\s\S]*?\n\}/.exec(storeSrc22)?.[0] || '';
+  check('getNotebook 的返回体里地址覆盖盘上那行（agent 与 serve 拿 notebook.id 当落盘键，键必须是这一本自己）',
+    /\.\.\.meta,\n\s*\/\/[\s\S]{0,400}?id,/.test(getFn22) || /\.\.\.meta,[\s\S]{0,600}?\n    id,/.test(getFn22),
+    getFn22 ? getFn22.slice(getFn22.indexOf('return {'), getFn22.indexOf('return {') + 120).replace(/\s+/g, ' ') : '找不到 getNotebook');
+  const exportFn22 = /export function exportNotebook\(id\) \{[\s\S]*?\n\}/.exec(storeSrc22)?.[0] || '';
+  check('导出包的 source.id 是地址（备份带去别的机器，那边只有目录名对得上）',
+    /source: \{ id,/.test(exportFn22) && !/source: \{ id: meta\.id/.test(exportFn22),
+    exportFn22 ? (exportFn22.match(/source: \{[^}]*\}/) || [''])[0] : '找不到 exportNotebook');
+
+  // 写侧：白名单 + 地址回填，守卫站在动手那一侧
+  check('元数据写口只认 title（id/topic/goal/learner 与任意键一概不认——同族门口径，这条不许是例外）',
+    /function sanitiseMetaPatch\([\s\S]*?patch\.title[\s\S]*?\n\}/.test(storeSrc22)
+    && !/patch\.id|patch\.topic|patch\.goal|patch\.learner/.test(storeSrc22),
+    '写侧没有清洗，或者开始认 id/topic 了');
+  const touchFn22 = /export function touchNotebook\(id, patch = \{\}\) \{[\s\S]*?\n\}/.exec(storeSrc22)?.[0] || '';
+  check('touchNotebook 落的是清洗后的那一份，并把 id 补回地址（漂了的旧数据下一次写入自己对齐）',
+    /sanitiseMetaPatch\(patch\)/.test(touchFn22) && /\.\.\.sanitiseMetaPatch\(patch\), id,/.test(touchFn22)
+    && !/\.\.\.meta, \.\.\.patch/.test(touchFn22),
+    touchFn22 ? touchFn22.replace(/\s+/g, ' ').slice(0, 200) : '找不到 touchNotebook');
+  // 白名单本体逐条扫：判据要对着"清洗后的那一份"，不能整库里任意一处 clamp 过就算。
+  // 变异 m6（把 sanitiseMetaPatch 里的 slice 摘掉）原先被建本那一行的同类写法顶绿了——
+  // 那是另一条路的收口，替不了这一条。
+  const cleanBody22 = /function sanitiseMetaPatch\(patch\) \{[\s\S]*?\n\}/.exec(storeSrc22)?.[0] || '';
+  check('清洗本体里 title 既 trim 又限长（改名这条路的口径与建本/导入同一）',
+    /patch\.title\.trim\(\)\.slice\(0, META_TITLE_MAX\)/.test(cleanBody22),
+    cleanBody22 ? cleanBody22.replace(/\s+/g, ' ').slice(0, 200) : '找不到 sanitiseMetaPatch 本体');
+  check('建本时标题就收口（三条路一个口径：建本/改名/导入；前端 maxLength 挡不住接口）',
+    /String\(title \|\| topic \|\| '新学习'\)\.trim\(\)\.slice\(0, META_TITLE_MAX\)/.test(storeSrc22),
+    '建本这条路不再按同一个长度收口');
+  check('META_TITLE_MAX 与导入侧是同一个数（120），不各写各的',
+    /const META_TITLE_MAX = 120;/.test(storeSrc22) && /\.slice\(0, 120\)/.test(storeSrc22),
+    '两处标题上限不是同一个来源');
+
+  // 读口收体：18 个调用点各补一句 = 第 21 轮批评过的"门长在逐条边上"
+  check('请求体必须是 JSON 对象，收口在唯一的 readBody（不在各条边重复）',
+    /if \(!parsed \|\| typeof parsed !== 'object' \|\| Array\.isArray\(parsed\)\)/.test(serveSrc)
+    && /请求体必须是 JSON 对象/.test(serveSrc),
+    'readBody 没做对象收口');
+  check('除 readBody 外不许有第二条"是不是对象"的判断散在各条边上（一处兑现，18 条边自动受管）',
+    (serveSrc.match(/typeof parsed !== 'object'|typeof body !== 'object'/g) || []).length === 1,
+    '有路由自己补了一份，两处迟早分家');
+
+  // 不可寻址的目录：不进列表、不进本数，但必须在体检里看得见
+  const healthFn22 = /export function healthCheck\(\) \{[\s\S]*?\n\}/.exec(storeSrc22)?.[0] || '';
+  // 体检产出两笔新账：返回清单里有它们（第十九轮"只写不读"那个洞的形状），
+  // 并且两个长度都进了 ok 的判据——报了却不影响 ok 就是"报了但没人需要管"。
+  {
+    const returnList = /return \{\n[\s\S]{0,900}?\n  \};\n\}/.exec(healthFn22)?.[0] || '';
+    const okLine = /\n    ok:[\s\S]*?dataDir:/.exec(healthFn22)?.[0] || '';
+    check('体检的返回清单里有这两笔账（写了就得有人读得着）',
+      /unaddressableDirs,/.test(returnList) && /identityDrift,/.test(returnList),
+      returnList ? returnList.replace(/\s+/g, ' ').slice(0, 220) : '找不到 healthCheck 的 return');
+    check('两笔账都进 ok（报了却不影响 ok = 白报，与第二十轮鬼目录同一条口径）',
+      /ghostDirs\.length === 0 && unaddressableDirs\.length === 0 && identityDrift\.length === 0/.test(okLine),
+      okLine ? okLine.replace(/\s+/g, ' ').slice(0, 200) : '找不到 ok 那一句');
+  }
+  check('列表不发点不开的行：不可寻址的目录不进列表（safeId 不过就 continue）',
+    /if \(!safeId\(name\)\) continue;/.test(listFn22), '列表开始发打不开的地址了');
+  check('体检把不可寻址的目录排除在本数之外（数成一本书=假装它打得开）',
+    /if \(!safeId\(id\)\) \{[\s\S]{0,300}?unaddressableDirs\.push[\s\S]{0,60}?continue;\s*\}\s*notebooks \+= 1;/.test(healthFn22)
+    || /if \(!safeId\(id\)\)[\s\S]*?continue;[\s\S]*?notebooks \+= 1;/.test(healthFn22),
+    '本数开始把打不开的目录数进去了');
+  // 这一条对着"汇总行"那一处的形状，不对着全文里出现过这个词：明细行也写着同一句话，
+  // 只钉词的话汇总行被改掉照样绿（变异 m15 抓到的就是这个）。
+  check('前端把这两笔账接进汇总行（写了没人读=没写：第十九轮 jobs 那个洞的反面）',
+    /Array\.isArray\(report\.unaddressableDirs\)/.test(webSrc22) && /Array\.isArray\(report\.identityDrift\)/.test(webSrc22)
+    && /issues\.push\(`打不开的目录 \$\{unaddressable\.length\} 处/.test(webSrc22)
+    && /issues\.push\(`盘上写的 id 与目录名对不上 \$\{drift\.length\} 处/.test(webSrc22),
+    '汇总行没渲染这两笔账');
+  // 这一条否定的是"代码里长出一个会动盘的键"，不是"文档里出现这个词"——
+  // 注释里本来就要说明为什么不给这个键，连着注释一起禁就是自己钉自己。
+  // 面板上真的没有这种按钮由 web-smoke §38 从行为那一侧钉（读渲染出来的按钮文本）。
+  const webCode22 = webSrc22.split('\n')
+    .filter((l) => { const t = l.trim(); return !(t.startsWith('//') || t.startsWith('/*') || t.startsWith('*')); })
+    .join('\n');
+  check('不给"一键修"的键（改盘上那行与删目录都是动数据，由人拍板）',
+    !/一键修|修好身份|自动对齐/.test(webCode22), '面板长出了会动盘的键');
+
+  // README：钉语义不钉关键词（第十八轮 §4.1 与第二十一轮 m24 的同一类病）
+  const idDoc = /### 身份只有一个来源[\s\S]{0,3200}?(?=\n### |\n## )/.exec(readmeDoc);
+  check('README 写明两个来源各是谁、四个实测后果、以及"地址是目录名"这一句口径',
+    Boolean(idDoc) && /目录名/.test(idDoc[0]) && /meta\.id/.test(idDoc[0])
+    && /两行同一个 id/.test(idDoc[0]) && /从列表消失/.test(idDoc[0]) && /随导出旅行/.test(idDoc[0]),
+    idDoc ? idDoc[0].replace(/\n+/g, ' ').slice(0, 200) : '找不到这一节');
+  check('README 写明守卫站在动手那一侧（touchNotebook/sanitiseMetaPatch），不是"路由清洗过了"',
+    Boolean(idDoc) && /sanitiseMetaPatch/.test(idDoc[0]) && /守卫站在动手那一侧/.test(idDoc[0]),
+    idDoc ? '那一节没写守卫的位置' : '找不到这一节');
+  check('README 写明漂了的旧数据由下一次写入自己对齐 + 体检点名（不需要人手工修盘）',
+    Boolean(idDoc) && /identityDrift/.test(idDoc[0]) && /unaddressableDirs/.test(idDoc[0])
+    && /下一次写入/.test(idDoc[0]),
+    idDoc ? '那一节没写这两笔账' : '找不到这一节');
+  check('README 写明请求体收口在唯一读口（不逐条边补）',
+    Boolean(idDoc) && /readBody/.test(idDoc[0]) && /必须是 JSON 对象/.test(idDoc[0]),
+    idDoc ? '那一节没写这条收口' : '找不到这一节');
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;

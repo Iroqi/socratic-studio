@@ -22,7 +22,7 @@ const { checkTransition, runTurn, buildTools, TOOL_NAMES, seedArtifacts, normali
   await import('../server/agent.mjs');
 const store = await import('../server/store.mjs');
 const { crc32 } = await import('../server/zip.mjs');
-const { ensureDirs, NOTEBOOKS_DIR, notebookExists } = await import('../server/config.mjs');
+const { ensureDirs, NOTEBOOKS_DIR, notebookExists, safeId } = await import('../server/config.mjs');
 const { jevDecide, normalizeAnswers, validateQuestions, mergeJevConfig, panelDecisionOpts, buildDecisionFetch, jevPing, DecisionError } = await import('../server/decision.mjs');
 
 ensureDirs();
@@ -1747,6 +1747,118 @@ section('7f-4. task_artifact 必须说得出"我是谁家的分身" + notes 写�
   // 门没装上时这里会留下鬼目录（红-绿期间的第一手证据就是它），无论成败都清干净，
   // 别让它拖累后面 12c「健康目录体检报告 ok」——那是另一颗钉子的地盘。
   fs.rmSync(noteDir, { recursive: true, force: true });
+}
+
+// ─────────────────── 7f-5. 一本学习的身份要只有一个来源：地址是目录名，不是盘上那行 id（第二十二轮）
+
+section('7f-5. 身份只有一个来源：列表发的地址一定打得开，盘上的 id 只是资料');
+
+/*
+ * 探针 22-A / 22-C / 22-E / 22-H 的单元版。过去"这一本是谁"有两个来源：
+ * 路由与 store 动手时用的是**目录名**（assertExists → notebooks/<目录名>），
+ * 而列表、GET 整本、导出对外报的是**盘上 notebook.json 里的 meta.id**。
+ * 写侧 PATCH 又把整个请求体原样并进 meta，于是 meta.id 可以被任意改掉——两边一分家，
+ * 界面就拿到一个打不开的地址：
+ *   - 改成别人的名字 → 列表两行同一个 id，点哪一行开的都是同一本（B 的行点开是 A）；
+ *   - 改成 null → 这本从列表消失（listNotebooks 有 `if (!meta?.id) continue`），GET 整本照旧 200；
+ *   - 盘上目录名形状不合法（a:b）→ 列表照样发它，点进去 400；
+ *   - meta 里压根没写 id → 这本对列表隐身，按目录名却取得到。
+ * 现在的口径：**目录名就是身份**，meta.id 只是资料；列表只发打得开的地址。
+ */
+{
+  const idRoot = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks');
+  const dirOfName = (name) => path.join(idRoot, name);
+  const metaOf = (name) => JSON.parse(fs.readFileSync(path.join(dirOfName(name), 'notebook.json'), 'utf8'));
+
+  const ownA = store.createNotebook({ title: '正主', topic: '甲-topic', goal: null, pace: 'normal' }).id;
+  const ownB = store.createNotebook({ title: '邻居', topic: '乙-topic', goal: null, pace: 'normal' }).id;
+
+  // ① 改掉盘上的 id：地址不许跟着漂
+  const metaB = metaOf(ownB);
+  metaB.id = ownA;
+  fs.writeFileSync(path.join(dirOfName(ownB), 'notebook.json'), JSON.stringify(metaB, null, 2));
+  const rows = store.listNotebooks();
+  const rowB = rows.find((n) => n.title === '邻居');
+  check('列表给的地址就是这一本自己的目录（盘上 meta.id 冒充谁都不算）',
+    rowB?.id === ownB, `row.id=${rowB?.id} 目录=${ownB}`);
+  check('两本不会挤成同一个地址（列表里 id 不重复——撞名时点哪行开的都不是同一本）',
+    new Set(rows.map((n) => n.id)).size === rows.length,
+    rows.map((n) => `${n.id}(${n.title})`).join(','));
+  check('照列表给的地址取整本，取到的就是那一行（不是别人的）',
+    rowB && store.getNotebook(rowB.id).title === '邻居');
+  // ② GET 整本返回的 id 也要是地址：agent / serve 落盘用的就是这份 notebook.id
+  const fetchedB = store.getNotebook(ownB);
+  check('getNotebook 回的是地址（拿它当键写盘不会写进别人家）',
+    fetchedB.id === ownB, `返回 id=${fetchedB.id}`);
+  // ③ meta 里没写 id 的那本不许对列表隐身
+  const metaA = metaOf(ownA);
+  delete metaA.id;
+  fs.writeFileSync(path.join(dirOfName(ownA), 'notebook.json'), JSON.stringify(metaA, null, 2));
+  // 取证要按"哪一本"取：上面 ① 已经把 ownB 的盘上 id 写成 ownA，只查 id 在不在列表里
+  // 会被那颗冒名的行顶绿——这是一颗只会点头的钉子的形状（第二十一轮 m20 的同一种病）。
+  check('盘上没写 id 的学习照样在列表里（地址来自目录，不来自那行字段）',
+    store.listNotebooks().some((n) => n.id === ownA && n.title === '正主'),
+    store.listNotebooks().map((n) => `${n.id}(${n.title})`).join(','));
+  // ④ 形状不合法的目录不可寻址，就不该出现在列表里发一张点不开的链接
+  fs.mkdirSync(dirOfName('a:b'), { recursive: true });
+  fs.writeFileSync(path.join(dirOfName('a:b'), 'notebook.json'), JSON.stringify({ id: 'a:b', title: '形状不合法的一本' }));
+  const listed22 = store.listNotebooks();
+  check('非法形状的目录不进列表（列表不许发点进去 400 的地址）',
+    !listed22.some((n) => n.id === 'a:b'), listed22.map((n) => n.id).join(','));
+  // ⑤ 体检要把"盘上的 id 与地址分家"点名——修好之前它就是盘上一处该看一眼的事实
+  const drift = store.healthCheck().identityDrift || [];
+  check('体检点名身份错位（目录名 ≠ 盘上写的 id，含缺字段那种）',
+    drift.some((d) => d.notebook === ownB && d.metaId === ownA)
+    && drift.some((d) => d.notebook === ownA && (d.metaId === null || d.metaId === undefined)),
+    JSON.stringify(drift));
+  // ⑤b 本数只数打得开的（第二十轮 ghost 那条判据的同一形状：独立从盘上算一遍真值）
+  check('打不开的目录不充进本数（数成一本书=假装它打得开）',
+    store.healthCheck().notebooks === fs.readdirSync(idRoot).filter((name) =>
+      safeId(name) && fs.existsSync(path.join(idRoot, name, 'notebook.json'))).length,
+    JSON.stringify({ reported: store.healthCheck().notebooks }));
+  /*
+   * ⑤c 身份这一处要真的影响 ok——变异 m10（identityDrift 不进 ok）实测抓到过这里原本只会点头：
+   * 那一句 ok===false 是在 a:b 还挂着的时候打的，红的是不可寻址那笔账，错位进不进 ok 它都绿。
+   * 所以先把 a:b 摘掉，让盘上只剩身份这一处不该存在，再看 ok；然后把两边都对齐，看 ok 翻回来。
+   * 一红一绿两头都钉住，才是"进了 ok"，否则只是"报了但没人需要管"。
+   */
+  fs.rmSync(dirOfName('a:b'), { recursive: true, force: true });
+  const onlyDrift = store.healthCheck();
+  check('只剩身份这一处分家时 ok=false（报了却不影响 ok=白报——第二十轮的同一口径）',
+    (onlyDrift.unaddressableDirs || []).length === 0 && (onlyDrift.identityDrift || []).length > 0
+    && onlyDrift.ok === false,
+    JSON.stringify({ ok: onlyDrift.ok, drift: (onlyDrift.identityDrift || []).length, unaddr: (onlyDrift.unaddressableDirs || []).length }));
+  // ⑥ 把 meta.id 补回成地址之后：错位消失，列表与体检都说同一句话
+  const fixB = metaOf(ownB); fixB.id = ownB;
+  fs.writeFileSync(path.join(dirOfName(ownB), 'notebook.json'), JSON.stringify(fixB, null, 2));
+  const fixA = metaOf(ownA); fixA.id = ownA;
+  fs.writeFileSync(path.join(dirOfName(ownA), 'notebook.json'), JSON.stringify(fixA, null, 2));
+  check('对齐之后体检不再点名（错位的判据是盘上事实，不是永远挂着）',
+    !(store.healthCheck().identityDrift || []).some((d) => d.notebook === ownA || d.notebook === ownB),
+    JSON.stringify(store.healthCheck().identityDrift));
+  check('对齐之后 ok 翻回 true（这一处不是永远挂着，也不是只报不修）',
+    store.healthCheck().ok === true, JSON.stringify(store.healthCheck(), null, 1).slice(0, 300));
+  // ⑦ 三条写标题的路必须一个口径（探针 22-D：建本 5000 字照落、导入 clamp 到 120）
+  const longTitle = '相'.repeat(500);
+  const clampNb = store.createNotebook({ title: longTitle, topic: '口径', goal: null, pace: 'normal' });
+  check('建本时标题就收口（三条路一个口径，不是导入 clamp 建本不 clamp）',
+    clampNb.title.length === 120, `落盘长度=${clampNb.title.length}`);
+  store.touchNotebook(clampNb.id, { title: '又一段很长很长'.repeat(40) });
+  check('改名同样收口（touchNotebook 是第二条路）',
+    metaOf(clampNb.id).title.length === 120, `落盘长度=${metaOf(clampNb.id).title.length}`);
+  // ⑧ 盘上那行 id 不许把地址带进导出包（备份到别的机器，source.id 得是真地址）
+  const metaForExport = metaOf(ownB); metaForExport.id = 'imposter';
+  fs.writeFileSync(path.join(dirOfName(ownB), 'notebook.json'), JSON.stringify(metaForExport, null, 2));
+  check('导出包里的 source.id 是地址（不是盘上那行可以被人改掉的字段）',
+    store.exportNotebook(ownB).source.id === ownB, `source.id=${store.exportNotebook(ownB).source.id}`);
+  // 收尾把 ownB 的身份补回地址：别把一处故意造的错位留给后面 12c「健康目录体检报告 ok」——
+  // 那颗钉子报的是"整盘干净"，不是这一节的地盘。
+  const restoreB = metaOf(ownB); restoreB.id = ownB;
+  fs.writeFileSync(path.join(dirOfName(ownB), 'notebook.json'), JSON.stringify(restoreB, null, 2));
+
+  fs.rmSync(dirOfName('a:b'), { recursive: true, force: true });
+  fs.rmSync(dirOfName(clampNb.id), { recursive: true, force: true });
+  // 剩下两本留给后面的套件（12c 的"健康目录体检报告 ok"会把它们清掉前先对齐——上面 ⑥ 已对齐）
 }
 
 // ─────────────────────────────────────── 7g. 结构化笔记（compile_notes）
