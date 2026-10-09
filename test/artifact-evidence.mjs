@@ -160,8 +160,10 @@ try {
   const models = (await jfetch(`${BASE}/api/providers`)).data.availableModels || [];
   const fauxModel = models.find((m) => m.provider === 'faux').model;
   await jfetch(`${BASE}/api/settings`, { method: 'PUT', headers: H, body: JSON.stringify({ provider: 'faux', model: fauxModel }) });
-  await loadScript("SCRIPT1", SCRIPT1);
-  check('脚本装载成功', true);
+  const lr = await loadScript("SCRIPT1", SCRIPT1);
+  // 第二十三轮补的钉：原来这里写的是 check(..., true)——一条永真断言。
+  // 装载口到底认不认这份脚本，看它给的状态码，不是"调用没抛"就算过。
+  check('脚本装载口接受脚本（200）', lr.status === 200, `status=${lr.status} ${JSON.stringify(lr.data).slice(0, 120)}`);
 
   const Run = async (msg) => {
     const res = await fetch(`${BASE}/api/notebooks/${id}/turn`, {

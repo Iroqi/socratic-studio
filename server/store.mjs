@@ -56,6 +56,19 @@ class BadRequestError extends Error {
   }
 }
 
+/*
+ * 备份受阻（第二十三轮）：这一本的家底有缺口，导出拒绝出货。
+ * 状态用 409（与「这一本正在处理上一条」「回合进行中不许删」同一类：请求本身没错，
+ * 是资源此刻的状态不允许），不用 400——用户的点击没有问题，有问题的是盘上那份数据。
+ */
+class BackupBlockedError extends Error {
+  constructor(message, blockers) {
+    super(message);
+    this.status = 409;
+    this.blockers = blockers;
+  }
+}
+
 // ---------------------------------------------------------------- id helpers
 
 function newId(prefix = 'nb') {
@@ -609,6 +622,56 @@ export function replaceChat(id, messages) {
 const TEXT_EXT = new Set(['.md', '.markdown', '.txt', '.json', '.yaml', '.yml', '.csv', '.tsv', '.log', '.html', '.htm']);
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
 
+/*
+ * 一份素材"是什么"只在这里定义一次（第二十三轮）。
+ *
+ * 修复前这同一件事有三个口径：写侧（saveUpload）按图片/文本两档记，读侧（readUpload）
+ * 按图片/文本/二进制三档返回，导出**按写侧那两档**选编码——于是 .pdf / .mp3 落进
+ * `utf8` 分支，二进制被读成字符串（每个非法字节变成一个 U+FFFD，三个字节一个字符），
+ * 包里声明的 bytes 与实际解出的字节数对不上。探针 23-B 实测：12 字节的 PDF 进包出来 22 字节，
+ * 内容已是 `efbfbd…`；导入侧那道"字节数不符就拒绝"的守卫**正确地**拦下了它，
+ * 结果是一个附件让整本备份再也导不回去。
+ * 三处各写各的判断就是三处各错各的：现在只有这一个函数认扩展名，编码跟着 kind 走。
+ */
+function classifyUpload(name) {
+  const ext = path.extname(String(name || '')).toLowerCase();
+  if (IMAGE_EXT.has(ext)) return 'image';
+  if (TEXT_EXT.has(ext)) return 'text';
+  return 'binary';
+}
+
+/** 编码只有这一份推导：文本走 utf8（可读、可审、体积小），其余一律 base64（字节不重写）。 */
+function encodingFor(kind) {
+  return kind === 'text' ? 'utf8' : 'base64';
+}
+
+function dataFor(kind, buffer) {
+  return kind === 'text' ? buffer.toString('utf8') : buffer.toString('base64');
+}
+
+/**
+ * 包里的一个素材落成盘上的字节：编码只认 encoding 字段，其余一律拒绝（第二十三轮）。
+ *
+ * 判据只有一份——包体侧与落盘侧说同一句话。修复前这里"按 encoding 猜、猜不中就按 utf8 兜"，
+ * 对缺失或非字符串的 data 也照样兜出 Buffer.from('')，而字节数校验又被 `bytes > 0` 挡在门外，
+ * 于是 0 字节的素材在导入时被安静地跳过（探针 23-B：备份里有 2 条素材、新机盘上只有 1 个文件）。
+ * base64 要求规范化（解一遍再编回来必须与包里那串逐字符相同）：不规范的串解得出字节，
+ * 但那一串不是这份数据的唯一写法，落盘就成了"按导入器的脾气重写素材"。
+ */
+function decodeUploadBuffer(u) {
+  const label = u.name || u.rel || '';
+  const data = u.data === undefined ? '' : u.data;
+  if (typeof data !== 'string') throw new BadRequestError(`素材「${label}」的 data 必须是字符串（JSON 里装不下原始字节）`);
+  if (u.encoding !== 'utf8' && u.encoding !== 'base64') {
+    throw new BadRequestError(`素材「${label}」的 encoding 不认识：${String(u.encoding)}（只认 utf8 / base64）`);
+  }
+  const buffer = Buffer.from(data, u.encoding);
+  if (u.encoding === 'base64' && buffer.toString('base64') !== data) {
+    throw new BadRequestError(`素材「${label}」的 base64 不是规范写法（解出来再编回去不是原来那串）`);
+  }
+  return buffer;
+}
+
 export function saveUpload(id, filename, buffer) {
   const dir = assertExists(id);
   const safeName = path.basename(filename).replace(/[^\w.\-\u4e00-\u9fff]+/g, '_').slice(0, 120) || 'upload';
@@ -620,7 +683,7 @@ export function saveUpload(id, filename, buffer) {
     name: safeName,
     rel,
     bytes: buffer.length,
-    kind: IMAGE_EXT.has(path.extname(safeName).toLowerCase()) ? 'image' : 'text',
+    kind: classifyUpload(safeName),
     uploadedAt: new Date().toISOString(),
   };
   return record;
@@ -634,13 +697,12 @@ export function listUploads(id) {
     .map((name) => {
       const full = path.join(dir, name);
       const stat = fs.statSync(full);
-      const ext = path.extname(name).toLowerCase();
       return {
         id: name,
         name: name.replace(/^\d+-/, ''),
         rel: path.relative(notebookDir(id), full).replace(/\\/g, '/'),
         bytes: stat.size,
-        kind: IMAGE_EXT.has(ext) ? 'image' : 'text',
+        kind: classifyUpload(name),
         uploadedAt: stat.mtime.toISOString(),
       };    })
     .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
@@ -663,15 +725,18 @@ export function readUpload(id, relOrName) {
   const target = isWithin(base, direct) ? direct : byName;
   if (!target || !fs.existsSync(target)) throw new NotFoundError(`找不到素材 ${relOrName}`);
   const buffer = fs.readFileSync(target);
+  const name = path.basename(target);
+  // 读侧不再自己认扩展名（第二十三轮）：判据与写侧、导出侧同一份 classifyUpload。
   const ext = path.extname(target).toLowerCase();
-  if (IMAGE_EXT.has(ext)) {
+  const kind = classifyUpload(name);
+  if (kind === 'image') {
     const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
-    return { kind: 'image', mime, base64: buffer.toString('base64'), name: path.basename(target) };
+    return { kind, mime, base64: buffer.toString('base64'), name };
   }
-  if (TEXT_EXT.has(ext)) {
-    return { kind: 'text', text: buffer.toString('utf8').slice(0, 400_000), name: path.basename(target) };
+  if (kind === 'text') {
+    return { kind, text: buffer.toString('utf8').slice(0, 400_000), name };
   }
-  return { kind: 'binary', bytes: buffer.length, name: path.basename(target) };
+  return { kind: 'binary', bytes: buffer.length, name };
 }
 
 // ---------------------------------------------------------------- artifacts
@@ -867,7 +932,7 @@ const IMPORT_MAX_ARTIFACT_HTML_BYTES = 8 * 1024 * 1024;
 const IMPORT_MAX_MESSAGES = 20000;
 const IMPORT_MAX_NOTES = 2000;
 
-/** 只认这七份已知 JSON 文件；包里的其它键一律拒绝（路径穿越 / 未知文件混进包都不接）。 */
+/** 只认这八份已知 JSON 文件（notes.json 也在白名单里）；包里的其它键一律拒绝（路径穿越 / 未知文件混进包都不接）。 */
 const IMPORT_FILE_KEYS = new Set([
   NOTEBOOK_FILE,
   GRAPH_FILE,
@@ -886,12 +951,61 @@ function exportFileIfAny(dir, name) {
   return data === null ? null : data;
 }
 
+/*
+ * 备份前先问一句「家底有没有缺口」（第二十三轮）。返回缺口的名字清单，空清单=能备份。
+ *
+ * 为什么要它：修复前 exportFileIfAny 遇到坏 JSON 就返回 null，导出**安静地**少一份文件，
+ * 还照样 200。探针 23-B/23-D 实测两个后果：
+ *   - chat.json 坏了 → 包里没有它 → 拿去导入 400「必须是 { messages: [...] }」——
+ *     错了，但响，人至少知道这份备份导不回去；
+ *   - learning-graph.json 坏了 → 包里没有它 → 导入 201，新本概念数 = 0（源机本来有 1 个）。
+ *     **静默地丢掉了整本的结构**，还报成功——这是最坏的形状。
+ * 同一件事（一份该在的数据没进包）因为导入侧的厚薄不一而一半响一半不响，说明问题不在导入侧，
+ * 在导出侧那张"少一份也 200"的嘴上。守卫站在动手那一侧：坏的时候备份要说"我不能备份"，
+ * 而不是递给你一份看起来完整的假备份——失败发生在源机器上、数据还在手上的那一刻，
+ * 才是能救的时刻（体检已点名、取证口能下载原件）。
+ * 空壳制品同理：manifest 有记录但 index.html 不在，修复前导出给 `html: ''`，导入端照样写出一个
+ * 空 index.html，源机点名过的损坏到新机变成 `ok: true`（探针 23-C「备份洗白」）。
+ */
+function backupBlockers(id) {
+  const dir = assertExists(id);
+  const out = [];
+  for (const name of HEALTH_FILES) {
+    const file = path.join(dir, name);
+    if (fs.existsSync(file) && corruptNow(file)) out.push(`${name}（坏 JSON）`);
+  }
+  const artifactsDir = path.join(dir, ARTIFACTS_DIR);
+  if (fs.existsSync(artifactsDir)) {
+    const manifestFile = path.join(artifactsDir, 'manifest.json');
+    // manifest 自己坏了也要停下来：readJsonSafe 兜成空清单，于是整本的制品**一份都不进包**，
+    // 还照样 200——与少一份 JSON 同一条形状（第二十三轮），不能只盯那八份。
+    if (fs.existsSync(manifestFile) && corruptNow(manifestFile)) out.push('artifacts/manifest.json（坏 JSON，制品会整批漏掉）');
+    const manifest = readJsonSafe(manifestFile, { version: 1, items: [] });
+    for (const item of Array.isArray(manifest?.items) ? manifest.items : []) {
+      const aid = item?.id;
+      if (!aid) continue;
+      if (!fs.existsSync(path.join(artifactsDir, aid, 'index.html'))) out.push(`制品 ${aid}（manifest 有记录但 index.html 不在）`);
+    }
+  }
+  return out;
+}
+
 /**
  * 把一本学习完整打包成可带走 / 可还原的 JSON。
- * 只读盘、不改任何状态；素材二进制转 base64，制品带 HTML 原文。
+ * 只读盘、不改任何状态；素材按统一口径取编码，制品带 HTML 原文。
+ *
+ * 家底有缺口时**拒绝出货**（backupBlockers，第二十三轮）：宁可这一本此刻导不出来，
+ * 也不给一份看起来完整、实际少了东西的假备份。
  */
 export function exportNotebook(id) {
   const dir = assertExists(id);
+  const blockers = backupBlockers(id);
+  if (blockers.length) {
+    throw new BackupBlockedError(
+      `这本学习的数据有缺口，导出会丢掉它们：${blockers.join('、')}。先用「体检数据」定位并取证下载原件，修好再备份。`,
+      blockers,
+    );
+  }
   const meta = readJsonSafe(path.join(dir, NOTEBOOK_FILE), {});
   const files = {};
   for (const name of [NOTEBOOK_FILE, GRAPH_FILE, PROGRESS_FILE, PATCH_FILE, CHAT_FILE, TODOS_FILE, SCENE_FILE]) {
@@ -903,14 +1017,16 @@ export function exportNotebook(id) {
   const uploads = listUploads(id).map((u) => {
     const full = path.join(dir, u.rel);
     const buffer = fs.existsSync(full) ? fs.readFileSync(full) : Buffer.alloc(0);
+    // kind 与 encoding 都出自同一处定义（classifyUpload / encodingFor）：
+    // 修复前这里按"写侧那两档"选编码，PDF/音频等二进制被 utf8 读成字符串，内容当场损坏。
+    const kind = u.kind || classifyUpload(u.name);
     return {
       rel: u.rel,
       name: u.name,
-      kind: u.kind,
+      kind,
       bytes: buffer.length,
-      data: u.kind === 'image' ? buffer.toString('base64') : buffer.toString('utf8'),
-      // base64 与否由 kind 决定：image 走 base64，文本走 utf8（可读、可审、体积小）
-      encoding: u.kind === 'image' ? 'base64' : 'utf8',
+      data: dataFor(kind, buffer),
+      encoding: encodingFor(kind),
     };
   });
 
@@ -983,7 +1099,7 @@ export function importNotebook(bundle) {
   }
   for (const key of Object.keys(files)) {
     if (!IMPORT_FILE_KEYS.has(key)) {
-      throw new BadRequestError(`导入包里有不认识的文件：${key}（只收白名单内的七份 JSON）`);
+      throw new BadRequestError(`导入包里有不认识的文件：${key}（只收白名单内的八份 JSON）`);
     }
   }
 
@@ -1015,7 +1131,9 @@ export function importNotebook(bundle) {
   // 新机器没跑过这些活，还原出来只会凭空多出一堆永远等不到结论的历史记录。
 
   // ---- 素材：只认原本的相对路径（uploads/<sanitized>），重新落盘前逐项校验
+  // 校验一遍、算出字节，落盘时用**同一份**解码结果（判据只有一份，见 decodeUploadBuffer）。
   const uploads = Array.isArray(bundle.uploads) ? bundle.uploads : [];
+  const uploadBuffers = [];
   for (const u of uploads) {
     if (!u || typeof u !== 'object') throw new BadRequestError('素材记录必须是对象');
     if (u.bytes > IMPORT_MAX_UPLOAD_BYTES) {
@@ -1025,12 +1143,16 @@ export function importNotebook(bundle) {
     if (!/^uploads\/[^/\\]+$/.test(rel)) {
       throw new BadRequestError(`素材路径形状非法：${rel}（只认 uploads/<文件名>）`);
     }
-    if (String(u.bytes || 0) > 0) {
-      const buf = u.encoding === 'base64' ? Buffer.from(String(u.data || ''), 'base64') : Buffer.from(String(u.data ?? ''), 'utf8');
-      if (buf.length !== Number(u.bytes)) {
-        throw new BadRequestError(`素材「${u.name || rel}」数据与声明的字节数不符`);
-      }
+    const buffer = decodeUploadBuffer(u);
+    /*
+     * 字节数校验不再看 `bytes > 0` 的脸色（第二十三轮）：修复前 0 字节的素材整个跳过校验，
+     * 落盘那一句又是 `if (buffer.length) writeFileSync(...)`——两头一凑，一个空文件的素材
+     * 在备份里占一行、在新机上不存在。声明与解出的字节必须逐项对得上，包括"两边都是 0"。
+     */
+    if (buffer.length !== Number(u.bytes)) {
+      throw new BadRequestError(`素材「${u.name || rel}」数据与声明的字节数不符`);
     }
+    uploadBuffers.push(buffer);
   }
 
   // ---- 制品：保留原 id（交叉引用全靠它），HTML 大小设上限
@@ -1064,11 +1186,10 @@ export function importNotebook(bundle) {
   }
   writeJsonAtomic(path.join(dir, NOTES_FILE), { version: 1, notes: notes.notes });
 
-  for (const u of uploads) {
-    const rel = String(u.rel);
-    const buffer =
-      u.encoding === 'base64' ? Buffer.from(String(u.data || ''), 'base64') : Buffer.from(String(u.data ?? ''), 'utf8');
-    if (buffer.length) fs.writeFileSync(path.join(dir, rel), buffer);
+  for (const [i, u] of uploads.entries()) {
+    // 用的是校验那一遍算出的同一份字节；空文件也落盘（`if (buffer.length)` 那种"没内容就不写"
+    // 让备份里的一条素材记录在新机上变成"查无此件"——第二十三轮）
+    fs.writeFileSync(path.join(dir, String(u.rel)), uploadBuffers[i]);
   }
 
   if (artifacts.length) {
@@ -1102,7 +1223,7 @@ export function importNotebook(bundle) {
 
 // ---------------------------------------------------------------- 数据体检
 //
-// 只读地扫一遍 data/，把"家底里该修的地方"列出来：七份 JSON 解析失败的（坏了但没被
+// 只读地扫一遍 data/，把"家底里该修的地方"列出来：八份 JSON 解析失败的（坏了但没被
 // 察觉）、制品目录不在 manifest 里的（孤儿）、manifest 有记录但 index.html 丢了的（空壳）。
 // 只报告不修——修是人的决定（或后续迭代）。体检报告里只有文件/目录事实，没有学习进度数字。
 

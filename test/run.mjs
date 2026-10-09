@@ -2674,7 +2674,7 @@ saveNote(srcId, { title: '备份笔记', summary: '要点', key_points: ['一条
 
 const bundle = store.exportNotebook(srcId);
 check('导出包带格式标记与版本', bundle.format === 'socratic-studio-notebook' && bundle.version === 1);
-check('导出包带着七份 JSON（files 键齐全）', ['notebook.json', 'learning-graph.json', 'progress.json', 'patches.json', 'chat.json', 'todos.json', 'scene.json', 'notes.json'].every((k) => k in bundle.files));
+check('导出包带着八份 JSON（files 键齐全）', ['notebook.json', 'learning-graph.json', 'progress.json', 'patches.json', 'chat.json', 'todos.json', 'scene.json', 'notes.json'].every((k) => k in bundle.files));
 check('Graph 原样在包里', bundle.files['learning-graph.json'].concepts.length === 2);
 check('素材带 rel / 字节数 / 内容', bundle.uploads.some((u) => u.rel === uploadRec.rel && u.bytes > 0 && u.data.includes('要点')));
 check('二进制素材走 base64', bundle.uploads.find((u) => u.kind === 'image').encoding === 'base64');
@@ -2697,6 +2697,175 @@ check('导入后制品寿命标记原样保留', imported.artifacts.find((a) => 
 check('导入后素材按原 rel 可读（文本）', store.readUpload(imported.id, uploadRec.rel).text.includes('要点'));
 check('导入后素材按原 rel 可读（图片）', store.readUpload(imported.id, imgRec.rel).kind === 'image');
 check('导入后列表能看到新学习', store.listNotebooks().some((n) => n.id === imported.id));
+
+/*
+ * ────────────────────────────── 12a. 备份要经得起坏的时候（第二十三轮）
+ *
+ * 探针 23-B / 23-C / 23-D 实测的四件事，逐条钉住。修复前的形状：
+ *   - 二进制素材（.pdf / .mp3）导出走 utf8 分支 → 内容变成一串 U+FFFD，声明的字节数与实际解出的
+ *     对不上，导入侧那道正确的守卫把**整本备份**判成非法包（一个附件 = 整本导不回去）；
+ *   - 0 字节的素材在导入时被 `if (buffer.length)` 静默跳过 → 备份里有记录、新机盘上查无此件；
+ *   - learning-graph.json 坏了 → 导出**安静地**少了这一份、照样 200，拿去导入 201、
+ *     新本概念数 0（源机本来有 1 个概念）——最坏的形状：整本结构没了还报成功；
+ *   - manifest 有记录但 index.html 丢了（空壳）→ 导出给 html:''，导入端写出空 index.html，
+ *     源机体检点名过的损坏到新机变成 ok=true（备份洗白）。
+ */
+section('12a. 备份的保真：坏的时候不许出货，好的时候不许走样');
+
+const fidNb = store.createNotebook({ topic: '保真测试', goal: null, pace: 'normal' }).id;
+const fidDir = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', fidNb);
+// 一段真实的二进制头（含非法 UTF-8 字节）：以前它进包会被读成 U+FFFD
+const PDF_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x42, 0x49, 0x4e, 0x41, 0x52, 0x59]);
+const pdfRec = store.saveUpload(fidNb, 'paper.pdf', PDF_BYTES);
+check('写侧认得出二进制（不再只有图片/文本两档）', pdfRec.kind === 'binary', `kind=${pdfRec.kind}`);
+check('读侧与写侧同一口径（binary 三档都有）', store.readUpload(fidNb, pdfRec.rel).kind === 'binary');
+const emptyRec = store.saveUpload(fidNb, '空文件.md', Buffer.alloc(0));
+const fidBundle = store.exportNotebook(fidNb);
+const pdfInBundle = fidBundle.uploads.find((u) => u.rel === pdfRec.rel);
+check('二进制素材进包走 base64（编码跟着 kind 走，不是"image 才 base64"）',
+  pdfInBundle.encoding === 'base64' && pdfInBundle.bytes === PDF_BYTES.length,
+  `encoding=${pdfInBundle.encoding} bytes=${pdfInBundle.bytes}`);
+check('包里那串解回来与源字节逐字节相同（不重写）',
+  Buffer.from(pdfInBundle.data, 'base64').equals(PDF_BYTES), Buffer.from(pdfInBundle.data, 'base64').toString('hex'));
+check('0 字节素材也在备份的清单里', fidBundle.uploads.some((u) => u.rel === emptyRec.rel && u.bytes === 0));
+/*
+ * 修复前这一步在源机器上就抛 400「素材「paper.pdf」数据与声明的字节数不符」——
+ * 用 try 接住，是为了让下面每一条各报各的失败，而不是把整套撞成 CRASH：
+ * 红要红得能读出"哪一处坏了"。
+ */
+let fidImported = null;
+let fidImportErr = null;
+try {
+  fidImported = store.importNotebook(fidBundle);
+} catch (e) {
+  fidImportErr = e;
+}
+check('一个 PDF 附件不再让整本备份导不回去（字节数相符就该收下）',
+  !fidImportErr, `导入抛了：${fidImportErr?.message}`);
+const fidImportedDir = fidImported ? path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', fidImported.id) : null;
+check('导入后二进制素材逐字节还原（盘上那份与源相同）',
+  Boolean(fidImportedDir) && fs.readFileSync(path.join(fidImportedDir, pdfRec.rel)).equals(PDF_BYTES));
+/*
+ * 0 字节这一件单独造一份包验：让它红的时候只因"空文件被跳过"这一件事红，
+ * 不跟着上面那条 PDF 的失败一起红（否则这条钉子看不出自己管的那处）。
+ */
+const zeroOnly = structuredClone(fidBundle);
+zeroOnly.uploads = [{ rel: emptyRec.rel, name: emptyRec.name, kind: 'text', bytes: 0, data: '', encoding: 'utf8' }];
+const zeroImported = store.importNotebook(zeroOnly);
+const zeroDir = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', zeroImported.id);
+check('导入后 0 字节素材真的落了盘（备份里有记录，新机上就该有文件）',
+  fs.existsSync(path.join(zeroDir, emptyRec.rel)) && fs.readFileSync(path.join(zeroDir, emptyRec.rel)).length === 0,
+  `新机 uploads/ = ${fs.readdirSync(path.join(zeroDir, 'uploads')).join(',') || '(空)'}`);
+
+// 反向：手写包里的 base64 不规范化 / encoding 缺失 / 声明与数据不符，都得当场拒绝
+const sloppy = structuredClone(fidBundle);
+sloppy.uploads = [{ rel: 'uploads/x.pdf', name: 'x.pdf', bytes: 1, data: 'A', encoding: 'base64' }];
+let sloppyMsg = '';
+try {
+  store.importNotebook(sloppy);
+} catch (e) {
+  sloppyMsg = e.message;
+}
+check('不规范的 base64 被拒绝（解出来编回去不是原来那串）', sloppyMsg.includes('base64'), sloppyMsg);
+
+const noEnc = structuredClone(fidBundle);
+noEnc.uploads = [{ rel: 'uploads/x.md', name: 'x.md', bytes: 1, data: 'x' }];
+let noEncMsg = '';
+try {
+  store.importNotebook(noEnc);
+} catch (e) {
+  noEncMsg = e.message;
+}
+check('encoding 缺失不再"按 utf8 兜"（判据只有一份）', noEncMsg.includes('encoding'), noEncMsg);
+
+const lyingZero = structuredClone(fidBundle);
+lyingZero.uploads = [{ rel: 'uploads/x.md', name: 'x.md', bytes: 0, data: '有内容', encoding: 'utf8' }];
+let lyingZeroMsg = '';
+try {
+  store.importNotebook(lyingZero);
+} catch (e) {
+  lyingZeroMsg = e.message;
+}
+check('0 字节的声明不再跳过校验（说 0 字节却带内容 = 不符）',
+  lyingZeroMsg.includes('字节数不符'), lyingZeroMsg);
+
+// 坏的时候不许出货：逐份写坏，导出必须拒绝并点名，且不产出任何包
+const nbBlock = store.createNotebook({ topic: '坏的时候', goal: null, pace: 'normal' }).id;
+const nbBlockDir = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', nbBlock);
+store.saveGraph(nbBlock, {
+  meta: { topic: '坏的时候', pedagogy: 'general' },
+  concepts: [{ id: 'c1', name: '唯一的那个概念', summary: '一条', status: 'unknown', mastery: 'unknown', evidence: [], misconceptions: [], depends_on: [] }],
+  cross_edges: [],
+});
+const graphGood = fs.readFileSync(path.join(nbBlockDir, 'learning-graph.json'), 'utf8');
+fs.writeFileSync(path.join(nbBlockDir, 'learning-graph.json'), '{ 半截 JSON');
+check('体检点名这处损坏（导出拒绝之前，家底的事实先看得见）',
+  store.healthCheck().corruptFiles.some((f) => f === `${nbBlock}/learning-graph.json`),
+  store.healthCheck().corruptFiles.join(','));
+let blockErr = null;
+let blockStatus = 0;
+try {
+  store.exportNotebook(nbBlock);
+} catch (e) {
+  blockErr = e;
+  blockStatus = e.status;
+}
+check('Graph 坏了 → 导出拒绝出货（不再安静地少一份还报成功）',
+  Boolean(blockErr) && String(blockErr.message).includes('learning-graph.json'), String(blockErr?.message));
+check('拒绝的理由是"数据有缺口"，并指向体检取证（不是含糊的 500）',
+  blockStatus === 409 && String(blockErr?.message).includes('体检'), `status=${blockStatus}`);
+check('缺口清单进错误对象（界面要逐行念出来）',
+  Array.isArray(blockErr?.blockers) && blockErr.blockers.some((b) => b.includes('learning-graph.json')),
+  JSON.stringify(blockErr?.blockers));
+fs.writeFileSync(path.join(nbBlockDir, 'learning-graph.json'), graphGood);
+check('修好之后导出恢复正常（拒绝针对的是状态，不是这本学习本身）',
+  store.exportNotebook(nbBlock).files['learning-graph.json'].concepts.length === 1);
+
+// 空壳制品同样不许洗白
+const nbShell = store.createNotebook({ topic: '空壳洗白', goal: null, pace: 'normal' }).id;
+const nbShellDir = path.join(process.env.SOCRATIC_DATA_DIR, 'notebooks', nbShell);
+const shellArt = store.saveArtifact(nbShell, { title: '会掉文件的那件', html: '<h1>原本有内容</h1>', kind: 'interactive' });
+fs.rmSync(path.join(nbShellDir, 'artifacts', shellArt.id, 'index.html'));
+let shellErr = null;
+try {
+  store.exportNotebook(nbShell);
+} catch (e) {
+  shellErr = e;
+}
+check('制品 index.html 丢了 → 导出拒绝（不再给 html:"" 让新机把损坏读成正常）',
+  Boolean(shellErr) && String(shellErr.message).includes(shellArt.id), String(shellErr?.message));
+// 对话也一并：坏与不缺在包里必须说得出区别（旧形状：少了文件照样 200）
+const chatGood = fs.readFileSync(path.join(nbShellDir, 'chat.json'), 'utf8');
+fs.writeFileSync(path.join(nbShellDir, 'chat.json'), '[ 坏了');
+let chatErr = null;
+try {
+  store.exportNotebook(nbShell);
+} catch (e) {
+  chatErr = e;
+}
+check('chat.json 坏了也拒绝（过去它少了文件、靠导入侧 400 才响）',
+  Boolean(chatErr) && String(chatErr.message).includes('chat.json'), String(chatErr?.message));
+fs.writeFileSync(path.join(nbShellDir, 'chat.json'), chatGood);
+fs.writeFileSync(path.join(nbShellDir, 'artifacts', shellArt.id, 'index.html'), '<h1>放回来了</h1>');
+check('两件都归位后导出通过（清单随盘上事实变化）', (() => {
+  const b = store.exportNotebook(nbShell);
+  return b.artifacts[0].html.includes('放回来了') && 'chat.json' in b.files;
+})());
+
+// manifest.json 自己坏了：readJsonSafe 兜成空清单 → 整本制品一份都不进包、照样 200（同一形状）
+const manifestPath23 = path.join(nbShellDir, 'artifacts', 'manifest.json');
+const manifestGood23 = fs.readFileSync(manifestPath23, 'utf8');
+fs.writeFileSync(manifestPath23, '{ 半截 manifest');
+let manifestErr = null;
+try {
+  store.exportNotebook(nbShell);
+} catch (e) {
+  manifestErr = e;
+}
+check('manifest 坏了也拒绝（制品整批漏掉与少一份 JSON 是同一条形状）',
+  Boolean(manifestErr) && String(manifestErr.message).includes('manifest.json'), String(manifestErr?.message));
+fs.writeFileSync(manifestPath23, manifestGood23);
+check('manifest 归位后制品回到包里', store.exportNotebook(nbShell).artifacts.length === 1);
 
 // 导入校验：白名单 / Graph 严格校验 / 空图放行 / 大小与路径上限
 const evil = structuredClone(bundle);

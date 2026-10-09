@@ -199,6 +199,8 @@ function sendError(res, err) {
   sendJson(res, status, {
     error: err?.message || '服务端错误',
     issues: err?.issues ?? undefined,
+    // 备份受阻的缺口清单（第二十三轮）：错误信息是给人读的一句话，blockers 是给界面逐行点的清单
+    blockers: err?.blockers ?? undefined,
   });
 }
 

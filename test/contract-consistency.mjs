@@ -951,6 +951,140 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     idDoc ? '那一节没写这条收口' : '找不到这一节');
 }
 
+// ──────────────────────────────── 备份要经得起坏的时候（第二十三轮）
+//
+// 这一节全部对着**结构与口径**，不对着注释：素材"是什么"这个概念全仓只许有一处定义；
+// 导出前那道检查用的必须与体检同一份清单；缺口清单要从 store 一路走到界面。
+// 行为本身由 run.mjs §12a（单元）、http-smoke §26（真服务）、web-smoke（前端）三处钉。
+{
+  const storeSrc23 = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8');
+  const webSrc23 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+
+  // 1) kind 只有一处认扩展名
+  const classify23 = /function classifyUpload\(name\) \{[\s\S]*?\n\}/.exec(storeSrc23)?.[0] || '';
+  check('认扩展名只有一处（写侧/读侧/导出侧共用 classifyUpload）',
+    (storeSrc23.match(/IMAGE_EXT\.has\(/g) || []).length === 1
+    && (storeSrc23.match(/TEXT_EXT\.has\(/g) || []).length === 1
+    && /IMAGE_EXT\.has\(ext\)/.test(classify23) && /TEXT_EXT\.has\(ext\)/.test(classify23)
+    && /return 'image'/.test(classify23) && /return 'text'/.test(classify23) && /return 'binary'/.test(classify23),
+    `IMAGE_EXT.has=${(storeSrc23.match(/IMAGE_EXT\.has\(/g) || []).length} TEXT_EXT.has=${(storeSrc23.match(/TEXT_EXT\.has\(/g) || []).length}`);
+  // 三处调用点必须真的走它，而不是留着各自的 ternary（"定义收成一份、判断还散着"是最常见的一次也没改干净）
+  const saveFn23 = /export function saveUpload\(id, filename, buffer\) \{[\s\S]*?\n\}/.exec(storeSrc23)?.[0] || '';
+  const listFnU23 = /export function listUploads\(id\) \{[\s\S]*?\n\}/.exec(storeSrc23)?.[0] || '';
+  const readFn23 = /export function readUpload\(id, relOrName\) \{[\s\S]*?\n\}/.exec(storeSrc23)?.[0] || '';
+  check('写侧 / 列表 / 读侧三处都调它（旧的两档 ternary 一处不许留在原地）',
+    /classifyUpload\(safeName\)/.test(saveFn23) && /classifyUpload\(name\)/.test(listFnU23) && /classifyUpload\(name\)/.test(readFn23)
+    && !/kind: IMAGE_EXT\.has/.test(saveFn23) && !/kind: IMAGE_EXT\.has/.test(listFnU23),
+    `${saveFn23.includes('classifyUpload') ? 'save✓' : 'save✗'}${listFnU23.includes('classifyUpload') ? 'list✓' : 'list✗'}${readFn23.includes('classifyUpload') ? 'read✓' : 'read✗'}`);
+
+  // 2) 编码只有一处推导，包体与解码说同一句话
+  const encFn23 = /function encodingFor\(kind\) \{[\s\S]*?\n\}/.exec(storeSrc23)?.[0] || '';
+  const exportFn23 = /export function exportNotebook\(id\) \{[\s\S]*?\n\}/.exec(storeSrc23)?.[0] || '';
+  const importFn23 = /export function importNotebook\(bundle\) \{[\s\S]*?\n\}/.exec(storeSrc23)?.[0] || '';
+  const decodeFn23 = /function decodeUploadBuffer\(u\) \{[\s\S]*?\n\}/.exec(storeSrc23)?.[0] || '';
+  check('进包一侧的编码出自 encodingFor（不许再按 kind 自己 ternary 一次）',
+    /encoding: encodingFor\(kind\)/.test(exportFn23) && /data: dataFor\(kind, buffer\)/.test(exportFn23)
+    && !/encoding: u\.kind === 'image'/.test(exportFn23),
+    exportFn23 ? (exportFn23.match(/encoding:[^\n]*/) || [''])[0] : '找不到 exportNotebook');
+  check('全仓只有一处把 kind 映射到编码（写侧、导出侧、导入侧共用一份规则）',
+    (storeSrc23.match(/=== 'text' \? 'utf8' : 'base64'/g) || []).length === 1
+    && /'utf8'/.test(encFn23) && /'base64'/.test(encFn23),
+    `utf8/base64 映射出现 ${(storeSrc23.match(/=== 'text' \? 'utf8' : 'base64'/g) || []).length} 次`);
+  // 唯一收口（第二十一/二十二轮同一条纪律）：解码不许在校验和落盘两处各写一遍
+  check('素材解码收在唯一的 decodeUploadBuffer（校验那遍就是落盘那份）',
+    /decodeUploadBuffer\(u\)/.test(importFn23) && !/Buffer\.from\(String\(u\.data/.test(importFn23)
+    && (importFn23.match(/decodeUploadBuffer\(u\)/g) || []).length === 1,
+    `import 内调用=${(importFn23.match(/decodeUploadBuffer\(u\)/g) || []).length} 处，直接 Buffer.from=${(importFn23.match(/Buffer\.from/g) || []).length} 处`);
+  check('编码不认识时拒绝，不"按 utf8 兜"（兜一次就等于替包主人重新发明编码）',
+    /encoding !== 'utf8' && u\.encoding !== 'base64'/.test(decodeFn23),
+    decodeFn23 ? decodeFn23.replace(/\s+/g, ' ').slice(0, 160) : '找不到 decodeUploadBuffer 本体');
+  check('字节数校验不再看 bytes > 0 的脸色（0 字节也要逐项对得上）',
+    /if \(buffer\.length !== Number\(u\.bytes\)\)/.test(importFn23)
+    && !/if \(String\(u\.bytes \|\| 0\) > 0\)/.test(importFn23),
+    importFn23 ? (importFn23.match(/if \(.*bytes.*/) || [''])[0] : '找不到 importNotebook');
+  check('落盘不再"没内容就不写"（空文件也要在新区存在）',
+    /fs\.writeFileSync\(path\.join\(dir, String\(u\.rel\)\), uploadBuffers\[i\]\)/.test(importFn23)
+    && !/if \(buffer\.length\) fs\.writeFileSync/.test(importFn23),
+    importFn23 ? (importFn23.match(/.*writeFileSync\(path\.join\(dir, String\(u\.rel.*/) || [''])[0] : '找不到落盘那一段');
+
+  // 3) 坏的时候不许出货：判据必须与体检同一份清单
+  const blockFn23 = /function backupBlockers\(id\) \{[\s\S]*?\n\}/.exec(storeSrc23)?.[0] || '';
+  const healthFn23 = /export function healthCheck\(\) \{[\s\S]*?\n\}/.exec(storeSrc23)?.[0] || '';
+  check('「该有哪些 JSON」全仓只有一份清单（体检与导出前检查共用，不各自数一遍）',
+    (storeSrc23.match(/const HEALTH_FILES = \[/g) || []).length === 1
+    && /for \(const name of HEALTH_FILES\)/.test(blockFn23)
+    && /for \(const name of HEALTH_FILES\)/.test(healthFn23),
+    `定义 ${(storeSrc23.match(/const HEALTH_FILES = \[/g) || []).length} 处；backupBlockers 用它=${/HEALTH_FILES/.test(blockFn23)}`);
+  check('缺口检查只认"存在但坏了"（缺文件是正常状态，不许把它当损坏拒绝）',
+    /fs\.existsSync\(file\) && corruptNow\(file\)/.test(blockFn23),
+    blockFn23 ? (blockFn23.match(/if \(fs\.existsSync.*/) || [''])[0] : '找不到 backupBlockers 本体');
+  check('空壳制品也在拒绝的判据里（manifest 有记录、index.html 不在）',
+    /index\.html/.test(blockFn23) && /existsSync\(path\.join\(artifactsDir, aid, 'index\.html'\)\)/.test(blockFn23),
+    blockFn23 ? (blockFn23.match(/.*index\.html.*/) || [''])[0] : '找不到空壳那一段');
+  check('manifest 自己坏了也要停下来（制品整批漏掉与少一份 JSON 同一条形状）',
+    /corruptNow\(manifestFile\)/.test(blockFn23),
+    blockFn23 ? (blockFn23.match(/.*manifestFile.*/) || [''])[0] : '找不到 manifest 那一段');
+  check('导出真的问了这道门（拒绝在出货之前，不是包好了再补一句警告）',
+    /const blockers = backupBlockers\(id\);\n    if \(blockers\.length\)|const blockers = backupBlockers\(id\);\n  if \(blockers\.length\)/.test(exportFn23)
+    && /throw new BackupBlockedError/.test(exportFn23),
+    exportFn23 ? exportFn23.replace(/\s+/g, ' ').slice(0, 160) : '找不到 exportNotebook');
+  check('拒绝的状态是 409（请求本身没错，是资源此刻的状态不允许——与"回合进行中不许删"同一类）',
+    /class BackupBlockedError extends Error \{[\s\S]*?this\.status = 409;/.test(storeSrc23),
+    'BackupBlockedError 不是 409');
+
+  // 4) 清单要一路走到界面（写了没人读 = 没写）
+  check('sendError 把 blockers 发给前端（错误对象上带着清单，接口层不许丢）',
+    /blockers: err\?\.blockers \?\? undefined/.test(serveSrc), 'serve 的 sendError 不带 blockers');
+  check('前端读的是结构化清单，不是从 error 那句话里抠文件名',
+    /Array\.isArray\(err\.data\?\.blockers\)/.test(webSrc23) && /没能备份：\$\{blockers\.slice\(0, 3\)/.test(webSrc23),
+    webSrc23 ? (webSrc23.match(/const blockers = [^\n]*/) || [''])[0] : '找不到 app.js');
+  check('受阻的提示说清下一步去哪（点名 + 指向体检取证）',
+    /没能备份/.test(webSrc23) && /体检/.test(webSrc23),
+    '前端只念了一句失败');
+  const webCode23 = webSrc23.split('\n')
+    .filter((l) => { const t = l.trim(); return !(t.startsWith('//') || t.startsWith('/*') || t.startsWith('*')); })
+    .join('\n');
+  check('素材图标由一处按三档给（image/text/binary 各一个，不许再写两档 ternary）',
+    /const UPLOAD_ICON = \{ image: '🖼', text: '📄', binary: '📦' \};/.test(webSrc23)
+    && !/kind === 'image' \? '🖼' : '📄'/.test(webCode23),
+    `残留两档写法 ${(webCode23.match(/kind === 'image' \? '🖼' : '📄'/g) || []).length} 处`);
+
+  // 5) 文档不许写旧口径：这一节只钉语义，关键词由 README 那节负责
+  const backupDoc23 = /### 备份要经得起坏的时候[\s\S]{0,4000}?(?=\n### |\n## )/.exec(readmeDoc);
+  check('README 写明三条实测后果（PDF 毁整本、空文件蒸发、坏了还少一份报成功）',
+    Boolean(backupDoc23) && /U\+FFFD/.test(backupDoc23[0]) && /概念数 0/.test(backupDoc23[0])
+    && /新机|查无此件/.test(backupDoc23[0]),
+    backupDoc23 ? backupDoc23[0].replace(/\n+/g, ' ').slice(0, 160) : '找不到这一节');
+  check('README 写明守卫站在动手那一侧（导出前拒绝，不是导入时补救）',
+    Boolean(backupDoc23) && /backupBlockers/.test(backupDoc23[0]) && /blockers/.test(backupDoc23[0])
+    && /409/.test(backupDoc23[0]),
+    backupDoc23 ? '那一节没写守卫位置' : '找不到这一节');
+  check('README 写明"缺文件不是损坏"这条边界（否则正常的新本会被自己的守卫拦死）',
+    Boolean(backupDoc23) && /缺文件不是损坏/.test(backupDoc23[0]),
+    backupDoc23 ? '那一节没写这条边界' : '找不到这一节');
+  check('README 的备份一节写了口径只有一份（classifyUpload / encodingFor 有名分）',
+    Boolean(backupDoc23) && /classifyUpload/.test(backupDoc23[0]) && /encodingFor|同一处定义|一处/.test(backupDoc23[0]),
+    backupDoc23 ? '那一节没写单一定义' : '找不到这一节');
+
+  // 6) "七份"这个数字以前是错的（白名单实际八项）。这一条把数字钉在数组上，不让人再抄一遍错的。
+  const keysFn23 = /const IMPORT_FILE_KEYS = new Set\(\[([\s\S]*?)\]\);/.exec(storeSrc23)?.[1] || '';
+  const keyCount23 = keysFn23.split(',').map((s) => s.trim()).filter(Boolean).length;
+  const exportList23 = /for \(const name of \[NOTEBOOK_FILE,[\s\S]*?\]\)/.exec(storeSrc23)?.[0] || '';
+  check('白名单项数与导出遍历项数一致（两份清单不各自长）',
+    keyCount23 === 8 && /NOTES_FILE/.test(keysFn23) && exportList23.length > 0,
+    `IMPORT_FILE_KEYS=${keyCount23} 项`);
+  const CN_NUM = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+  check('文档与报错里的份数就是数组的真实长度（"七份"是抄来的，抄错一次就永远错下去）',
+    (storeSrc23.match(/只认这(\S)份已知 JSON 文件/) || [])[1] === CN_NUM[keyCount23]
+    && (storeSrc23.match(/白名单内的(\S)份 JSON/) || [])[1] === CN_NUM[keyCount23]
+    && (storeSrc23.match(/扫描范围两处：每本学习的(\S)份 JSON/) || [])[1] === CN_NUM[keyCount23]
+    && /(\S)份 JSON 解析失败/.test(storeSrc23) && (storeSrc23.match(/(\S)份 JSON 解析失败/) || [])[1] === CN_NUM[keyCount23]
+    && /八份 JSON \+ 素材/.test(readmeDoc) && /只认八份已知 JSON 键/.test(readmeDoc)
+    && /(\S)份 JSON 里解析失败/.test(readmeDoc) && (readmeDoc.match(/(\S)份 JSON 里解析失败/) || [])[1] === CN_NUM[keyCount23]
+    && !/七份/.test(storeSrc23) && !/七份/.test(readmeDoc),
+    `数组 ${keyCount23} 项；store 注释=${(storeSrc23.match(/只认这(\S)份/) || [])[1]}；报错=${(storeSrc23.match(/白名单内的(\S)份/) || [])[1]}；README=${(readmeDoc.match(/(\S)份 JSON \+ 素材/) || [])[1]}`);
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;

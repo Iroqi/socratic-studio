@@ -779,6 +779,39 @@ await new Promise((r) => setTimeout(r, 20));
 check('点「导出整本」真的打了导出接口', requests.slice(reqBeforeExport).some((k) => k === 'GET /api/notebooks/nb-test/export'), requests.slice(reqBeforeExport).join(','));
 check('导出成功有提示（整本备份）', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出整本备份')));
 
+/*
+ * 备份受阻时不许压成一句"导出失败"（第二十三轮）：服务端在家底有缺口时回 409 + blockers。
+ * 桩里的 error 那句话**故意不含任何文件名**，也不提"体检"——于是"要点名是哪份数据坏了、
+ * 要指出去哪一步"这两条只有去读结构化的 blockers 清单才做得到。
+ * 修复前这里只有 `导出失败：${err.message}`：拿着清单却只念那句话，等于清单白给。
+ */
+responses.set('GET /api/notebooks/nb-test/export', () =>
+  new Response(JSON.stringify({ error: '这本学习现在有缺口，备份还没做', blockers: ['learning-graph.json（坏 JSON）', '制品 art-9（缺 index.html）', 'chat.json（坏 JSON）', 'notes.json（坏 JSON）'] }),
+    { status: 409, headers: { 'Content-Type': 'application/json' } }));
+const reqBeforeBlocked = requests.length;
+exportBtn.onclick();
+await new Promise((r) => setTimeout(r, 20));
+check('备份受阻真的又打了一次导出接口（不是本地猜的状态）',
+  requests.slice(reqBeforeBlocked).some((k) => k === 'GET /api/notebooks/nb-test/export'), requests.slice(reqBeforeBlocked).join(','));
+const blockedToast = Array.from(doc.getElementById('toasts').children).find((t) => t.textContent.includes('没能备份'));
+check('受阻的提示点名是哪份数据坏了（清单是结构化字段，不是从那句话里抠）',
+  Boolean(blockedToast) && blockedToast.textContent.includes('learning-graph.json') && blockedToast.textContent.includes('art-9'),
+  blockedToast?.textContent);
+check('受阻的提示给出去哪一步（先体检取证，再备份）',
+  Boolean(blockedToast) && blockedToast.textContent.includes('体检'), blockedToast?.textContent);
+check('缺口多过三处就省略并说清还有（不把长清单整条糊在屏幕上）',
+  Boolean(blockedToast) && blockedToast.textContent.includes('…') && !blockedToast.textContent.includes('notes.json'),
+  blockedToast?.textContent);
+// 反向：服务端没给清单（别的失败）时仍走原来那句话，不硬编"没能备份"
+responses.set('GET /api/notebooks/nb-test/export', () =>
+  new Response(JSON.stringify({ error: '学习不存在' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+exportBtn.onclick();
+await new Promise((r) => setTimeout(r, 20));
+const plainFailToast = Array.from(doc.getElementById('toasts').children).find((t) => t.textContent.includes('导出失败：学习不存在'));
+check('没有缺口清单的失败仍是原来那句（受阻文案不抢别人的话）',
+  Boolean(plainFailToast) && !plainFailToast.textContent.includes('没能备份'), plainFailToast?.textContent);
+check('导出受阻这一段无异常', errors.length === 0, errors.join(' | '));
+
 // 数据体检：只读报告，出现损坏/孤儿时如实说，没问题就说没问题
 responses.set('GET /api/health', () =>
   json({ ok: true, dataDir: '/tmp/x', notebooks: 3, corruptFiles: [], orphanArtifacts: [], missingHtml: [] }));
@@ -1256,6 +1289,33 @@ state.notebook.artifacts = [];
 renderPanel();
 const cards = deepAll(domRoot, 'file-item');
 check('素材页签渲染上传的素材', cards.length >= 0);
+
+/*
+ * 素材图标跟着 kind 三档走（第二十三轮）：修复前只有 `image ? 🖼 : 📄` 两档，
+ * 一份 PDF（后端现在报 binary）被标成📄——前端替后端补了第二次"两档"口径，
+ * 于是界面把一个读不出内容的文件说成"文本"。
+ */
+state.notebook.uploads = [
+  { id: 'u1', name: '讲义.md', kind: 'text', rel: 'uploads/讲义.md', bytes: 12 },
+  { id: 'u2', name: '截图.png', kind: 'image', rel: 'uploads/截图.png', bytes: 34 },
+  { id: 'u3', name: '论文.pdf', kind: 'binary', rel: 'uploads/论文.pdf', bytes: 56 },
+];
+renderPanel();
+const iconRows = deepAll(domRoot, 'file-item');
+// 表情是代理对：不带 u 标志的字符类会拆成半个码点去匹配（"看着对、永不命中"的那种写法）
+const ICONS = ['🖼', '📄', '📦'];
+const iconOf = (name) => {
+  const row = iconRows.find((r) => r.textContent.includes(name));
+  const span = row && Array.from(row.children || []).find((c) => c.tagName === 'SPAN' && ICONS.includes(String(c.textContent)));
+  return span ? String(span.textContent) : '';
+};
+check('三档三种说法：文本📄、图片走缩略图、二进制📦（不再把 PDF 说成文本）',
+  iconOf('讲义.md') === '📄' && iconOf('论文.pdf') === '📦' && iconOf('截图.png') === '',
+  `rows=${iconRows.length} 讲义=${iconOf('讲义.md')} 论文=${iconOf('论文.pdf')} 截图=${iconOf('截图.png') || '(无图标 span)'} kids=${JSON.stringify(Array.from(iconRows[0]?.children || []).map((c) => [c.tagName, c.textContent]))}`);
+check('图片那一行仍然走真缩略图（不是补个表情）',
+  Boolean(iconRows.find((r) => r.textContent.includes('截图.png') && deepAll(r, 'file-thumb').length === 1)));
+state.notebook.uploads = [];
+renderPanel();
 // 制品不再堆在右栏素材页，统一进画布区（分页重构后的路由）
 check('这一轮无异常', errors.length === 0, errors.join(' | '));
 
@@ -1346,8 +1406,13 @@ check('缩放中的帧上报自己那帧的布局高＝回声，不启动 +16 �
 applyArtifactHeight(scaled, 900);
 check('缩放中的帧真收到更高的内容照常长高（不是把增长一起禁了）', scaled.style.height === '916px', scaled.style.height);
 
-applyArtifactHeight(null, 500);
-check('空帧不炸', true);
+// 第二十三轮补的钉：原来是 check('空帧不炸', true)——永真断言，删掉这行调用它也过。
+// 真判据：这一句自己不许抛，也不许往 errors 里记东西（console.error/unhandledRejection 都进那本账）。
+const errCountBeforeNull = errors.length;
+let nullFrameThrew = null;
+try { applyArtifactHeight(null, 500); } catch (e) { nullFrameThrew = e; }
+check('空帧不炸（调用自身没抛异常）', nullFrameThrew === null, nullFrameThrew && nullFrameThrew.message);
+check('空帧那次没往错误账本里记东西', errors.length === errCountBeforeNull, `新增：${errors.slice(errCountBeforeNull).join(' | ')}`);
 check('结构化布局这一轮无异常', errors.length === 0, errors.join(' | '));
 
 // --- 12 导演台：场是"幕"，拍是幕内唯一的单元 ---

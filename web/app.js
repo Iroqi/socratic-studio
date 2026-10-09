@@ -3577,7 +3577,17 @@ function renderBackupPanel(body) {
       setTimeout(() => URL.revokeObjectURL(url), 5000);
       toast('已导出整本备份');
     } catch (err) {
-      toast(`导出失败：${err.message}`, true);
+      /*
+       * 备份受阻（第二十三轮）：服务端在家底有缺口时拒绝出货（409 + blockers）。
+       * 这里不许把它压成一句"导出失败"——学习者要的下一步是"到底哪份数据坏了、去哪看"，
+       * 而那句话服务端已经给了清单，前端只负责把它逐行念出来。
+       */
+      const blockers = Array.isArray(err.data?.blockers) ? err.data.blockers : [];
+      if (blockers.length) {
+        toast(`没能备份：${blockers.slice(0, 3).join('、')}${blockers.length > 3 ? '…' : ''}。先点「体检数据」取证修好，再备份。`, true);
+      } else {
+        toast(`导出失败：${err.message}`, true);
+      }
     } finally {
       exportBtn.disabled = false;
     }
@@ -3905,7 +3915,7 @@ function renderFilesPanel(body) {
       img.alt = f.name;
       row.append(img);
     } else {
-      row.append(el('span', null, '📄'));
+      row.append(el('span', null, uploadIcon(f.kind)));
     }
     row.append(el('span', null, f.name));
     row.append(el('span', 'meta', bytes(f.bytes)));
@@ -4024,11 +4034,19 @@ function attachmentChip(label, onRemove) {
   return chip;
 }
 
+/**
+ * 素材图标的唯一出处（第二十三轮）：跟着 store 的 kind 三档走。
+ * 以前只有 `image ? 🖼 : 📄` 两档，等于前端也替后端补了一次"两档"口径——
+ * 一份 PDF 被标成📄（文本），而它既不是文本也读不出文本。
+ */
+const UPLOAD_ICON = { image: '🖼', text: '📄', binary: '📦' };
+const uploadIcon = (kind) => UPLOAD_ICON[kind] || '📄';
+
 function renderAttachments() {
   const box = $('attachments');
   box.innerHTML = '';
   state.pendingAttachments.forEach((a, i) => {
-    box.append(attachmentChip(`${a.kind === 'image' ? '🖼' : '📄'} ${a.name}`, () => {
+    box.append(attachmentChip(`${uploadIcon(a.kind)} ${a.name}`, () => {
       state.pendingAttachments.splice(i, 1);
       renderAttachments();
     }));
@@ -4883,7 +4901,7 @@ function drawMentionPopup(items) {
   for (const [i, u] of items.entries()) {
     const row = el('button', `mention-row${i === mention.active ? ' active' : ''}`);
     row.type = 'button';
-    row.append(el('span', 'mention-icon', u.kind === 'image' ? '🖼' : '📄'));
+    row.append(el('span', 'mention-icon', uploadIcon(u.kind)));
     row.append(el('span', null, u.name));
     // mousedown 而不是 click：blur 会在 click 之前把 pop 关掉
     row.addEventListener('mousedown', (e) => {

@@ -1317,6 +1317,110 @@ try {
 
     await jfetch(`${BASE}/api/notebooks/${nb25}`, { method: 'DELETE' });
   }
+
+  /*
+   * ── 26. 备份经不经得起坏的时候（第二十三轮，真服务）
+   *
+   * 探针 23-B/23-C/23-D 是在真服务上打的，这里把同一批事实钉成断言：
+   *   修复前：一份 .pdf 附件进包被读成 utf8 乱码（声明 12 字节、解出 22 字节），
+   *           拿去导入被**正确**的守卫判成非法包 → 一个附件让整本备份再也导不回去；
+   *           learning-graph.json 坏了 → 导出安静地少了这一份、照样 200，导入 201、
+   *           新本概念数 0；空壳制品进包成 html:""，新机写出空 index.html → ok=true。
+   * 现在：坏的时候 409 拒绝并给出缺口清单（blockers），好的时候逐字节原样往返。
+   */
+  {
+    const nb26 = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ title: '备份保真', topic: '保真' }) })).data.notebook.id;
+    const dir26 = path.join(dataDir, 'notebooks', nb26);
+    const BIN = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x42, 0x49, 0x4e, 0x41, 0x52, 0x59]);
+    const upRes = await fetch(`${BASE}/api/notebooks/${nb26}/uploads`, {
+      method: 'POST',
+      headers: { 'x-filename': encodeURIComponent('paper.pdf'), 'Content-Type': 'application/octet-stream' },
+      body: BIN,
+    });
+    const upJson = await upRes.json();
+    check('上传口认得出 PDF 是二进制（不再一律当文本）', upJson.upload?.kind === 'binary', JSON.stringify(upJson.upload));
+    const emptyUp = await fetch(`${BASE}/api/notebooks/${nb26}/uploads`, {
+      method: 'POST',
+      headers: { 'x-filename': encodeURIComponent('空的一条.txt'), 'Content-Type': 'application/octet-stream' },
+      body: Buffer.alloc(0),
+    });
+    const emptyJson = await emptyUp.json();
+    check('空文件也收下了（0 字节不是"没内容"，是内容就是空）', emptyUp.status === 201 && emptyJson.upload?.bytes === 0, JSON.stringify(emptyJson.upload));
+
+    const b26 = (await jfetch(`${BASE}/api/notebooks/${nb26}/export`)).data;
+    const pdf26 = b26.uploads.find((u) => u.rel.endsWith('.pdf'));
+    check('备份里 PDF 走 base64 且字节数与源一致',
+      pdf26?.encoding === 'base64' && Buffer.from(pdf26.data, 'base64').equals(BIN),
+      `encoding=${pdf26?.encoding} 解出=${Buffer.from(pdf26?.data || '', 'base64').length} 源=${BIN.length}`);
+    const re26 = await jfetch(`${BASE}/api/notebooks/import`, { method: 'POST', headers: H, body: JSON.stringify(b26) });
+    check('一份 PDF 附件不再让整本备份导不回去（201）', re26.status === 201, `status=${re26.status} error=${re26.data?.error}`);
+    if (re26.status === 201) {
+      const newDir = path.join(dataDir, 'notebooks', re26.data.notebook.id);
+      check('新机盘上那份 PDF 与源逐字节相同', fs.readFileSync(path.join(newDir, pdf26.rel)).equals(BIN));
+      check('新机盘上那个空文件真的存在（修复前备份里有记录、新机上查无此件）',
+        fs.existsSync(path.join(newDir, emptyJson.upload.rel)) && fs.statSync(path.join(newDir, emptyJson.upload.rel)).size === 0,
+        `新机 uploads/ = ${fs.readdirSync(path.join(newDir, 'uploads')).join(',') || '(空)'}`);
+      await jfetch(`${BASE}/api/notebooks/${re26.data.notebook.id}`, { method: 'DELETE' });
+    }
+
+    // 坏的时候：导出拒绝，并把缺口说清楚（这是给前端逐行念的那份清单）
+    const graphFile26 = path.join(dir26, 'learning-graph.json');
+    const graphGood26 = fs.readFileSync(graphFile26, 'utf8');
+    fs.writeFileSync(graphFile26, '{ 半截 JSON');
+    const h26 = (await jfetch(`${BASE}/api/health`)).data;
+    check('体检先点名（拒绝导出之前，家底的事实看得见）',
+      h26.corruptFiles.includes(`${nb26}/learning-graph.json`), h26.corruptFiles.join(','));
+    const blocked = await jfetch(`${BASE}/api/notebooks/${nb26}/export`);
+    check('导出对坏掉的整本说"不能备份"（409，不是少一份的 200）',
+      blocked.status === 409 && String(blocked.data?.error).includes('learning-graph.json'),
+      `status=${blocked.status} body=${JSON.stringify(blocked.data).slice(0, 120)}`);
+    check('响应带 blockers 清单（前端的下一句要知道去哪修）',
+      Array.isArray(blocked.data?.blockers) && blocked.data.blockers.length === 1, JSON.stringify(blocked.data?.blockers));
+    fs.writeFileSync(graphFile26, graphGood26);
+    const backOk = await jfetch(`${BASE}/api/notebooks/${nb26}/export`);
+    check('修好之后导出恢复 200 且 graph 在包里',
+      backOk.status === 200 && Boolean(backOk.data?.files?.['learning-graph.json']), `status=${backOk.status}`);
+
+    // 空壳制品：manifest 有记录、文件没了 → 不许以 html:"" 的形态洗白
+    const shellDir = path.join(dir26, 'artifacts', 'art-shell');
+    fs.mkdirSync(shellDir, { recursive: true });
+    const manifest26 = path.join(dir26, 'artifacts', 'manifest.json');
+    // 没存过制品的本没有 manifest.json（它由 saveArtifact 懒建），这里按盘上事实起一份
+    const manifestGood = fs.existsSync(manifest26) ? fs.readFileSync(manifest26, 'utf8') : null;
+    const mObj = manifestGood ? JSON.parse(manifestGood) : { version: 1, items: [] };
+    mObj.items.push({ id: 'art-shell', title: '空壳', kind: 'artifact', rel: 'artifacts/art-shell/index.html', createdAt: '2026-10-09T00:00:00.000Z' });
+    fs.writeFileSync(manifest26, JSON.stringify(mObj, null, 2));
+    const shellBlocked = await jfetch(`${BASE}/api/notebooks/${nb26}/export`);
+    check('空壳制品让导出停住（过去它带 html:"" 进包，新机写出空 index.html 变成"一切正常"）',
+      shellBlocked.status === 409 && String(shellBlocked.data?.error).includes('art-shell'),
+      `status=${shellBlocked.status} body=${JSON.stringify(shellBlocked.data).slice(0, 120)}`);
+    const hShell = (await jfetch(`${BASE}/api/health`)).data;
+    check('体检与导出口径一致（同一处事实，两处都认）',
+      (hShell.missingHtml || []).some((x) => x.notebook === nb26 && x.id === 'art-shell'), JSON.stringify(hShell.missingHtml));
+    fs.writeFileSync(path.join(shellDir, 'index.html'), '<h1>补回来了</h1>');
+    const shellBack = await jfetch(`${BASE}/api/notebooks/${nb26}/export`);
+    check('补回文件后导出通过，制品带的是真 HTML',
+      shellBack.status === 200 && shellBack.data.artifacts.some((a) => a.id === 'art-shell' && a.html.includes('补回来了')),
+      `status=${shellBack.status}`);
+    if (manifestGood === null) fs.rmSync(manifest26, { force: true });
+    else fs.writeFileSync(manifest26, manifestGood);
+    fs.rmSync(shellDir, { recursive: true, force: true });
+
+    // 正事不许被挡：一切正常的那本照常导出（守卫只拦有缺口的）
+    const nb26b = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ title: '干净的一本', topic: '干净' }) })).data.notebook.id;
+    const clean26 = await jfetch(`${BASE}/api/notebooks/${nb26b}/export`);
+    /*
+     * 一本刚建的学习盘上只有五份 JSON（todos/scene 是各自写盘时才建的，notes 由导出补上），
+     * 所以这里钉的是"该在的都在"，不是"八份都得在"——缺文件本来就不是损坏，
+     * 有损坏才是（上面那条 409 钉的就是那个）。
+     */
+    check('没有缺口的学习照常导出 200（拒绝不是默认姿态）',
+      clean26.status === 200 && ['notebook.json', 'learning-graph.json', 'progress.json', 'patches.json', 'chat.json', 'notes.json']
+        .every((k) => k in clean26.data.files), `status=${clean26.status} files=${Object.keys(clean26.data?.files || {}).join(',')}`);
+
+    await jfetch(`${BASE}/api/notebooks/${nb26}`, { method: 'DELETE' });
+    await jfetch(`${BASE}/api/notebooks/${nb26b}`, { method: 'DELETE' });
+  }
 } finally {
   server.kill();
   await sleep(400);
