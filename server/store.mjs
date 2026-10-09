@@ -813,19 +813,28 @@ export function exportNotebookArtifactsZip(id) {
   const items = listArtifacts(id);
   const entries = [];
   const zipRoot = 'socratic-artifacts';
+  const skipped = [];
   for (const a of items) {
     const folder = path.join(dir, ARTIFACTS_DIR, a.id);
-    if (!fs.existsSync(folder)) continue; // manifest 有记录但文件夹丢了：打包时不假装有
+    // manifest 有记录但文件夹丢了：打包时不假装有。而且**点名说缺了哪件**（第二十四轮）——
+    // 以前这里默默 continue，README 却数 manifest 的行数：3 件记录 → 2 个 index.html +
+    // 「制品：3 件」。数了没打进包的东西，与"备份说它有、机器上没有"是同一条形状。
+    if (!fs.existsSync(folder)) {
+      skipped.push(a.id);
+      continue;
+    }
     for (const rel of walkFiles(folder)) {
       const data = fs.readFileSync(path.join(folder, rel));
       entries.push({ name: `${zipRoot}/${a.id}/${rel}`, data });
     }
   }
+  const packed = items.length - skipped.length;
   const retired = items.filter((a) => a.retiredAt).map((a) => `- ${a.title}（已收起，${a.retiredAt}）`);
   const readme = [
     `Socratic Studio 制品打包（${new Date().toISOString().slice(0, 10)}）`,
     `学习：${readNotebookTitle(id)}`,
-    `制品：${items.length} 件`,
+    `制品：${packed} 件`,
+    ...(skipped.length ? ['', `以下 ${skipped.length} 件在清单里有记录，但文件夹不在盘上，没有进包：`, ...skipped.map((aid) => `- ${aid}`)] : []),
     '',
     '每一件是一个文件夹，打开里面的 index.html 就能看（制品是页面型 HTML）。',
     ...(retired.length ? ['', '以下已由学习者收起（软退役，文件还在）：', ...retired] : []),
@@ -967,19 +976,32 @@ function exportFileIfAny(dir, name) {
  * 空壳制品同理：manifest 有记录但 index.html 不在，修复前导出给 `html: ''`，导入端照样写出一个
  * 空 index.html，源机点名过的损坏到新机变成 `ok: true`（探针 23-C「备份洗白」）。
  */
+/*
+ * 「存在但坏了」这张判据在 store 里只许有一份（第二十四轮）：整本的 backupBlockers、
+ * 根目录的 configBackupBlockers 都在问同一句话——"这个此刻真在盘上的文件是不是坏 JSON"。
+ * 第二十三轮装了整本那道闸，data/ 根上另一扇出货的门（/api/config/export）没过同一道闸，
+ * 探针 24-A 撞出的形状：credentials.json 坏着 → readJsonSafe 兜成 {} → 导出 200 →
+ * 拿这份包导回去，盘上真密钥被 {} 整份洗掉。
+ * 一扇门有闸、另一扇门没闸，不等于另一扇门不是门。
+ */
+function corruptBlocker(file, label, note = '（坏 JSON）') {
+  return fs.existsSync(file) && corruptNow(file) ? `${label}${note}` : null;
+}
+
 function backupBlockers(id) {
   const dir = assertExists(id);
   const out = [];
   for (const name of HEALTH_FILES) {
-    const file = path.join(dir, name);
-    if (fs.existsSync(file) && corruptNow(file)) out.push(`${name}（坏 JSON）`);
+    const blocker = corruptBlocker(path.join(dir, name), name);
+    if (blocker) out.push(blocker);
   }
   const artifactsDir = path.join(dir, ARTIFACTS_DIR);
   if (fs.existsSync(artifactsDir)) {
     const manifestFile = path.join(artifactsDir, 'manifest.json');
     // manifest 自己坏了也要停下来：readJsonSafe 兜成空清单，于是整本的制品**一份都不进包**，
     // 还照样 200——与少一份 JSON 同一条形状（第二十三轮），不能只盯那八份。
-    if (fs.existsSync(manifestFile) && corruptNow(manifestFile)) out.push('artifacts/manifest.json（坏 JSON，制品会整批漏掉）');
+    const badManifest = corruptBlocker(manifestFile, 'artifacts/manifest.json', '（坏 JSON，制品会整批漏掉）');
+    if (badManifest) out.push(badManifest);
     const manifest = readJsonSafe(manifestFile, { version: 1, items: [] });
     for (const item of Array.isArray(manifest?.items) ? manifest.items : []) {
       const aid = item?.id;
@@ -988,6 +1010,32 @@ function backupBlockers(id) {
     }
   }
   return out;
+}
+
+/**
+ * 配置备份（settings.json + credentials.json）的同一道闸（第二十四轮）：
+ * 根目录这两份 JSON 坏着时，readJsonSafe / loadSettings 会兜成默认值——导出照样 200，
+ * 包里的 credentials 是 {}。拿这份"成功备份"导回去，replaceAll 用 {} 整份替换，
+ * 盘上真密钥当场蒸发（探针 24-A）。拒绝的姿态、话术、状态码与整本导出完全同一族。
+ * 名单仍是 ROOT_EVIDENCE_FILES 那份（根目录在案的只有这两份）。
+ */
+export function configBackupBlockers() {
+  const out = [];
+  for (const name of ROOT_EVIDENCE_FILES) {
+    const blocker = corruptBlocker(path.join(DATA_DIR, name), name);
+    if (blocker) out.push(blocker);
+  }
+  return out;
+}
+
+/** 出货前问一道闸：坏着就抛 409 + blockers（serve 的 config 导出在拼包体之前调用）。 */
+export function assertConfigBackup() {
+  const blockers = configBackupBlockers();
+  if (!blockers.length) return;
+  throw new BackupBlockedError(
+    `配置的数据有缺口，备份会交出一份兜过底的假包：${blockers.join('、')}。先用「体检数据」定位并取证下载原件，修好再备份。`,
+    blockers,
+  );
 }
 
 /**
@@ -1244,7 +1292,8 @@ const HEALTH_FILES = [
  * 扫描范围两处：每本学习的八份 JSON，以及数据根目录的 settings.json / credentials.json——
  * 后两者过去的体检根本看不见（HEALTH_FILES 只遍历 notebooks/），它们的损坏证据同样没人认领。
  *
- * rel 相对 **DATA_DIR**（`corruptFiles` 相对 NOTEBOOKS_DIR，两份清单基准不同，取证口自己认得）。
+ * rel 相对 **DATA_DIR**（`corruptFiles` 里逐本那圈相对 NOTEBOOKS_DIR、根目录那圈是裸名相对
+ * DATA_DIR——基准不同，取证口按有没有 `/` 自己分辨，第二十四轮）。
  */
 const ROOT_EVIDENCE_FILES = [path.basename(SETTINGS_FILE), path.basename(CREDENTIALS_FILE)];
 
@@ -1403,7 +1452,13 @@ export function healthCheck() {
       }
     }
   }
-  // 数据根目录的两个配置 JSON：它们的损坏证据过去没人认领（体检不扫这里）
+  // 数据根目录的两份配置：第二十四轮起它们不再是黑户——体检此刻扫这一层，坏着的原件
+  // 直接进 corruptFiles（裸文件名，基准是 DATA_DIR；notebooks 里那条是 `<本>/<文件>`，
+  // 两种形状取证口自己认得分）。不点名它们，409 的"先体检取证修好再备份"就是条死路。
+  for (const name of ROOT_EVIDENCE_FILES) {
+    if (corruptNow(path.join(DATA_DIR, name))) corruptFiles.push(name);
+  }
+  // 根目录的证据台账（第十八轮补的那一圈；体检认"此刻坏没坏"是第二十四轮才补上的）
   corruptEvidence.push(...collectCorruptEvidence(DATA_DIR, '', ROOT_EVIDENCE_FILES));
 
   let quarantined = 0;
@@ -1437,7 +1492,8 @@ export function healthCheck() {
 }
 
 // 损坏文件取证下载：体检点名之后，原件拿得到。允许两类路径——
-//   1. `corruptFiles` 里的（此刻正坏着的原件，rel 相对 NOTEBOOKS_DIR）；
+//   1. `corruptFiles` 里的（此刻正坏着的原件）。两种形状两套基准（第二十四轮）：
+//      `<id>/<file>` 相对 NOTEBOOKS_DIR；裸文件名（根目录那两份配置）相对 DATA_DIR。
 //   2. `corruptEvidence` 里的（盘上的 `.corrupt-*` 副本，rel 相对 DATA_DIR）——
 //      第十八轮补的：原件被治好后副本曾查无实据，下载口只认当下报告。
 // 都在 healthCheck 的扫描范围内、由登记文件名白名单认领，不是任意文件读取口。
@@ -1447,8 +1503,15 @@ const CORRUPT_DOWNLOAD_MAX_BYTES = 5 * 1024 * 1024;
 export function readCorruptFile(relPath) {
   const report = healthCheck();
   if (report.corruptFiles.includes(relPath)) {
-    // 兼容旧口径：正坏着的原件按 NOTEBOOKS_DIR 解析
-    return serveWhitelisted(NOTEBOOKS_DIR, relPath);
+    /*
+     * 正坏着的原件。两种形状两套基准（第二十四轮）：
+     *   - `<id>/<file>` → NOTEBOOKS_DIR（旧口径，逐本那八份）；
+     *   - 裸文件名（settings.json / credentials.json）→ DATA_DIR。
+     * 根目录那份必须单独解析：都按 NOTEBOOKS_DIR 走会去 notebooks/ 底下找一个
+     * credentials.json，409 话术让用户"先体检取证修好再备份"，这条路自己先 404（探针 24-A）。
+     */
+    const base = relPath.includes('/') ? NOTEBOOKS_DIR : DATA_DIR;
+    return serveWhitelisted(base, relPath);
   }
   const evidence = report.corruptEvidence.find((e) => e.rel === relPath);
   if (evidence) {

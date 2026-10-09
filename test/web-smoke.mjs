@@ -3916,6 +3916,32 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     requests.slice(reqBeforeCfg).some((k) => k === 'GET /api/config/export'), requests.slice(reqBeforeCfg).join(','));
   check('导出设置成功有提示（含密钥的提醒也在）',
     Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出设置')));
+
+  /*
+   * 第二十四轮：整本导出有 409 受阻清单（上一节钉的），这扇门（导出设置）走的是
+   * 同一个 sendError → err.data.blockers → toast 的链。桩里的 error 那句话同样
+   * **不含文件名、不提体检**——文案只能从 blockers 里读。
+   * 修复前这里只有 `导出设置失败：HTTP 409`（fetch 非 ok 抛的那句），清单整个被扔掉。
+   */
+  responses.set('GET /api/config/export', () =>
+    new Response(JSON.stringify({ error: '配置备份先停一停', blockers: ['credentials.json（坏 JSON，密钥此刻读不出来）', 'settings.json（坏 JSON）'] }),
+      { status: 409, headers: { 'Content-Type': 'application/json' } }));
+  exportCfgBtn.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  const cfgBlockedToast = Array.from(doc.getElementById('toasts').children).find((t) => t.textContent.includes('没能备份设置'));
+  check('受阻的设置备份点名是哪份配置坏了（读的是结构化清单）',
+    Boolean(cfgBlockedToast) && cfgBlockedToast.textContent.includes('credentials.json') && cfgBlockedToast.textContent.includes('settings.json'),
+    cfgBlockedToast?.textContent);
+  check('受阻的设置备份给出去哪一步（体检取证）',
+    Boolean(cfgBlockedToast) && cfgBlockedToast.textContent.includes('体检'), cfgBlockedToast?.textContent);
+  // 反向：没有清单的失败不硬编"没能备份设置"，走原来那句 HTTP
+  responses.set('GET /api/config/export', () =>
+    new Response(JSON.stringify({ error: '服务重启中' }), { status: 503, headers: { 'Content-Type': 'application/json' } }));
+  exportCfgBtn.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  const cfgPlainFail = Array.from(doc.getElementById('toasts').children).find((t) => t.textContent.includes('导出设置失败'));
+  check('配置口的普通失败不抢受阻文案（两句话各有其主）',
+    Boolean(cfgPlainFail) && !cfgPlainFail.textContent.includes('没能备份设置'), cfgPlainFail?.textContent);
   check('配置备份这条链路无异常', errors.length === 0, errors.join(' | '));
 }
 

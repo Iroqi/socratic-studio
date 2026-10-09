@@ -70,6 +70,19 @@ function toast(message, bad = false) {
 
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
+/*
+ * 备份受阻的 toast 只有一个形状（第二十四轮）：整本导出与配置导出共用同一份清单字段
+ * （sendError 的 blockers），文案的骨架也就只许有一份——前缀按门分别起名
+ * （「没能备份」/「没能备份设置」），负面路径（清单不存在）照走各自原来的失败句。
+ * 返回是否说出了受阻：真时调用方不许再补一句别的失败文案。
+ */
+function blockedBackupToast(err, prefix) {
+  const blockers = Array.isArray(err.data?.blockers) ? err.data.blockers : [];
+  if (!blockers.length) return false;
+  toast(`${prefix}：${blockers.slice(0, 3).join('、')}${blockers.length > 3 ? '…' : ''}。先点「体检数据」取证修好，再备份。`, true);
+  return true;
+}
+
 /** 内部状态 → 学习者可见的词。绝不出现百分比 / 分数 / 星星 / 进度条。 */
 const STATE_WORDS = {
   unknown: '待学',
@@ -3581,11 +3594,9 @@ function renderBackupPanel(body) {
        * 备份受阻（第二十三轮）：服务端在家底有缺口时拒绝出货（409 + blockers）。
        * 这里不许把它压成一句"导出失败"——学习者要的下一步是"到底哪份数据坏了、去哪看"，
        * 而那句话服务端已经给了清单，前端只负责把它逐行念出来。
+       * 念清单这件事第二十四轮收进 blockedBackupToast：配置那扇门撞的是同一句形。
        */
-      const blockers = Array.isArray(err.data?.blockers) ? err.data.blockers : [];
-      if (blockers.length) {
-        toast(`没能备份：${blockers.slice(0, 3).join('、')}${blockers.length > 3 ? '…' : ''}。先点「体检数据」取证修好，再备份。`, true);
-      } else {
+      if (!blockedBackupToast(err, '没能备份')) {
         toast(`导出失败：${err.message}`, true);
       }
     } finally {
@@ -4407,7 +4418,21 @@ function buildConfigBackupBlock() {
     try {
       exportBtn.disabled = true;
       const res = await fetch('/api/config/export');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        /*
+         * 错误体要读出来（第二十四轮）：服务端受阻时把缺口清单放在 `blockers` 里，
+         * 以前这里只 throw `HTTP 409`——清单整个被扔掉，学习者只看到一个状态码。
+         */
+        let data = null;
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+        const err = new Error(data?.error || `HTTP ${res.status}`);
+        err.data = data;
+        throw err;
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = el('a');
@@ -4419,7 +4444,7 @@ function buildConfigBackupBlock() {
       setTimeout(() => URL.revokeObjectURL(url), 5000);
       toast('已导出设置（含密钥，请妥善保存）');
     } catch (err) {
-      toast(`导出设置失败：${err.message}`, true);
+      if (!blockedBackupToast(err, '没能备份设置')) toast(`导出设置失败：${err.message}`, true);
     } finally {
       exportBtn.disabled = false;
     }

@@ -697,6 +697,13 @@ const server = http.createServer(async (req, res) => {
     // 导出 = 带密钥的 JSON（备份的本意；README 标注勿外传）。
     // 导入 = 校验形状后整份写回（settings 走白名单，凭据整份替换进固定文件，无注入面）。
     if (pathname === '/api/config/export' && method === 'GET') {
+      /*
+       * 另一扇门也是门（第二十四轮）：整本导出有 backupBlockers 那道闸，这扇门上以前没有。
+       * credentials.json 坏着时 readJsonSafe 兜成 {}、settings 兜成默认值，导出照样 200——
+       * 那份"成功备份"里密钥是空的；拿它导回去，replaceAll 把盘上真密钥整份洗掉。
+       * 闸在拼包体**之前**：被拒绝时除了错误文本，什么都不发生、一个字节都不写。
+       */
+      store.assertConfigBackup();
       const bundle = {
         kind: 'socratic-config',
         version: 1,
@@ -721,6 +728,16 @@ const server = http.createServer(async (req, res) => {
       const settings = body?.settings;
       if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
         return sendJson(res, 400, { error: '配置备份里没有 settings' });
+      }
+      /*
+       * credentials 的形状检查以前住在 replaceAll 里，抛的是不带状态的 Error(500)——
+       * 而那一句排在 saveSettings 之后：缺 credentials 的包会先把 settings 落进盘、
+       * 再在第二句上炸，一次"失败的导入"改了半个配置（撕裂）。现在整包预检写在任何落盘
+       * 之前：请求真错了就 400，盘上一个字节都不动（探针 24-B）。
+       */
+      const credentials = body?.credentials;
+      if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) {
+        return sendJson(res, 400, { error: '配置备份里的 credentials 缺失或不是对象——整包预检在写盘之前，这次导入什么都没改' });
       }
       const patch = {};
       for (const key of ['activeModel', 'custom', 'customEndpoints', 'recent', 'decision']) {
@@ -754,7 +771,7 @@ const server = http.createServer(async (req, res) => {
         });
       }
       saveSettings(patch);
-      await registry.credentials.replaceAll(body?.credentials);
+      await registry.credentials.replaceAll(credentials);
       return sendJson(res, 200, { ok: true, settings: loadSettings() });
     }
 
@@ -771,7 +788,8 @@ const server = http.createServer(async (req, res) => {
     }
     // ---------- 损坏文件取证下载：体检点名之后，原件拿得到。
     // 允许两条清单（store.readCorruptFile 内部先跑一次 healthCheck 校验）：正坏着的原件
-    // （corruptFiles，相对 notebooks/）与盘上的 `.corrupt-*` 证据副本（corruptEvidence，相对 data/，
+    // （corruptFiles——逐本的相对 notebooks/，根目录那两份是裸名相对 data/，第二十四轮）
+    // 与盘上的 `.corrupt-*` 证据副本（corruptEvidence，相对 data/，
     // 第十八轮补——原件治好之后证据也要拿得到）。不是任意文件读取口。字节原样发出去，文件名百分号编码。
     if (pathname === '/api/health/corrupt' && method === 'GET') {
       const url = new URL(req.url, 'http://localhost');

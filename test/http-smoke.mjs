@@ -1421,6 +1421,101 @@ try {
     await jfetch(`${BASE}/api/notebooks/${nb26}`, { method: 'DELETE' });
     await jfetch(`${BASE}/api/notebooks/${nb26b}`, { method: 'DELETE' });
   }
+
+  /*
+   * ── 27. 另一扇门也是门：配置备份过同一道闸（第二十四轮，真服务）
+   *
+   * 探针 24-A/24-B 的事实：credentials.json 写坏 → 体检 ok=true（根目录是黑户）、
+   * /api/config/export 照样 200 且 credentials={} —— 盘上真密钥没了、包却"成功"了；
+   * 拿这份包导回去 → 200，盘被 {} 整份覆盖。手写包缺 credentials → 500
+   * （"凭据必须是对象"是内部话术，学习者不该看到栈味）。修复后：坏的时候 409+blockers，
+   * 缺 credentials 是 400（请求真错了），体检点名根目录、取证口能下载坏原件。
+   */
+  {
+    const cred27 = path.join(dataDir, 'credentials.json');
+    const set27 = path.join(dataDir, 'settings.json');
+    const snap = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null);
+    const put = (f, v) => { if (v === null) fs.rmSync(f, { force: true }); else fs.writeFileSync(f, v); };
+    const credBak = snap(cred27);
+    const setBak = snap(set27);
+    try {
+      // 攒一份真实配置：一把密钥 + 一条设置
+      await fetch(`${BASE}/api/providers/openai/key`, { method: 'PUT', headers: H, body: JSON.stringify({ key: 'sk-round24-live' }) });
+      await jfetch(`${BASE}/api/settings`, { method: 'PUT', headers: H, body: JSON.stringify({ recent: ['第二十四轮'] }) });
+      const okExport = await jfetch(`${BASE}/api/config/export`);
+      check('一切正常时配置备份照常出货（闸门不是默认拒绝）',
+        okExport.status === 200 && okExport.data?.credentials?.openai && okExport.data?.settings?.recent?.includes('第二十四轮'),
+        `status=${okExport.status} ${JSON.stringify(okExport.data).slice(0, 120)}`);
+
+      // ① 体检要认根目录：坏着的 credentials.json 必须点名
+      const credGood = snap(cred27);
+      put(cred27, '{"openai": 半截');
+      const h27 = (await jfetch(`${BASE}/api/health`)).data;
+      check('坏着的 credentials.json 被体检点名（data/ 根不再是黑户）',
+        h27.corruptFiles.includes('credentials.json') && h27.ok === false,
+        `ok=${h27?.ok} corruptFiles=${JSON.stringify(h27?.corruptFiles)}`);
+
+      // ② 取证口认领根目录原件——409 的话术是"先体检取证修好再备份"，这条路必须真通
+      const dl27 = await fetch(`${BASE}/api/health/corrupt?path=${encodeURIComponent('credentials.json')}`);
+      const dlBody27 = dl27.ok ? Buffer.from(await dl27.arrayBuffer()) : null;
+      check('根目录坏原件能从取证口下载（字节原样，指的路自己走得通）',
+        dl27.status === 200 && dlBody27?.toString('utf8') === '{"openai": 半截', `status=${dl27.status}`);
+
+      // ③ 配置导出问同一道闸：坏的时候不许出货
+      const badExport = await jfetch(`${BASE}/api/config/export`);
+      check('配置备份对着坏掉的根 JSON 说"不能备份"（409，不是兜成默认值的 200）',
+        badExport.status === 409 && String(badExport.data?.error).includes('credentials.json'),
+        `status=${badExport.status} ${JSON.stringify(badExport.data).slice(0, 160)}`);
+      check('响应带 blockers 清单（与整本导出同一个字段，接口层只有一份转法）',
+        Array.isArray(badExport.data?.blockers) && badExport.data.blockers.some((b) => b.includes('credentials.json')),
+        JSON.stringify(badExport.data?.blockers));
+
+      // ④ 那份包导不回去，密钥就洗不掉——盘上坏着的原件一字没动
+      const stillThere = snap(cred27);
+      check('被拒绝的备份没有动过盘（拒绝=除了一段错误文本外什么都不发生）',
+        stillThere === '{"openai": 半截', String(stillThere));
+
+      put(cred27, credGood);
+      const healed = await jfetch(`${BASE}/api/config/export`);
+      check('修好之后配置备份照常 200（拒绝不是姿态，是状态）',
+        healed.status === 200 && healed.data?.credentials?.openai?.key === 'sk-round24-live',
+        `status=${healed.status}`);
+
+      // ⑤ settings.json 同罪同罚
+      const setGood = snap(set27);
+      put(set27, '{ 半截设置');
+      const badSet = await jfetch(`${BASE}/api/config/export`);
+      check('settings.json 坏着也拦（DEFAULT_SETTINGS 兜底=端点整批蒸发，同一条形状）',
+        badSet.status === 409 && Array.isArray(badSet.data?.blockers) && badSet.data.blockers.some((b) => b.includes('settings.json')),
+        `status=${badSet.status} ${JSON.stringify(badSet.data?.blockers)}`);
+      put(set27, setGood);
+
+      // ⑥ 手写包缺 credentials：是 400（请求真错了），不是 500 的内部话术
+      const missCred = await jfetch(`${BASE}/api/config/import`, {
+        method: 'POST', headers: H, body: JSON.stringify({ kind: 'socratic-config', version: 1, settings: { recent: ['第二十四轮-x'] } }),
+      });
+      check('缺 credentials 的包 400（不再是 500"凭据必须是对象"）',
+        missCred.status === 400 && String(missCred.data?.error).includes('credentials'),
+        `status=${missCred.status} ${JSON.stringify(missCred.data)}`);
+      const badCred = await jfetch(`${BASE}/api/config/import`, {
+        method: 'POST', headers: H, body: JSON.stringify({ kind: 'socratic-config', version: 1, settings: {}, credentials: 'sk-字符串不是对象' }),
+      });
+      check('credentials 不是对象同样 400（口径同缺键，一条边只有一套说法）',
+        badCred.status === 400, `status=${badCred.status} ${JSON.stringify(badCred.data)}`);
+      // 400 也不许留半成品：修复前这条路由先 saveSettings 再 replaceAll(credentials)，
+      // 缺 credentials 的包会把 settings 落进盘、然后在第二句上炸——一次"失败的导入"改了半个配置。
+      const setNow27 = JSON.parse(snap(set27));
+      check('被 400 拒掉的导入没把盘撕裂（预检在写任何文件之前，失败=什么都没发生）',
+        JSON.stringify(setNow27.recent) === JSON.stringify(['第二十四轮']),
+        `盘上 recent=${JSON.stringify(setNow27.recent)}`);
+      const credNow = snap(cred27);
+      check('被拒的导入同样没碰凭据（两扇门一起才算整包预检）',
+        credNow === credGood, `盘上=${String(credNow).slice(0, 60)}`);
+    } finally {
+      put(set27, setBak);
+      put(cred27, credBak);
+    }
+  }
 } finally {
   server.kill();
   await sleep(400);

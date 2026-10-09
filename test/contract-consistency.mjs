@@ -586,9 +586,13 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
   check('前端读取台账带兜底（老服务没这字段不许炸面板）',
     /Array\.isArray\(report\.corruptEvidence\)/.test(webAppSrc), '直接当数组用了');
   // 台账的 rel 基准必须和 corruptFiles 不同且被 readCorruptFile 认得——两处基准搞混就是 404 现场
+  // （第二十四轮把"原件"这一圈再分成两套基准：逐本 `<id>/<file>` 对 NOTEBOOKS_DIR、
+  //  根目录裸名对 DATA_DIR，钉的仍是"分得开、不混用"这一条）
   check('readCorruptFile 明确分辨两份清单（原件走 NOTEBOOKS_DIR，副本走 DATA_DIR）',
     /report\.corruptFiles\.includes/.test(storeSrc) && /corruptEvidence\.find/.test(storeSrc)
-    && /serveWhitelisted\(NOTEBOOKS_DIR/.test(storeSrc) && /serveWhitelisted\(DATA_DIR/.test(storeSrc),
+    && /NOTEBOOKS_DIR/.test(storeSrc) && /serveWhitelisted\(DATA_DIR/.test(storeSrc)
+    && /serveWhitelisted\(base, relPath\)/.test(storeSrc)
+    && /relPath\.includes\('\/'\) \? NOTEBOOKS_DIR : DATA_DIR/.test(storeSrc),
     '白名单没分基准');
 }
 
@@ -1016,13 +1020,19 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     && /for \(const name of HEALTH_FILES\)/.test(healthFn23),
     `定义 ${(storeSrc23.match(/const HEALTH_FILES = \[/g) || []).length} 处；backupBlockers 用它=${/HEALTH_FILES/.test(blockFn23)}`);
   check('缺口检查只认"存在但坏了"（缺文件是正常状态，不许把它当损坏拒绝）',
-    /fs\.existsSync\(file\) && corruptNow\(file\)/.test(blockFn23),
-    blockFn23 ? (blockFn23.match(/if \(fs\.existsSync.*/) || [''])[0] : '找不到 backupBlockers 本体');
+    // 第二十四轮把这张判据收进 corruptBlocker，语义不变：backupBlockers 必须走它，
+    // 而它自己必须同时问"在不在"与"坏没坏"——钉本体住在 helper 上。
+    /corruptBlocker\(/.test(blockFn23)
+    && /fs\.existsSync\(file\) && corruptNow\(file\)/.test(
+      /function corruptBlocker\([\s\S]*?\n\}/.exec(storeSrc23)?.[0] || ''),
+    blockFn23 ? (blockFn23.match(/corruptBlocker\([^\n]*/) || [''])[0] : '找不到 backupBlockers 本体');
   check('空壳制品也在拒绝的判据里（manifest 有记录、index.html 不在）',
     /index\.html/.test(blockFn23) && /existsSync\(path\.join\(artifactsDir, aid, 'index\.html'\)\)/.test(blockFn23),
     blockFn23 ? (blockFn23.match(/.*index\.html.*/) || [''])[0] : '找不到空壳那一段');
   check('manifest 自己坏了也要停下来（制品整批漏掉与少一份 JSON 同一条形状）',
-    /corruptNow\(manifestFile\)/.test(blockFn23),
+    // 判据收进 corruptBlocker 之后仍然成立：坏 manifest 走的是同一张"存在但坏了"的判据
+    /corruptBlocker\(manifestFile, 'artifacts\/manifest\.json'/.test(blockFn23)
+    && /制品会整批漏掉/.test(blockFn23),
     blockFn23 ? (blockFn23.match(/.*manifestFile.*/) || [''])[0] : '找不到 manifest 那一段');
   check('导出真的问了这道门（拒绝在出货之前，不是包好了再补一句警告）',
     /const blockers = backupBlockers\(id\);\n    if \(blockers\.length\)|const blockers = backupBlockers\(id\);\n  if \(blockers\.length\)/.test(exportFn23)
@@ -1036,7 +1046,7 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
   check('sendError 把 blockers 发给前端（错误对象上带着清单，接口层不许丢）',
     /blockers: err\?\.blockers \?\? undefined/.test(serveSrc), 'serve 的 sendError 不带 blockers');
   check('前端读的是结构化清单，不是从 error 那句话里抠文件名',
-    /Array\.isArray\(err\.data\?\.blockers\)/.test(webSrc23) && /没能备份：\$\{blockers\.slice\(0, 3\)/.test(webSrc23),
+    /Array\.isArray\(err\.data\?\.blockers\)/.test(webSrc23) && /没能备份/.test(webSrc23),
     webSrc23 ? (webSrc23.match(/const blockers = [^\n]*/) || [''])[0] : '找不到 app.js');
   check('受阻的提示说清下一步去哪（点名 + 指向体检取证）',
     /没能备份/.test(webSrc23) && /体检/.test(webSrc23),
@@ -1083,6 +1093,117 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     && /(\S)份 JSON 里解析失败/.test(readmeDoc) && (readmeDoc.match(/(\S)份 JSON 里解析失败/) || [])[1] === CN_NUM[keyCount23]
     && !/七份/.test(storeSrc23) && !/七份/.test(readmeDoc),
     `数组 ${keyCount23} 项；store 注释=${(storeSrc23.match(/只认这(\S)份/) || [])[1]}；报错=${(storeSrc23.match(/白名单内的(\S)份/) || [])[1]}；README=${(readmeDoc.match(/(\S)份 JSON \+ 素材/) || [])[1]}`);
+}
+
+// ──────────────────────────────── 另一扇门也是门（第二十四轮）
+//
+// 第二十三轮那道闸只装在一扇门上。这一节的钉子全部对着**结构与口径**：
+// "存在但坏了"这张判据全仓一份、体检与取证口对根目录的口径一致、config 那道闸站在
+// 拼包体之前、导入的整包预检站在任何写之前、受阻文案在界面只有一份骨架。
+// 行为本身由 run.mjs §12m/§12j-2b/§12l-6b、http-smoke §27、web-smoke §33 钉。
+{
+  const storeSrc24 = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8');
+  const webSrc24 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+
+  // 1) 「存在但坏了」这张判据只许有一份
+  const corruptBlockerFn = /function corruptBlocker\([\s\S]*?\n\}/.exec(storeSrc24)?.[0] || '';
+  const blockFn24 = /function backupBlockers\(id\) \{[\s\S]*?\n\}/.exec(storeSrc24)?.[0] || '';
+  const cfgBlockFn24 = /export function configBackupBlockers\(\) \{[\s\S]*?\n\}/.exec(storeSrc24)?.[0] || '';
+  const healthFn24 = /export function healthCheck\(\) \{[\s\S]*?\n\}/.exec(storeSrc24)?.[0] || '';
+  check('判据收成一处 corruptBlocker（整本与根目录共用，不各自抄一遍 existsSync && corruptNow）',
+    (storeSrc24.match(/function corruptBlocker\(/g) || []).length === 1
+    && /fs\.existsSync\(file\) && corruptNow\(file\)/.test(corruptBlockerFn)
+    && /corruptBlocker\(path\.join\(dir, name\), name\)/.test(blockFn24)
+    && /corruptBlocker\(path\.join\(DATA_DIR, name\), name\)/.test(cfgBlockFn24),
+    `定义 ${(storeSrc24.match(/function corruptBlocker\(/g) || []).length} 处；backupBlockers 用它=${/corruptBlocker\(/.test(blockFn24)}；config 用它=${/corruptBlocker\(/.test(cfgBlockFn24)}`);
+  check('根目录那道闸复用同一个错误类（409 + blockers，不新造第二套状态码）',
+    /class BackupBlockedError extends Error/.test(storeSrc24)
+    && (storeSrc24.match(/class \w*BlockedError extends Error/g) || []).length === 1
+    && /throw new BackupBlockedError/.test(/export function assertConfigBackup\(\) \{[\s\S]*?\n\}/.exec(storeSrc24)?.[0] || ''),
+    `BlockedError 类 ${(storeSrc24.match(/class \w*BlockedError extends Error/g) || []).length} 个`);
+  check('拒绝话术指向体检（两扇门给的是同一条能走通的路）',
+    /体检/.test(/export function assertConfigBackup\(\) \{[\s\S]*?\n\}/.exec(storeSrc24)?.[0] || ''),
+    'assertConfigBackup 没说下一步去哪');
+
+  // 2) 体检与取证口对根目录的口径：点名 + 认领
+  check('体检扫 data/ 根（那两份配置不再是黑户）',
+    /for \(const name of ROOT_EVIDENCE_FILES\)/.test(healthFn24)
+    && /corruptFiles\.push\(name\)/.test(healthFn24),
+    healthFn24 ? 'healthCheck 里没有根目录那一圈' : '找不到 healthCheck 本体');
+  check('根目录用 corruptNow 判"此刻坏没坏"，缺文件不进清单（缺文件不是损坏这条边界不分目录）',
+    /if \(corruptNow\(path\.join\(DATA_DIR, name\)\)\)/.test(healthFn24)
+    && !/ROOT_EVIDENCE_FILES[\s\S]{0,120}corruptFiles\.push\(`\$\{/.test(healthFn24),
+    healthFn24.replace(/\s+/g, ' ').match(/for \(const name of ROOT_EVIDENCE_FILES\)[\s\S]{0,90}/)?.[0] || '找不到那一圈');
+  check('取证口分得清两套基准（裸文件名→DATA_DIR，`<本>/<文件>`→NOTEBOOKS_DIR）',
+    /relPath\.includes\('\/'\) \? NOTEBOOKS_DIR : DATA_DIR/.test(storeSrc24),
+    'readCorruptFile 仍按一个基准解析全部路径');
+
+  // 3) config 导出真的问了这道门（拒绝在拼包体之前）
+  const cfgExport24 = /\/api\/config\/export' && method === 'GET'\) \{([\s\S]*?)\n    if \(pathname === '\/api\/config\/import'/.exec(serveSrc)?.[1] || '';
+  check('导出设置的路由先过闸再拼包体（不是包好了补一句警告）',
+    /store\.assertConfigBackup\(\);/.test(cfgExport24)
+    && cfgExport24.indexOf('store.assertConfigBackup()') < cfgExport24.indexOf('const bundle'),
+    cfgExport24 ? cfgExport24.replace(/\s+/g, ' ').slice(0, 120) : '找不到 config 导出那段');
+
+  // 4) 导入：整包预检站在任何写之前（失败=什么都没发生，不许撕裂）
+  const cfgImport24 = /\/api\/config\/import' && method === 'POST'\) \{([\s\S]*?)\n    \/\/ ---------- 数据体检/.exec(serveSrc)?.[1] || '';
+  const credCheck24 = /credentials 缺失或不是对象/.test(cfgImport24);
+  check('credentials 的形状检查搬进路由（不再让 replaceAll 抛不带状态的 Error=500）',
+    credCheck24 && /sendJson\(res, 400, \{ error: '配置备份里的 credentials/.test(cfgImport24)
+    && !/replaceAll\(body\?\.credentials\)/.test(cfgImport24),
+    cfgImport24 ? (cfgImport24.match(/.*credentials.*/) || [''])[0] : '找不到 config 导入那段');
+  const credPre24 = cfgImport24.indexOf('credentials 缺失或不是对象');
+  const saveAt24 = cfgImport24.indexOf('saveSettings(patch);');
+  check('预检排在 saveSettings 之前（修复前顺序写反：settings 已落盘、credentials 才炸——半个配置）',
+    credPre24 > -1 && saveAt24 > -1 && credPre24 < saveAt24,
+    `预检@${credPre24}，saveSettings@${saveAt24}`);
+
+  // 5) 受阻文案在界面只有一份骨架（两扇门各有各的前缀，共用同一段话）
+  const toastFn24 = /function blockedBackupToast\([\s\S]*?\n\}/.exec(webSrc24)?.[0] || '';
+  check('念清单收成一处 blockedBackupToast（清单读结构化字段、最多三条、指向体检）',
+    (webSrc24.match(/function blockedBackupToast\(/g) || []).length === 1
+    && /Array\.isArray\(err\.data\?\.blockers\)/.test(toastFn24)
+    && /blockers\.slice\(0, 3\)/.test(toastFn24)
+    && /先点「体检数据」取证修好，再备份/.test(toastFn24),
+    `定义 ${(webSrc24.match(/function blockedBackupToast\(/g) || []).length} 处`);
+  check('这句话的骨架全仓只有一份（两扇门调它，不各自抄一遍模板）',
+    (webSrc24.match(/先点「体检数据」取证修好，再备份/g) || []).length === 1
+    && /blockedBackupToast\(err, '没能备份'\)/.test(webSrc24)
+    && /blockedBackupToast\(err, '没能备份设置'\)/.test(webSrc24),
+    `骨架 ${(webSrc24.match(/先点「体检数据」取证修好，再备份/g) || []).length} 处`);
+  check('配置导出的错误体真的被读出来（HTTP 状态码不是给学习者看的清单）',
+    /const err = new Error\(data\?\.error \|\| `HTTP \$\{res\.status\}`\)/.test(webSrc24)
+    && /err\.data = data;/.test(webSrc24),
+    webSrc24 ? (webSrc24.match(/.*HTTP \$\{res\.status\}.*/) || [''])[0] : '找不到 app.js');
+
+  // 6) 打包 zip 的 README 不许数没进包的东西
+  const zipFn24 = /export function exportNotebookArtifactsZip\(id\) \{[\s\S]*?\n\}/.exec(storeSrc24)?.[0] || '';
+  check('README 数的件数=真进包的件数（manifest 行数不是包内件数）',
+    /制品：\$\{packed\} 件/.test(zipFn24) && !/制品：\$\{items\.length\} 件/.test(zipFn24),
+    zipFn24 ? (zipFn24.match(/.*制品：.*/) || [''])[0] : '找不到打包函数');
+  check('没进包的那件被点名（缺东西要说不缺什么，不能只是少一个数字）',
+    /skipped\.push\(a\.id\)/.test(zipFn24) && /skipped\.map\(/.test(zipFn24)
+    && /没有进包/.test(zipFn24),
+    zipFn24 ? (zipFn24.match(/.*没有进包.*/) || [''])[0] : '找不到 skipped 那一段');
+
+  // 7) README：钉语义不钉关键词
+  const doorDoc = /### 另一扇门也是门[\s\S]{0,5000}?(?=\n### |\n## )/.exec(readmeDoc);
+  check('README 写了这轮的四条事实（黑户 / 指错路 / 没闸的门 / 撕裂）',
+    Boolean(doorDoc) && /黑户/.test(doorDoc[0]) && /evaporat|蒸发/.test(doorDoc[0])
+    && /撕裂/.test(doorDoc[0]) && /不在清单里|400/.test(doorDoc[0]),
+    doorDoc ? doorDoc[0].replace(/\n+/g, ' ').slice(0, 160) : '找不到这一节');
+  check('README 写明两套基准（裸文件名对 DATA_DIR，`<本>/<文件>` 对 NOTEBOOKS_DIR）',
+    Boolean(doorDoc) && /裸文件名/.test(doorDoc[0]) && /DATA_DIR/.test(doorDoc[0]) && /NOTEBOOKS_DIR/.test(doorDoc[0]),
+    doorDoc ? '那一节没写两套基准' : '找不到这一节');
+  check('README 写明 400 与 409 的分工（包不像话是请求错，家底坏着是状态不允许）',
+    Boolean(doorDoc) && /请求错/.test(doorDoc[0]) && /状态不允许/.test(doorDoc[0]),
+    doorDoc ? '那一节没写两个状态码的分工' : '找不到这一节');
+  check('README 写明判据与文案各只有一份（corruptBlocker / blockedBackupToast 有名分）',
+    Boolean(doorDoc) && /corruptBlocker/.test(doorDoc[0]) && /blockedBackupToast/.test(doorDoc[0]),
+    doorDoc ? '那一节没写单一定义' : '找不到这一节');
+  check('README 写了 zip 的诚实账（件数只数真进包的，缺的点名）',
+    Boolean(doorDoc) && /README\.txt/.test(doorDoc[0]) && /manifest/.test(doorDoc[0]) && /探针 24-C/.test(doorDoc[0]),
+    doorDoc ? '那一节没写 zip 这条账' : '找不到这一节');
 }
 
 console.log(`\n${'─'.repeat(52)}`);

@@ -3639,13 +3639,33 @@ check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据
     check('治好了的 settings 副本照样能取证（字节原样）',
       !healedErr && healedGot.buffer.toString('utf8') === badSettings,
       healedErr ? `抛了 ${healedErr.reason || healedErr.message}` : healedGot.buffer.toString('utf8').slice(0, 40));
-    // 台账不是后门：data/ 根上没登记的凭据文件，即使名字撞形状也不认领
+    // 台账不是后门：data/ 根上的凭据原件，**合法**的不许从取证口出去（第二十四轮改了口径：
+    // 坏着的原件现在点名了、也认领了——探针 24-A 撞出"体检对根目录全瞎"之后，这条边界重新画）
     const creds = path.join(tmpRoot, 'credentials.json');
     const credsBackup = fs.existsSync(creds) ? fs.readFileSync(creds, 'utf8') : null;
-    fs.writeFileSync(creds, 'sk-别把凭据经这条路漏出去');
+    fs.writeFileSync(creds, JSON.stringify({ openai: { type: 'api_key', key: 'sk-别把凭据经这条路漏出去' } }));
     let shapeSneak = null;
     try { shapeSneak = store.readCorruptFile('credentials.json'); } catch (err) { shapeSneak = err; }
-    check('台账不认领没登记的原件（好的/坏的凭据原件都不在口上）', shapeSneak?.reason === 'not-in-report', String(shapeSneak?.reason));
+    check('合法的凭据原件仍不在取证口上（只有体检点名的损坏文件才认领）', shapeSneak?.reason === 'not-in-report', String(shapeSneak?.reason));
+    // 探针 24-A：credentials.json 写坏 → 体检 ok=true、corruptFiles=[]、取证口 400——
+    // 根目录那两扇配置在"此刻坏没坏"这件事上是黑户，而配置备份照样从它们身上出货。
+    fs.writeFileSync(creds, '{"openai": 半截');
+    const rootRep24 = store.healthCheck();
+    check('根目录坏 credentials.json 被体检点名（data/ 根不再是黑户）',
+      rootRep24.corruptFiles.includes('credentials.json'), rootRep24.corruptFiles.join(','));
+    // 归属要分得清：根目录那条是**裸文件名**，不带 `<本>/` 前缀——取证口按基准目录解析，
+    // 前缀写错就变成"去 notebooks/ 底下找一个 credentials.json"，指错了地方。
+    check('根目录的点名写的是裸文件名（不是某本学习里的文件，基准目录不同）',
+      rootRep24.corruptFiles.some((f) => f === 'credentials.json' && !f.includes('/')),
+      rootRep24.corruptFiles.filter((f) => f.includes('credential')).join(','));
+    let rootGot = null, rootErr = null;
+    try { rootGot = store.readCorruptFile('credentials.json'); } catch (err) { rootErr = err; }
+    check('坏着的根目录原件能从取证口下载（409 话术让用户"取证修好再备份"，这条路必须真通）',
+      !rootErr && rootGot.buffer.toString('utf8') === '{"openai": 半截',
+      rootErr ? `抛了 ${rootErr.reason || rootErr.message}` : '拿到了');
+    fs.rmSync(creds, { force: true });
+    check('根目录文件**缺失**不算损坏（新装就没有 credentials.json，缺文件不是损坏这条边界不分目录）',
+      !store.healthCheck().corruptFiles.includes('credentials.json'));
     fs.writeFileSync(creds, 'x'.repeat(9) + '\n'); // 非法 JSON，但证据副本名要撞台账形状
     const { readJsonSafe: peekRead } = await import('../server/config.mjs');
     peekRead(creds, {}); // 让它自己留一份 credentials.json.corrupt-<ms>
@@ -3786,9 +3806,83 @@ check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据
   check('12l-6 根上有 README.txt（说明这是什么包、谁收起来过）',
     names.includes('socratic-artifacts/README.txt') && zipEntries.find((e) => e.name.endsWith('README.txt')).data.toString('utf8').includes('制品二'),
     names.join(' | '));
+  /*
+   * 12l-6b（第二十四轮）：README 那句「制品：N 件」以前数的是 manifest 的行数，
+   * 而打包时文件夹丢了的那件被 continue 跳过——包里根本没有它，README 却说有。
+   * 探针 24-C：3 件记录 → 2 个 index.html + README 写「制品：3 件」。
+   * 数了没打进包的东西，与"备份说它有、机器上没有"是同一条形状（空文件蒸发，第二十三轮）。
+   */
+  const zipReadme = zipEntries.find((e) => e.name.endsWith('README.txt')).data.toString('utf8');
+  check('12l-6b README 数的件数=真进包的件数（丢了文件夹的那件不许被算进去）',
+    /制品[：:] ?2/.test(zipReadme) && !/制品[：:] ?3/.test(zipReadme), zipReadme.split('\n').find((l) => l.includes('制品')) || zipReadme.slice(0, 120));
+  check('12l-6c README 点名没进包的那件（缺东西要说不缺什么，不能只是少一个数字）',
+    zipReadme.includes('art-ghost'), zipReadme.slice(0, 200));
   check('12l-7 每个条目的 CRC32 与数据对得上（字节没写歪）',
     zipEntries.every((e) => e.crc === crc32(e.data)), zipEntries.map((e) => `${e.name}:${e.crc.toString(16)}`).join(' '));
 }
+
+// ─────────────────────────────────────── 12m. 另一扇门也是门：配置备份过同一道闸（第二十四轮）
+section('12m. 配置备份要过同一道闸：坏的时候不许出货');
+{
+  /*
+   * 探针 24-A/24-B（真服务）撞出来的形状：第二十三轮给「导出整本」装了闸，
+   * 但 data/ 根上还有另一扇出货的门——/api/config/export 把 settings.json 与
+   * credentials.json 兜成默认值照样 200 发出去；拿这份"成功备份"导回去，
+   * 盘上真密钥被 {} 整份覆盖。体检也不扫这一层（ok=true），409 话术让用户
+   * "取证修好再备份"，取证口却回 400"不在清单里"——三条各说各话。
+   * 这一节钉判据本体；真服务那一条在 http-smoke §27。
+   */
+  const root24 = process.env.SOCRATIC_DATA_DIR;
+  const settings24 = path.join(root24, 'settings.json');
+  const creds24 = path.join(root24, 'credentials.json');
+  const snap24 = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null);
+  const restore24 = (f, v) => { if (v === null) fs.rmSync(f, { force: true }); else fs.writeFileSync(f, v); };
+  const sBak24 = snap24(settings24);
+  const cBak24 = snap24(creds24);
+  // 未修复代码上这个函数还不存在——每颗钉子自己吞住 TypeError，红自己的原因，不炸整支套件
+  const ask24 = () => { try { return { v: store.configBackupBlockers() }; } catch (err) { return { err }; } };
+  try {
+    const clean24 = ask24();
+    check('配置口一切正常时没有缺口（拒绝不是默认姿态）',
+      !clean24.err && Array.isArray(clean24.v) && clean24.v.length === 0,
+      clean24.err ? `抛了 ${clean24.err.message}` : JSON.stringify(clean24.v));
+
+    restore24(creds24, '{"openai": 半截');
+    const badCreds = ask24();
+    check('credentials.json 坏着 → 配置备份点名拒绝（readJsonSafe 兜成 {}，导出"成功"就是密钥被洗没的前一秒）',
+      !badCreds.err && badCreds.v.some((b) => b.includes('credentials.json')),
+      badCreds.err ? `抛了 ${badCreds.err.message}` : JSON.stringify(badCreds.v));
+
+    restore24(creds24, cBak24);
+    restore24(settings24, '{ 半截设置');
+    const badSet = ask24();
+    check('settings.json 坏着同样拦（DEFAULT_SETTINGS 兜底=自建端点整批蒸发，与少一份 JSON 同一条形状）',
+      !badSet.err && badSet.v.some((b) => b.includes('settings.json')),
+      badSet.err ? `抛了 ${badSet.err.message}` : JSON.stringify(badSet.v));
+
+    // 缺文件不是损坏——这条边界不分目录：新装机器根本没有 credentials.json
+    restore24(settings24, null);
+    restore24(creds24, null);
+    const absent = ask24();
+    check('配置文件不在 ≠ 缺口（缺文件不是损坏这条边界延伸到根目录）',
+      !absent.err && absent.v.length === 0, absent.err ? `抛了 ${absent.err.message}` : JSON.stringify(absent.v));
+
+    // 拒绝的理由得给下一步（与第二十三轮话术同族：点名 + 指向体检取证）
+    restore24(settings24, sBak24);
+    restore24(creds24, '{ 坏');
+    let gateErr = null;
+    try { store.assertConfigBackup(); } catch (err) { gateErr = err; }
+    check('闸门抛的是 409 + blockers（复用 BackupBlockedError，不新造第二套状态码）',
+      gateErr?.status === 409 && Array.isArray(gateErr?.blockers) && gateErr.blockers.some((b) => b.includes('credentials.json')),
+      JSON.stringify({ status: gateErr?.status, blockers: gateErr?.blockers, message: String(gateErr?.message).slice(0, 80) }));
+    check('拒绝话术指向体检（写了没人走得通的下一步=没写）', /体检/.test(String(gateErr?.message)), String(gateErr?.message));
+    restore24(creds24, cBak24);
+  } finally {
+    restore24(settings24, sBak24);
+    restore24(creds24, cBak24);
+  }
+}
+
 
 // ─────────────────────────────────────── 收尾
 
