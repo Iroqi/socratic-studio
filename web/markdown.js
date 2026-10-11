@@ -2,15 +2,13 @@
 // 段落、列表、代码块、表格、引用和公式，这些足够覆盖。
 //
 // 安全：所有输入先做 HTML 转义，只有我们自己生成的标签会进入 DOM。
+//
+// 内联界面的编译入口也挂在这里（```ui 围栏 → ui-compile.js）。之所以由渲染器调用、
+// 而不是 app.js 自己认一遍：正文每一块都从这一道过，流式那一帧帧重画走的也是同一条路——
+// 词汇表与渲染只该有一个入口，多一个入口就多一条"这条路上没人校验"。
 
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+import { escapeHtml } from './escape.js';
+import { compileUiBlock } from './ui-compile.js';
 
 /** 行内语法。输入已转义。 */
 function inline(text) {
@@ -56,10 +54,6 @@ function splitRow(line) {
 }
 
 /**
- * @param {string} src
- * @returns {string} HTML
- */
-/**
  * ```dialogue 围栏 → 对手戏。搬自 courseware-studio 的 speakers/dialogue，
  * 剥掉音频时钟之后剩下的那一半：谁在说被单独立一层，两个声音排在对面，
  * 而不是齐左的一大块「变量说：……」。
@@ -94,7 +88,13 @@ function renderScene(lines) {
   return `<div class="scene">${parts.join('')}</div>`;
 }
 
-export function renderMarkdown(src) {
+/**
+ * @param {string} src
+ * @param {{partial?: boolean}} [opts] partial=true：这段正文还在流里长（回合没结束）。
+ *   未闭合的 ```ui 按"还没写完"办——摆占位，不说写坏了；刚打出开围栏那一行也不摆空块。
+ * @returns {string} HTML
+ */
+export function renderMarkdown(src, { partial = false } = {}) {
   const lines = String(src ?? '').replace(/\r\n?/g, '\n').split('\n');
   const out = [];
   let i = 0;
@@ -113,6 +113,8 @@ export function renderMarkdown(src) {
         buf.push(lines[i]);
         i += 1;
       }
+      // i 停在结尾围栏上 = 这一档写完了；一路走到文末 = 这一帧只长了一半
+      const closed = i < lines.length;
       i += 1;
       const fenced = buf.join('\n');
       // 只有围栏标着 dialogue 且能演成对手戏时才换形状；否则照旧走代码块
@@ -121,6 +123,20 @@ export function renderMarkdown(src) {
         out.push(scene);
         continue;
       }
+      // 内联界面：词汇表、降级、续状态全住在 ui-compile.js，这里只说"轮到它编译了"
+      if (/^ui$/i.test(lang)) {
+        // 只有"这段还会再长"（partial）且围栏没闭合时才是"没写完"。
+        // 宿主已经说了这是终态（partial=false）而围栏仍没闭合，那就是真写坏了——
+        // 让它继续摆"正在长"的占位等于永远骗人，这一格必须当场降级。
+        const growing = partial && !closed;
+        // 流里刚打出「```ui」这一行还不摆占位：下一帧就有内容了，闪一下占位就是抖
+        if (growing && !fenced.trim()) continue;
+        out.push(compileUiBlock(buf, growing).html);
+        continue;
+      }
+      // 流里刚打出「```js」这一行、正文还在后面：不摆一个空代码块，下一帧闪一下
+      // （判 fenced 而不是 buf.length：文末那个换行 split 出来是一行空串，不是"有内容"）
+      if (!closed && partial && !fenced.trim()) continue;
       out.push(
         `<pre><code${lang ? ` class="lang-${escapeHtml(lang)}"` : ''}>${escapeHtml(fenced)}</code></pre>`,
       );
@@ -190,7 +206,7 @@ export function renderMarkdown(src) {
         buf.push(lines[i].replace(/^\s*>\s?/, ''));
         i += 1;
       }
-      out.push(`<blockquote>${renderMarkdown(buf.join('\n'))}</blockquote>`);
+      out.push(`<blockquote>${renderMarkdown(buf.join('\n'), { partial })}</blockquote>`);
       continue;
     }
 
@@ -248,4 +264,6 @@ export function renderMarkdown(src) {
   return out.join('\n');
 }
 
+// app.js 一直在从这道 import escapeHtml；定义搬去 escape.js 了，出口保持不变。
 export { escapeHtml };
+

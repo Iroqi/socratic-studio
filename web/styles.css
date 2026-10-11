@@ -605,6 +605,62 @@ html, body {
   border-radius: var(--radius-sm); padding: 12px 15px; margin: 0 0 1em;
   overflow-x: auto; color: var(--teal-ink); text-align: center;
 }
+
+/* ── 内联界面（```ui 档）：回答本身就是界面 ─────────────────────────────
+   形状来自封闭词汇表（ui-compile.js 的四档），所以这里的样式也只服务那四种 + 降级/占位。
+   颜色一分钱没新花：底全部用 --surface-2（对 --ink 的对比度在第 26 节现算过，两套主题都过 AA），
+   强调只借现成的 --accent / --accent-ink 那一对。新的配色组合要先重算一遍对比度，
+   而这一档的边际收益在形状不在颜色。 */
+.ui-cap {
+  margin: 0 0 6px; font-size: 11.5px; font-weight: 640; letter-spacing: .02em;
+  color: var(--ink-3);
+}
+.ui-compare { border-collapse: collapse; width: 100%; margin: 0 0 1em; font-size: 13px; }
+.ui-compare th, .ui-compare td {
+  padding: 6px 10px; text-align: left; vertical-align: top;
+  border: 1px solid var(--border); background: var(--surface-2);
+}
+.ui-compare thead th { font-weight: 640; color: var(--ink); }
+.ui-compare tbody th[scope="row"] { font-weight: 620; color: var(--ink-2); }
+
+.ui-steps { margin: 0 0 1em; padding-left: 1.5em; }
+.ui-steps li { margin: 0 0 7px; }
+.ui-step-name { font-weight: 620; color: var(--ink); }
+.ui-step-why { display: block; font-size: 12.5px; color: var(--ink-2); }
+
+/* 勾选态住在宿主那份 Map 里，不住在这里的 DOM 上：正文每帧会被重画。 */
+.ui-checklist { margin: 0 0 1em; }
+.ui-check {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 6px 10px; margin: 0 0 5px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+  font-size: 13.5px; cursor: pointer;
+}
+.ui-check input { margin: 2px 0 0; accent-color: var(--accent); flex: 0 0 auto; }
+
+.ui-calc {
+  margin: 0 0 1em; padding: 11px 13px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.ui-param { display: grid; grid-template-columns: 5.5em 1fr 4.5em; align-items: center; gap: 9px; margin: 0 0 7px; }
+.ui-param-name { font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-param input[type="range"] { min-width: 0; accent-color: var(--accent); }
+.ui-param-value, .ui-out-value { font-family: var(--mono); font-size: 12.5px; color: var(--ink); }
+.ui-out { display: flex; align-items: baseline; gap: 8px; margin: 6px 0 0; }
+.ui-out-name { font-size: 12.5px; color: var(--ink-2); }
+.ui-out-value { font-size: 15px; font-weight: 640; }
+
+/* 降级：原文看得见 + 一句为什么。它是这一档唯一的"失败可见"面，不许静默吞。 */
+.ui-degraded {
+  margin: -0.4em 0 1em; font-size: 12px; color: var(--ink-3);
+}
+/* 流式占位：一帧帧重画会被它换掉，所以它不许有高度跳动以外的存在感——
+   没有进度条、没有百分比（Invariant 4 违规指纹 ①，这一档连"假装在动"都不给）。 */
+.ui-skeleton {
+  margin: 0 0 1em; padding: 9px 12px;
+  border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
+  font-size: 12px; color: var(--ink-3);
+}
 /* 提问卡 —— 教学即时反馈回路的那一端 */
 .ask-card {
   border: 1px solid var(--border-strong); background: var(--surface);

@@ -4,6 +4,16 @@
 // 唯一的数据来源是 /api/*；教学回合通过 SSE 流回。
 
 import { renderMarkdown, escapeHtml } from './markdown.js';
+import {
+  readUiState,
+  setUiDegradedListener,
+  setUiValues,
+  writeUiState,
+  resetUiState,
+  getUiMode,
+  setUiMode,
+  UI_STATEFUL,
+} from './ui-compile.js';
 
 // ─────────────────────────────────────────────── 基础工具
 
@@ -164,6 +174,10 @@ const state = {
   draftNotebook: null, // 侧栏里的草稿条目：点了「新建」但还没发出第一条消息；切会话不丢，点回侧栏条目可继续
   composerStore: new Map(), // 会话 id（草稿用 DRAFT_KEY）→ { text, files }：输入框里没发出去的内容按会话各存各的
   search: { q: '', results: null, timer: null }, // 跨本搜索：q 非空时左栏列表换成搜索结果
+  // 内联界面：正在续状态的那一本。换本子才从盘上读一次（同一本子里内存那份才是最新的）。
+  uiHydratedFrom: null,
+  // 已经报过的降级（原因 + 围栏首行）：正文一块会被反复重画，不去重就是拿旧账冒充新事实。
+  uiReported: new Set(),
 };
 
 // ─────────────────────────────────────────────── 启动
@@ -624,6 +638,7 @@ async function openNotebook(id, { carryComposer = false } = {}) {
   state.todos = notebook.todos || [];
   state.tasks = [];
   state.camera = null;
+  hydrateUiState(notebook); // 内联控件的勾选/参数从盘上续回来，必须赶在渲台面之前
   $('emptyState')?.remove();
   renderThread();
   renderPanel();
@@ -1739,9 +1754,9 @@ function appendChatTurn(turn, msg, sceneId = null) {
   return flow;
 }
 
-function proseBlock(text, html, cls) {
+function proseBlock(text, html, cls, partial = false) {
   const prose = el('div', cls || 'prose');
-  prose.innerHTML = html === undefined ? renderMarkdown(text) : html;
+  prose.innerHTML = html === undefined ? renderMarkdown(text, { partial }) : html;
   return prose;
 }
 
@@ -1784,11 +1799,17 @@ function moveToSceneBeat(turn) {
  * 脏是逐块记的，不是"只刷最后一块"：一帧里连着来"讲两句 + 落一张卡"时，
  * 最后那块是卡，只刷最后一块就等于那两句一个字都不上屏。
  */
-function renderChatLive(turn) {
+function renderChatLive(turn, force = false) {
   for (const b of turn?.blocks || []) {
-    if (b.text === undefined || !b.node || !b.dirty) continue;
+    if (b.text === undefined || !b.node) continue;
+    // force：收尾那一刷不看 dirty。流式那一路 rAF 已经把它刷成"还在写"的占位了，
+    // dirty 早被清掉——只看 dirty 就等于把 settled 那次判定吞掉，未闭合的 ```ui
+    // 会永远摆着"正在把这个界面长出来…"，而它其实再也不会长了。
+    if (!force && !b.dirty) continue;
     b.dirty = false;
-    b.node.innerHTML = renderMarkdown(b.text);
+    // partial：这一回合还在长。未闭合的 ```ui 在流里是"还没写完"，不是"写坏了"，
+    // 渲染器据此摆占位而不是降级说明；settled 之后那一刷才允许说"这一段没编出来"。
+    b.node.innerHTML = renderMarkdown(b.text, { partial: !turn.settled });
   }
 }
 
@@ -2043,6 +2064,12 @@ function beginTurnBeat() {
 function endTurn(turn) {
   // 只在"还是这一轮"时清状态：切会话会 abort 掉旧轮，旧轮的 finally 不能把新轮清没
   if (state.turn !== turn) return;
+  // 没等到 turn_end 的那些收口（中断 / 报错 / 断线）也算"这段不会再长了"：
+  // 补那一刷，否则未闭合的 ```ui 会永远挂着"正在把这个界面长出来…"骗人。
+  if (!turn.settled) {
+    turn.settled = true;
+    renderChatLive(turn, true);
+  }
   // 回合结束（中断 / 报错 / 超时 / 连接断）时还没答的题，服务端已经不收它了
   sealUnanswered();
   state.turn = null;
@@ -2416,8 +2443,10 @@ function handleTurnEvent(evt) {
       }
       // 这是权威的收尾信号：把最后一个文字块的终态刷一遍（流式那一路是逐块刷的）。
       // 只刷那一块就够——道具、工具明细、提问卡各自挂在流里，谁也不会被这一刷抹掉。
-      renderChatLive(t);
+      // 顺序要紧：先记 settled 再刷。这一刷是"这段不会再长了"的那一次，未闭合的
+      // ```ui 在这之后就不是"还在写"而是真的写坏了，得当场降级而不是永远摆一个占位。
       t.settled = true;
+      renderChatLive(t, true);
       break;
     case 'closed':
       // 服务端关了连接。这一轮的账只记"没等到收尾信号"，状态行不在这里收——
@@ -2869,6 +2898,171 @@ function forwardArtifactMessage(payload, artifactId) {
     body: JSON.stringify({ ...payload, artifactId }),
   }).catch(() => {});
 }
+
+// ─────────────────────────────────────────────── 内联界面（```ui 档）的交互与回报
+//
+// 这一档的控件住在会话正文里，不在 iframe 沙箱里，所以它有两条 iframe 那条路没有的麻烦：
+// ① 正文每帧会被 innerHTML 重画，状态不能住在 DOM 上（住在 ui-compile.js 那份 Map 里）；
+// ② 控件是字符串拼出来的，挂不上 onclick——只能靠台面节点上的委托监听接住。
+//
+// 回报走的是**已有**那条 artifact-message 通道，不新开一条：内联控件和沙箱制品是同一族
+// 证据（学习者在界面里做了什么），开两条路以后就得记哪条读哪份，而 prompt 注入与
+// read_artifact_evidence 只认 artifact_state 这一处。前缀 `ui:` 让它和真制品分得开。
+
+const UI_PREFIX = 'ui:';
+const UI_MODE_KEY = 'socratic-ui-mode';
+
+const uiStateKey = (id) => `${UI_PREFIX}${id}`;
+
+/** 台面上现在的内联计算器（按 class 找：桩与浏览器在这一手上语义一致）。 */
+function uiCalcNodes(id) {
+  return (document.querySelectorAll('.ui-calc') || []).filter((n) => n.dataset?.uiCalc === id);
+}
+
+/**
+ * 滑杆动了：就地重算、只改写该动的那几个字，**不重画整块**。
+ * 整块重画会把滑杆自己抹掉——拖到一半被换掉，手感当场没了；而这一档的全部意义就在于
+ * "改一个参数，结果跟着动"。
+ *
+ * 读数按**发出去的顺序**对上 spec：这份 HTML 是本函数上方那几行拼出来的，参数与输出
+ * 各按 spec.params / spec.formulas 同序落一次，所以同序是这里可靠的依据。
+ * 清单那边恰恰**不能**这么办（行是模型写的，会重排会补行），所以它按行原文存。
+ */
+function repaintUiCalc(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return;
+  const unit = rec.spec.unit ? ` ${rec.spec.unit}` : '';
+  for (const box of uiCalcNodes(id)) {
+    const readouts = box.querySelectorAll('.ui-param-value') || [];
+    rec.spec.params.forEach((p, i) => {
+      if (readouts[i]) readouts[i].textContent = String(rec.state[p.name]);
+    });
+    const outs = box.querySelectorAll('.ui-out') || [];
+    rec.spec.formulas.forEach((f, i) => {
+      const holder = outs[i];
+      if (!holder) return;
+      // kids() 不是洁癖：children 是 HTMLCollection，没有 find——直接写会当场炸
+      const target = kids(holder).find((c) => c.classList?.contains('ui-out-value')) || holder;
+      target.textContent = `${evalUiTerms(f.terms, rec.state)}${unit}`;
+    });
+  }
+}
+
+/** 与编译器同一份求值口径（积项之和）；这里不重新解析表达式。 */
+function evalUiTerms(groups, values) {
+  let total = 0;
+  for (const terms of groups) {
+    let prod = 1;
+    for (const t of terms) prod *= t.n !== undefined ? t.n : (values?.[t.p] ?? 0);
+    total += prod;
+  }
+  return Math.round(total * 1000) / 1000;
+}
+
+/**
+ * 台面委托接住一次控件动作。返回值里的 `handled` 只为测试好看，浏览器不看。
+ * 只做两件事：更新那份状态、就地重画——判定一个字都不在这儿发生（Invariant 4 ③）。
+ */
+function handleUiDeskEvent(evt) {
+  const node = evt?.target;
+  if (!node) return { handled: false };
+
+  const listId = node.dataset?.uiCheck;
+  if (listId) {
+    const item = node.dataset?.uiItem;
+    if (!item) return { handled: false };
+    const rec = readUiState(listId);
+    const done = { ...(rec?.state?.done || {}) };
+    if (node.checked) done[item] = true;
+    else delete done[item];
+    setUiValues(listId, 'checklist', { uiKind: 'checklist', done });
+    forwardArtifactMessage({ type: 'state', state: { uiKind: 'checklist', done } }, uiStateKey(listId));
+    return { handled: true, kind: 'checklist', id: listId };
+  }
+
+  const calcId = node.dataset?.uiSlider;
+  if (calcId) {
+    const name = node.dataset?.uiParam;
+    if (!name) return { handled: false };
+    const rec = readUiState(calcId);
+    if (!rec?.spec) return { handled: false };
+    const value = Number(node.value);
+    if (!Number.isFinite(value)) return { handled: false };
+    const state = { ...rec.state, [name]: value, uiKind: 'calculator' };
+    setUiValues(calcId, 'calculator', state);
+    repaintUiCalc(calcId);
+    forwardArtifactMessage({ type: 'state', state }, uiStateKey(calcId));
+    return { handled: true, kind: 'calculator', id: calcId };
+  }
+  return { handled: false };
+}
+
+/**
+ * 从盘上的 artifact_state 把内联控件的状态续回来。
+ *
+ * 只在**换本子**时做（记一份正在续的 notebook id）：同一本子里学习者刚滑过一下、那条 POST
+ * 还在路上，这时候再从盘上读一遍就会把更新的那份退回旧值——内存那份才是此刻的权威。
+ * 换本子必须先清：上一本的 `done` 顶着同一个 id 活到这一本，是假状态，比丢了更糟。
+ */
+function hydrateUiState(notebook) {
+  const id = notebook?.id || null;
+  if (id === state.uiHydratedFrom) return;
+  resetUiState();
+  state.uiReported.clear(); // 上一本那些降级说明不该占着这一本的位
+  state.uiHydratedFrom = id;
+  const stored = notebook?.progress?.artifact_state || {};
+  for (const [key, state_] of Object.entries(stored)) {
+    if (!key.startsWith(UI_PREFIX) || !state_ || typeof state_ !== 'object') continue;
+    const kind = state_.uiKind;
+    if (!UI_STATEFUL.includes(kind)) continue;
+    writeUiState(key.slice(UI_PREFIX.length), kind, state_);
+  }
+}
+
+/**
+ * 编译器报来的降级：转投服务端挂成一条 ui_degraded 事件，下一回合模型在
+ * 「制品里发生过的离散事件」里读得到自己哪儿没编出来、为什么没编出来。
+ *
+ * 去重按「原因 + 围栏第一行」：正文一块会被刷很多次（换本子重画、来回切场都会再刷一遍），
+ * 每刷一次报一次就是拿同一条旧账冒充新事实。换本子时清账（state.uiReported），
+ * 那一本的降级说明也就不再占了下一本的位。
+ */
+function reportUiDegraded(reason, lines) {
+  const key = `${reason}|${String(lines?.[0] ?? '')}`;
+  if (state.uiReported.has(key)) return;
+  state.uiReported.add(key);
+  forwardArtifactMessage({ type: 'event', name: 'ui_degraded', payload: { reason } }, 'inline-ui');
+}
+
+// 「只要文字」这一档：全局开关住在编译器门口（ui-compile.js 的 getUiMode/setUiMode），
+// 因为词汇表只有一个入口——开关放在入口上才真的能关掉全部，而不是"减少，但有些还会冒出来"。
+function currentUiMode() {
+  try {
+    return localStorage.getItem(UI_MODE_KEY) === 'plain' ? 'plain' : 'rich';
+  } catch {
+    return 'rich';
+  }
+}
+
+function applyUiMode(mode) {
+  setUiMode(mode);
+  try {
+    localStorage.setItem(UI_MODE_KEY, mode);
+  } catch {
+    /* 存不了就只对本次会话生效 */
+  }
+  // 已经上台的正文得按新档重画一遍：那一刷刷的是 innerHTML，不会自己回头补。
+  // 没开着本子就不重画——boot 那一次只是把偏好落到编译器门口，台面还空着，
+  // 重画是白跑一遍，还会碰到尚未初始化的台面账。
+  if (state.notebook) renderThread();
+  const btn = $('uiToggle');
+  if (btn) {
+    btn.textContent = mode === 'plain' ? '▤' : '▦';
+    btn.setAttribute('aria-pressed', mode === 'plain' ? 'true' : 'false');
+    btn.title = mode === 'plain' ? '现在只要文字：点这里恢复把界面长出来' : '现在会把界面长出来：点这里改成只要文字';
+  }
+}
+
 
 function collectArtifactEvidence(artifactId, evidence) {
   if (!artifactId || !evidence) return;
@@ -5028,6 +5222,12 @@ function bindEvents() {
       if (!state.watching) return;
       if (atDeskBottom()) releaseWatch();
     });
+    // 内联界面（```ui）的控件是字符串拼进正文的，挂不上 onclick，只能由台面委托接住。
+    // input 与 change 都听：range 靠 input 才有"拖着就跟着变"的手感，checkbox 两样都会来一次，
+    // 走的是同一条幂等路径（浅合并同一份值 + 再 POST 一次），不算重复记账。
+    for (const type of ['input', 'change']) {
+      deskStreamNode.addEventListener(type, (e) => handleUiDeskEvent(e));
+    }
   }
   // 模型配置入口只剩 chip 一个（原「⚙ 模型配置」按钮已合并进 chip）
   $('modelChip').onclick = openConfig;
@@ -5035,6 +5235,12 @@ function bindEvents() {
   if (themeToggle) {
     themeToggle.onclick = () => applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
   }
+  // 界面档：先接上编译器唯一的出口（它报"哪一段没编出来"），再按上次的偏好落到门口，
+  // 最后给按钮接线。顺序要紧——第一帧台面渲染就要用这两样。
+  setUiDegradedListener(reportUiDegraded);
+  applyUiMode(currentUiMode());
+  const uiToggle = $('uiToggle');
+  if (uiToggle) uiToggle.onclick = () => applyUiMode(getUiMode() === 'rich' ? 'plain' : 'rich');
   $('closeConfig').onclick = () => closeModal('configModal');
   $('configModal').onclick = (e) => {
     if (e.target === $('configModal')) closeModal('configModal');
@@ -5322,6 +5528,15 @@ export const __hooks = {
   closeModal,
   handleGlobalKeydown,
   announce,
+  // 内联界面（```ui 档，第二十五轮）
+  handleUiDeskEvent,
+  reportUiDegraded,
+  hydrateUiState,
+  applyUiMode,
+  currentUiMode,
+  repaintUiCalc,
+  evalUiTerms,
+  textBlock,
   // 配置备份（第十四轮）：设置面板里的导出/导入设置块
   renderConfig,
   refreshConfig,

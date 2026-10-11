@@ -4495,6 +4495,374 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore38, errors.slice(errsBefore38).join(' | '));
 }
 
+// ─── 39. 内联界面：```ui 围栏编译成台面上的界面（第二十五轮，学 Intelligent UI 那一手）
+{
+  console.log('\n39. 内联界面（```ui 编译 + 封闭词表 + 流式那一路）');
+  const errsBefore39 = errors.length;
+  const {
+    state: st39, handleUiDeskEvent, reportUiDegraded, hydrateUiState, applyUiMode, currentUiMode,
+    handleTurnEvent, appendChatTurn, renderChatLive, currentScene, NO_SCENE, textBlock,
+  } = appModule.__hooks;
+  const uiPath = path.join(webDir, 'ui-compile.js');
+  const ui = await import('file:///' + uiPath.replace(/\\/g, '/'));
+  const md39 = await import('file:///' + path.join(webDir, 'markdown.js').replace(/\\/g, '/'));
+  const compile = (lines, partial) => ui.compileUiBlock(lines.filter((l) => l.trim()), partial);
+
+  // 1) 封闭词表：四档编得出形状
+  const cmp = compile(['kind: compare', 'row: 闭包 | 作用域', 'row: 活到函数外 | 只在块里活']).html;
+  check('compare 编译成表（并排对照就是这一手的全部意义）',
+    cmp.includes('class="ui-compare"') && cmp.includes('<th>闭包</th>') && cmp.includes('<td>活到函数外</td>'), cmp.slice(0, 160));
+  const stp = compile(['kind: steps', 'step: 先确认现场 | 别改没看过的代码', 'step: 再复现']).html;
+  check('steps 编译成有序列表（序号是形状带来的信息，不是装饰）',
+    stp.includes('<ol class="ui-steps">') && (stp.match(/<li>/g) || []).length === 2 && stp.includes('别改没看过的代码'), stp.slice(0, 200));
+  const chk = compile(['kind: checklist', 'id: prep1', 'item: 备份数据', 'item: 关掉服务']).html;
+  check('checklist 编译成可勾的条，并带上续状态的 id',
+    chk.includes('data-ui-check="prep1"') && (chk.match(/type="checkbox"/g) || []).length === 2, chk.slice(0, 220));
+  check('两行一模一样的清单不编（勾选态按原文存，重复原文分不清勾的是哪一行）',
+    Boolean(compile(['kind: checklist', 'id: dup1', 'item: 备份', 'item: 备份']).degraded),
+    compile(['kind: checklist', 'id: dup1', 'item: 备份', 'item: 备份']).degraded);
+  // 语法与必填项：这几条是"编不出来"与"编成一个残缺形状"的分界，少了任何一条就是 m20/m25
+  // 那类破坏能混过去（解析错了不吭声 = 静默吞，正是这一档最不该犯的错）。
+  const parseFails = [
+    ['没写 kind', ['item: 备份'], '没写 kind'],
+    ['kind 写了两遍', ['kind: steps', 'kind: steps', 'step: 一'], 'kind 写了两遍'],
+    ['不是「字段: 值」这一行', ['kind: steps', '这行没有冒号'], '这一行不是「字段: 值」'],
+    ['清单不报 id（勾选态没地方续）', ['kind: checklist', 'item: 备份'], '没有 id'],
+    ['计算器不报 id（滑到的值没地方续）', ['kind: calculator', 'param: 人数 | 8', 'formula: 肉 = 人数 * 0.4'], '没有 id'],
+    ['单行过长（正文不是拿来塞整篇文章的）', ['kind: steps', `step: ${'一'.repeat(300)}`], '单行过长'],
+  ];
+  for (const [label, lines, why] of parseFails) {
+    const r = compile(lines);
+    // 连原因的具体措辞一起钉：只验"有没有 degraded"的话，解析层整个哑掉（退回"没这一档"
+    // 那种笼统话）也算过——而那正是把具体错误说成词汇表问题，改的人无从下手。
+    check(`解析层拦住${label}，说的是这一条的原因`,
+      Boolean(r.degraded) && r.degraded.includes(why) && r.html.includes('没能编译成界面'),
+      String(r.degraded));
+  }
+  const calc = compile(['kind: calculator', 'id: feast', 'unit: 公斤', 'param: 人数 | 8 | 2 | 20', 'formula: 肉 = 人数 * 0.4']).html;
+  check('calculator 编译成滑杆 + 读数（中文参数名认，这是中文课上的控件）',
+    calc.includes('type="range"') && calc.includes('data-ui-param="人数"') && calc.includes('>3.2 公斤<'), calc.slice(0, 260));
+
+  // 2) 词表之外一律退回原文，且把「为什么」说给人看
+  const unknown = compile(['kind: pie', 'row: a | b']);
+  check('词表里没有这一档：退回原文（看得见，不静默吞）',
+    unknown.html.includes('class="lang-ui"') && unknown.html.includes('kind: pie'), unknown.html.slice(0, 160));
+  check('退回时说明为什么（一句"没能编译"不给原因=白屏另一种写法）',
+    /没有「pie」这一档界面/.test(unknown.html), unknown.html.slice(0, 220));
+  check('降级理由里带可用档（让人一眼知道能写什么，不用猜）',
+    unknown.html.includes('compare / steps / checklist / calculator'), unknown.html.slice(0, 300));
+  check('对齐不上的 compare 不硬编（每行格数不同就别画表）',
+    Boolean(compile(['kind: compare', 'row: a | b', 'row: c | d | e']).degraded));
+
+  // 3) Invariant 4 的违规指纹在这一档被做成"词汇表里没有"，不是散文禁令
+  const veto = compile(['kind: progress', 'row: 掌握度 | 60']);
+  check('progress 这一档明确否决：写了也不给编译',
+    veto.degraded.includes('「progress」这一档宿主不提供') && veto.html.includes('数值化的学情指标'), veto.degraded);
+  check('否决话术说是"规定"不是"故障"（学习者不该以为机器坏了）',
+    veto.html.includes('这是规定，不是故障'), veto.html.slice(0, 260));
+  for (const bad of ['percent', 'score', 'mastery', 'rank', 'leaderboard']) {
+    check(`「${bad}」也在否决名单里`, ui.UI_VETOED.includes(bad));
+  }
+  check('词汇表里没有能给判分留位置的一档（Invariant 4 第 ③ 条：判分不进控件）',
+    !ui.UI_KINDS.some((k) => /quiz|answer|grade|judge/.test(k)), ui.UI_KINDS.join(','));
+
+  // 4) 公式：没有 eval，词法只有参数名 / 数 / * / +
+  const src39 = fs.readFileSync(path.join(webDir, 'ui-compile.js'), 'utf8');
+  check('编译器里没有 eval / new Function（表达式语言也在词汇表里）',
+    !/\beval\(/.test(src39) && !/new Function/.test(src39), '');
+  for (const evil of [
+    'formula: 肉 = 人数 * 0.4 - 1',
+    'formula: 肉 = 人数 / 3',
+    'formula: 肉 = (人数 + 1) * 0.4',
+    'formula: 肉 = Math.ceil(人数)',
+    'formula: 肉 = 人数 * alert(1)',
+  ]) {
+    check(`公式「${evil.slice(9, 30)}」这类写法一律不编（越出词法就退回原文）`,
+      Boolean(compile(['kind: calculator', 'id: x1', 'param: 人数 | 8', evil]).degraded), evil);
+  }
+  check('合法公式求值走的是同一份分解（积项之和）',
+    ui.compileUiBlock(['kind: calculator', 'id: x2', 'param: a | 3', 'param: b | 4', 'formula: 总额 = a * b + 2'], false).html.includes('>14<'));
+
+  // 5) XSS：模型写的正文进不了可执行位置
+  const evil = compile(['kind: steps', 'step: <img src=x onerror=alert(1)> | 标题**粗**']).html;
+  check('围栏里的 HTML 被转义（编译过的路径也一样不产生活标签）',
+    evil.includes('&lt;img') && !/<img/.test(evil), evil.slice(0, 200));
+  check('属性位也转义（id 里塞引号挤不出事件处理器）',
+    compile(['kind: checklist', 'id: a" onfocus=alert(1) x="', 'item: 一'].join('\n').split('\n')).html.includes('&quot;'));
+
+  // 6) 流式那一路：没闭合 ≠ 写坏了
+  const partial = ui.compileUiBlock(['kind: compare', 'row: 甲 | 乙'], true);
+  check('未闭合的围栏摆占位（边想边长出来是这一档的意义，不是尾巴）',
+    partial.pending === true && partial.html.includes('ui-skeleton'), partial.html);
+  check('占位里没有数字与进度条（Invariant 4 指纹①：连"假装在动"都不给）',
+    !/[0-9]/.test(partial.html.replace(/\D/g, '') || '') && partial.html.includes('正在把这个界面长出来'), partial.html);
+  const partialKind = ui.compileUiBlock(['kind: c'], true);
+  check('半截的 kind 不当错报（compare 的前缀在流里看着像未知档）',
+    partialKind.pending === true && !partialKind.degraded, JSON.stringify(partialKind).slice(0, 160));
+  const badFinal = ui.compileUiBlock(['kind: c'], false);
+  check('闭合了才有权判失败：同一份内容按"写坏了"处理',
+    Boolean(badFinal.degraded) && !badFinal.pending, JSON.stringify(badFinal).slice(0, 160));
+
+  // 6b) 收尾那一刷：settled 之后不许还摆着"正在长"
+  // 流式那一路 rAF 会把这块刷成占位并清掉 dirty；turn_end 那一刷若只看 dirty 就什么都
+  // 不重画——占位会一直挂到页面关掉，那是"再也不会长了"被说成"还在长"。
+  ui.resetUiState();
+  const openTurn = { blocks: [], flow: null, sceneId: currentScene()?.id || NO_SCENE };
+  openTurn.flow = appendChatTurn(openTurn, { role: 'assistant', __live: true, timestamp: Date.now() });
+  st39.turn = openTurn; // handleTurnEvent 认的是全局那一轮
+  handleTurnEvent({ type: 'text_delta', delta: '先看这个：\n\n```ui\nkind: pie\n' });
+  const tailBlock = openTurn.blocks[openTurn.blocks.length - 1];
+  renderChatLive(openTurn);
+  check('流里未闭合时摆的是占位（还没写完，不是写坏了）',
+    String(tailBlock.node.innerHTML).includes('ui-skeleton'), String(tailBlock.node.innerHTML).slice(0, 140));
+  handleTurnEvent.call(null, { type: 'turn_end', outcome: 'done' });
+  const settledHtml = String(tailBlock.node.innerHTML);
+  check('回合收尾那一刷真的重画了（不是只记了个 settled 标记）',
+    settledHtml.includes('lang-ui') && !settledHtml.includes('ui-skeleton'), settledHtml.slice(0, 160));
+  check('收尾后未闭合的围栏按写坏了处理（不是继续说"还在长"）',
+    settledHtml.includes('ui-degraded'), settledHtml.slice(0, 200));
+  check('dirty 被清掉也挡不住收尾那一刷（这一条就是那个 bug 的钉子）',
+    tailBlock.dirty === false, JSON.stringify(tailBlock.dirty));
+
+  // 6c) 没等到 turn_end 的那几条收口（中断 / 报错 / 断线）也要补那一刷：
+  // 占位话术"正在把这个界面长出来…"在回合已经死了以后就是谎话。
+  const enc39 = new TextEncoder();
+  const sse = (evts) =>
+    new Response(new ReadableStream({
+      start(controller) {
+        for (const e of evts) controller.enqueue(enc39.encode(`data: ${JSON.stringify(e)}\n\n`));
+        controller.enqueue(enc39.encode('data: {"type":"closed"}\n\n'));
+        controller.close();
+      },
+    }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  const deadTurn = { blocks: [], flow: null, sceneId: currentScene()?.id || NO_SCENE, controller: { signal: undefined, abort() {} } };
+  deadTurn.flow = appendChatTurn(deadTurn, { role: 'assistant', __live: true, timestamp: Date.now() });
+  st39.turn = deadTurn;
+  st39.sending = true;
+  await appModule.__hooks.drainTurnStream(
+    sse([{ type: 'text_delta', delta: '这一段没收尾：\n\n```ui\nkind: pie\nrow: a | b\n' }]),
+    deadTurn,
+  );
+  const deadHtml = String(deadTurn.blocks[0].node.innerHTML);
+  check('连接断了也没等到 turn_end：那一刷照样补上（占位不许活过回合）',
+    deadHtml.includes('ui-degraded') && !deadHtml.includes('ui-skeleton'), deadHtml.slice(0, 180));
+  // 反过来：内容本来就合法、只是漏了结尾围栏——按形状编译，不因"没闭合"就退回原文
+  check('未闭合但内容合法：照样编出形状（少了结尾围栏不是写坏了）',
+    md39.renderMarkdown('```ui\nkind: steps\nstep: 只写了一半\n', { partial: false }).includes('ui-steps'));
+  st39.turn = null;
+  ui.resetUiState();
+
+  // 7) 渲染器接线：只有 ui 这一种围栏换形状，别的围栏不受影响
+  const rendered = md39.renderMarkdown('前面一句\n\n```ui\nkind: steps\nstep: 一\n```\n\n后面一句', { partial: true });
+  check('正文里的 ```ui 被编译（不是留一个代码块）',
+    rendered.includes('ui-steps') && rendered.includes('前面一句') && rendered.includes('后面一句'), rendered.slice(0, 200));
+  check('```js 围栏照旧是代码块（这一档不抢别人的形状）',
+    md39.renderMarkdown('```js\nconst a=1;\n```').includes('lang-js'));
+  check('流里刚打出开围栏那一行不摆空块（闪一下就是抖）',
+    md39.renderMarkdown('```js\n', { partial: true }) === '');
+  check('```ui 那一路也一样：只打了开围栏就什么都没有（占位不是"先亮一下"）',
+    md39.renderMarkdown('```ui\n', { partial: true }) === '');
+  check('终态（partial=false）里未闭合的围栏当场降级：占位不许活到"再也长不出来"之后',
+    md39.renderMarkdown('```ui\nkind: pie\n', { partial: false }).includes('ui-degraded'));
+  check('流里已经闭合但写坏了：当场就报，不拖到回合收尾',
+    md39.renderMarkdown('```ui\nkind: pie\n```', { partial: true }).includes('ui-degraded'));
+  check('dialogue 那条路不受影响（同一个渲染器，两档词汇各走各的）',
+    md39.renderMarkdown('```dialogue\n甲：一\n乙：二\n```', { partial: true }).includes('class="scene"'));
+
+  // 8) 状态住在宿主那份 Map 里，不住在会被重画的 DOM 里
+  ui.resetUiState();
+  const box = md39.renderMarkdown('```ui\nkind: checklist\nid: lst1\nitem: 备份\nitem: 停服\n```');
+  check('第一次编译时谁都没勾过（不照盘上的旧账画）', !box.includes('checked'));
+  ui.writeUiState('lst1', 'checklist', { uiKind: 'checklist', done: { 备份: true } });
+  const again = md39.renderMarkdown('```ui\nkind: checklist\nid: lst1\nitem: 备份\nitem: 停服\n```');
+  check('重画时把勾过的续回来（DOM 每帧被重画，状态在 Map 里才不丢）',
+    again.includes('checked') && again.includes('data-ui-item="备份"'), again.slice(0, 240));
+  const reordered = md39.renderMarkdown('```ui\nkind: checklist\nid: lst1\nitem: 停服\nitem: 备份\n```');
+  check('清单重排不认错格子（键是那一行的原文，不是序号）',
+    /data-ui-item="备份"[^>]* checked|data-ui-item="备份"[^/]*checked/.test(reordered), reordered.slice(0, 300));
+
+  // 9) 学习者的动作被接住、被报回，但判定一个字都不在这儿发生
+  st39.notebook = sampleNotebook();
+  st39.uiReported.clear();
+  ui.resetUiState();
+  ui.writeUiState('feast', 'calculator', { 人数: 8, uiKind: 'calculator' }, {
+    params: [{ name: '人数', def: 8, lo: 2, hi: 20 }], formulas: [{ out: '肉', terms: [[{ p: '人数' }, { n: 0.4 }]] }], unit: '公斤',
+  });
+  const posts39 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const before39 = posts39();
+  const slider = { dataset: { uiSlider: 'feast', uiParam: '人数' }, value: '12' };
+  const r1 = handleUiDeskEvent({ target: slider });
+  check('滑杆被接住（改了参数结果跟着动，这一档才成立）',
+    r1.handled === true && r1.kind === 'calculator', JSON.stringify(r1));
+  check('滑到的值进了那份 Map（不是只改了 DOM 上的假象）',
+    ui.readUiState('feast').state['人数'] === 12, JSON.stringify(ui.readUiState('feast').state));
+  check('动作报回服务端（不报=学习者在这个界面里做过什么没人知道）',
+    posts39() === before39 + 1, requests.slice(-2).join(','));
+  const cb = { dataset: { uiCheck: 'lst1', uiItem: '停服' }, checked: true };
+  handleUiDeskEvent({ target: cb });
+  check('勾选也报回，且按原文记（同一族证据走同一条通道）',
+    ui.readUiState('lst1').state.done['停服'] === true && posts39() === before39 + 2);
+  handleUiDeskEvent({ target: cb });
+  check('再报一次同一格不翻倍（浅合并同一份值，幂等）',
+    Object.keys(ui.readUiState('lst1').state.done).length === 1);
+  const un = handleUiDeskEvent({ target: { dataset: {}, tagName: 'DIV' } });
+  check('不是内联控件的动静一概不接（委托挂在整台面上，接错就是抢别人的事件）',
+    un.handled === false, JSON.stringify(un));
+  check('这一档里没有判分的位置（报回来的只有勾了没/滑到哪，没有对错）',
+    !/correct|incorrect|score|result/.test(JSON.stringify(ui.readUiState('feast').state)), JSON.stringify(ui.readUiState('feast').state));
+
+  // 10) 降级回报：一条、只一条
+  let posted39 = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (/\/artifact-message$/.test(url)) posted39.push(opts.body);
+    return realFetch(url, opts);
+  };
+  st39.uiReported.clear();
+  reportUiDegraded('没有「pie」这一档界面（可用：x）', ['kind: pie', 'row: a | b']);
+  reportUiDegraded('没有「pie」这一档界面（可用：x）', ['kind: pie', 'row: a | b']);
+  check('掉回原文报一条给模型（不报=同一种写坏每一轮重来一遍）',
+    posted39.length === 1, `报了 ${posted39.length} 条`);
+  // 去重的键是「原因 + 第一行」，不是一个全局开关：两处不同的写坏要各报一条，
+  // 否则第二处永远隐身（键退化成常量时就是这种情况）。
+  reportUiDegraded('每行的格子数要对齐', ['kind: compare', 'row: a | b', 'row: c | d | e']);
+  check('另一处不同的写坏另报一条（去重键不许退化成一个全局位）',
+    posted39.length === 2, `报了 ${posted39.length} 条`);
+  check('报的是事件不是状态，理由在里面（下一回合读得到为什么没编出来）',
+    /"name":"ui_degraded"/.test(posted39[0]) && /没有「pie」/.test(posted39[0]), String(posted39[0]).slice(0, 200));
+  globalThis.fetch = realFetch;
+
+  // 11) 界面开关：真的能关掉全部，而且偏好记住
+  ui.setUiDegradedListener(null);
+  const plain = (() => { applyUiMode('plain'); return ui.compileUiBlock(['kind: compare', 'row: a | b', 'row: c | d'], false).html; })();
+  check('「只要文字」这一档真的关掉全部（不留"有些还会冒出来"）',
+    plain.includes('lang-ui') && !plain.includes('ui-compare'), plain.slice(0, 140));
+  check('简洁模式里的原文不算降级，也就不报（围栏本该是原文，不是失败）',
+    !ui.compileUiBlock(['kind: compare', 'row: a | b', 'row: c | d'], false).html.includes('ui-degraded'));
+  applyUiMode('rich');
+  check('切回来就重新编译（开关是个开关不是单行道）',
+    ui.compileUiBlock(['kind: compare', 'row: a | b', 'row: c | d'], false).html.includes('ui-compare'));
+  // 偏好落盘：桩里没有 localStorage，app.js 那句 setItem 会静默吞掉——临时给一个，
+  // 才能验"下次开机还认"这条承诺真的有键、真的读得回来。
+  const store39 = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (store39.has(k) ? store39.get(k) : null),
+    setItem: (k, v) => store39.set(k, String(v)),
+    removeItem: (k) => store39.delete(k),
+  };
+  applyUiMode('plain');
+  check('偏好写进 localStorage 的键名对得上（下次开机还认）',
+    store39.get('socratic-ui-mode') === 'plain' && currentUiMode() === 'plain',
+    [...store39].map(([k, v]) => `${k}=${v}`).join(','));
+  applyUiMode('rich');
+  check('切回来时盘上那行也跟着改（开关状态与偏好不许各说各话）',
+    store39.get('socratic-ui-mode') === 'rich', String(store39.get('socratic-ui-mode')));
+  delete globalThis.localStorage;
+
+  // 12) 换本子：状态与降级账都要清，上一本的勾选不许顶着同一个 id 活过来
+  ui.resetUiState();
+  ui.writeUiState('lst1', 'checklist', { uiKind: 'checklist', done: { 备份: true } });
+  st39.uiHydratedFrom = 'nb-test';
+  st39.uiReported.add('旧的账|kind: x');
+  hydrateUiState({ id: 'nb-other', progress: { artifact_state: { 'ui:hydrated1': { uiKind: 'checklist', done: { 重启: true } } } } });
+  check('换本子先清上一本那份（同 id 的旧勾选活着就是假状态）',
+    ui.readUiState('lst1') === null, JSON.stringify(ui.readUiState('lst1')));
+  check('换本子从盘上续回这一本的（重开一次勾的还在）',
+    ui.readUiState('hydrated1')?.state?.done?.重启 === true);
+  check('换本子清降级账（上一本那条不许占这一本的去重位）',
+    st39.uiReported.size === 0, [...st39.uiReported].join(','));
+  // 同一本里再 hydrate 一次（重开侧栏、切回来都会）：内存那份才是此刻的权威，
+  // 盘上那份是上一回合的旧账——真去读它就把学习者刚滑到的值刷没了。
+  ui.setUiValues('hydrated1', 'checklist', { uiKind: 'checklist', done: { 重启: true, 当场勾的: true } });
+  hydrateUiState({ id: 'nb-other', progress: { artifact_state: { 'ui:hydrated1': { uiKind: 'checklist', done: { 重启: true } } } } });
+  check('同一本里不重复从盘上读（内存那份才是此刻的权威）',
+    ui.readUiState('hydrated1')?.state?.done?.当场勾的 === true,
+    JSON.stringify(ui.readUiState('hydrated1')?.state));
+  // 换本子才有权清：这一本勾的格子不该跟着去下一本
+  hydrateUiState({ id: 'nb-third', progress: { artifact_state: {} } });
+  check('真的换了一本才清（守卫不能被刷一次就当成换本）',
+    ui.readUiState('hydrated1') === null);
+  // 盘上那份 artifact_state 里绝大多数是**真制品（iframe）**的状态，不是内联界面的。
+  // 两道筛子都得在：前缀认不出这件归谁，uiKind 认不出这件是不是"有状态的内联界面"。
+  // 少任何一道，一件小游戏内部的 score / cleared 就会被当成"这一本里某个清单勾过什么"
+  // 续回来——那些键名恰好是 Invariant 4 不许进界面面的东西。
+  st39.uiHydratedFrom = null;
+  ui.resetUiState();
+  hydrateUiState({
+    id: 'nb-fifth',
+    progress: {
+      artifact_state: {
+        'game-1': { score: 3, cleared: true },
+        'prep1': { uiKind: 'checklist', done: { 乙: true } },
+        'ui:game3': { score: 3, cleared: true },
+        'ui:cmp1': { uiKind: 'compare', rows: 2 },
+        'ui:ok1': { uiKind: 'checklist', done: { 甲: true } },
+      },
+    },
+  });
+  check('没有 ui: 前缀的不进这份 Map（真制品的状态另有归属，即便它长得像清单）',
+    ui.readUiState('game-1') === null && ui.readUiState('prep1') === null,
+    JSON.stringify(ui.readUiState('prep1')));
+  // 上面那条按 id 读，读不到"多进来一个不该有的键"：前缀筛子拆掉后键名会被 slice 成
+  // 'e-1' / 'p1' 这种四不像活着，按原名查反而是 null。所以要直接查这份 Map 的账。
+  check('续回来的只有该续的那一份（账面上不许有别的键）',
+    ui.uiStateIds().join(',') === 'ok1', ui.uiStateIds().join(','));
+  check('有前缀但没有 uiKind（或不是那两档）也不进：一件 iframe 游戏的账不是清单',
+    ui.readUiState('game3') === null && ui.readUiState('cmp1') === null,
+    JSON.stringify(ui.readUiState('cmp1')));
+  check('只有清单/计算器那两档续得回来',
+    ui.readUiState('ok1')?.state?.done?.甲 === true, JSON.stringify(ui.readUiState('ok1')));
+  st39.uiHydratedFrom = null;
+  ui.resetUiState();
+  ui.setUiMode('rich');
+
+  // 13) 看得清吗：新形状的每一组前景/背景现算一遍（用第 26 节那套公式，不抄常量）
+  const uiCss = /\/\* ── 内联界面[\s\S]*?(?=\/\* 提问卡)/.exec(cssText)?.[0] || '';
+  check('样式表里能找到这一档那一整段（找不到就别装作量过了）', uiCss.length > 200, `${uiCss.length} 字符`);
+  for (const [theme, block] of [['深色', darkBlock], ['浅色', lightBlock]]) {
+    const pairs = [
+      ['--ink-3 落在 --bg（说明文字与占位）', token(block, 'ink-3'), token(block, 'bg')],
+      ['--ink-2 落在 --surface-2（步骤"为什么"、参数名）', token(block, 'ink-2'), token(block, 'surface-2')],
+      ['--ink 落在 --surface-2（表体与读数）', token(block, 'ink'), token(block, 'surface-2')],
+    ];
+    for (const [label, fg, bg] of pairs) {
+      const ratio = contrast(fg, bg);
+      check(`${theme} ${label} 过 AA 4.5:1`, ratio >= 4.5, `${fg} on ${bg} = ${ratio.toFixed(2)}:1`);
+    }
+  }
+  check('这一档没引入新配色（颜色只借现成 token，那一段里没有一条十六进制）',
+    uiCss.length > 0 && !/#[0-9a-fA-F]{3,8}/.test(uiCss), (uiCss.match(/#[0-9a-fA-F]{3,8}/g) || []).join(','));
+  check('底色全用那个量过的 --surface-2，没有自造背景',
+    [...new Set([...uiCss.matchAll(/background:\s*var\(--([a-z0-9-]+)\)/g)].map((m) => m[1]))].join(',') === 'surface-2',
+    [...new Set([...uiCss.matchAll(/background:\s*var\(--([a-z0-9-]+)\)/g)].map((m) => m[1]))].join(','));
+  // 占位这张面：报活但不撒谎——不许有进度条、百分比、任何数字
+  const skel = ui.compileUiBlock(['kind: compare', 'row: 甲 | 乙'], true).html;
+  check('占位自带 live region（读屏能知道这一块在长）',
+    /role="status"/.test(skel) && /aria-live="polite"/.test(skel), skel);
+  check('占位里没有任何数字与百分比（连"假装在动"都不给）',
+    !/[0-9０-９%]/.test(skel.replace(/class="ui-skeleton"|aria-live="polite"|role="status"/g, '')), skel);
+  check('降级那句是给普通人看的中文（不是错误码，也不是没信息量的"出错了"）',
+    !/E[0-9]{2,}|Error:|Exception/.test(compile(['kind: pie', 'row: a | b']).html), '');
+
+  // 14) 那颗开关本身：名字、状态、说得清它做什么
+  const btn39 = /<button[^>]*id="uiToggle"[^>]*>/.exec(idxHtml)?.[0] || '';
+  check('开关有 aria-label（图标按钮不是只给眼睛看的）', /aria-label="[^"]+"/.test(btn39), btn39);
+  check('开关报出自己按下的状态（aria-pressed）', /aria-pressed="false"/.test(btn39), btn39);
+  check('开关有 title 说明它会做什么（悬停看得见，不用猜 ▦ 是什么）', /title="[^"]{8,}"/.test(btn39), btn39);
+  // 按下去以后那张键自己要说得出话：aria-pressed 跟着档位走，否则读屏用户不知道自己关了什么
+  applyUiMode('plain');
+  const btnNode39 = doc.getElementById('uiToggle');
+  check('切到"只要文字"后开关自报按下状态（aria-pressed=true）',
+    btnNode39.getAttribute('aria-pressed') === 'true', String(btnNode39.getAttribute('aria-pressed')));
+  check('开关那句说明也跟着改口（title 说的就是当前的档位）',
+    /只要文字/.test(btnNode39.title || ''), String(btnNode39.title));
+  applyUiMode('rich');
+  check('切回来时状态与说明都跟着回来（不留一个说反话的开关）',
+    btnNode39.getAttribute('aria-pressed') === 'false' && /把界面长出来/.test(btnNode39.title || ''),
+    `${btnNode39.getAttribute('aria-pressed')} | ${btnNode39.title}`);
+  check('这一节无异常', errors.length === errsBefore39, errors.slice(errsBefore39).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

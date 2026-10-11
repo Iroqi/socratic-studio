@@ -1206,6 +1206,99 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     doorDoc ? '那一节没写 zip 这条账' : '找不到这一节');
 }
 
+// ──────────────────────────────── 内联界面的词汇表只有一份（第二十五轮）
+//
+// ```ui 这一档横跨四个文件、五种记号：提示里的档名 ↔ 编译器的名单、编译器吐的 class ↔
+// 样式表里有的一行、宿主读的属性名 ↔ 编译器写进 HTML 的属性名、报出去的事件名 ↔ 下一回合
+// 注入给模型的那句话。每一处都只是字符串，改任何一边都不会有编译错误——只会静默失效：
+// 提示教了而编译器不认（模型写了掉原文，白教）、编译器吐了 class 而样式没有（界面塌成裸文本）、
+// 属性名错一位（勾选回收不上，"状态能续"这条承诺变成假话）。
+// 行为本身由 web-smoke §39 钉；这一节只钉"话说在两处、必须是同一句"。
+{
+  const promptSrc25 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+  const uiSrc = fs.readFileSync(path.join(app, 'web', 'ui-compile.js'), 'utf8');
+  const stylesSrc = fs.readFileSync(path.join(app, 'web', 'styles.css'), 'utf8');
+  const hostSrc25 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+
+  /** 从源码里抠出一个数组字面量（`export const X = [...]`）的字符串项。 */
+  const listLit = (name) => {
+    const m = new RegExp(`export const ${name} = \\[([^\\]]*)\\]`).exec(uiSrc);
+    if (!m) return null;
+    return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
+  };
+  /**
+   * 提示里被反引号包起来的那个词。prompt.mjs 自己是个模板字符串，所以**源文件里**
+   * 一对反引号各带一个反斜杠（`\`compare\``）——照抄成人读的那种写法就永远匹配不上，
+   * 而且匹配不上是静默的（这一节全靠"两边都有这个字符串"活着）。
+   */
+  const bt = (s) => '\\' + '`' + s + '\\' + '`';
+  const kinds = listLit('UI_KINDS');
+  const vetoed = listLit('UI_VETOED');
+  const stateful = listLit('UI_STATEFUL');
+
+  // 1) 词汇表：提示教的、编译器认的、样式备着的，必须是同一批
+  check('能解析出编译器那三份名单（解析不出来就别装作测过了）',
+    Boolean(kinds && vetoed && stateful), `kinds=${kinds && kinds.length} vetoed=${vetoed && vetoed.length} stateful=${stateful && stateful.length}`);
+  const taught = (kinds || []).filter((kind) => promptSrc25.includes('| ' + bt(kind) + ' |'));
+  check('提示那张四档表逐行点名，一行不缺（漏一档=模型压根不知道能这么写）',
+    taught.length === (kinds || []).length,
+    `词表 ${(kinds || []).join(',')} / 表里 ${taught.join(',') || '（空）'}`);
+  for (const kind of kinds || []) {
+    check(`编译器真的为「${kind}」写了一个函数（提示教了而实现没有=模型写了掉回原文）`,
+      new RegExp(kind + ': compile[A-Za-z]+').test(uiSrc), `COMPILERS 里没有 ${kind}`);
+  }
+  const shapeClasses = new Set([...uiSrc.matchAll(/class="ui-([a-z-]+)/g)].map((m) => 'ui-' + m[1]));
+  for (const cls of [...shapeClasses].sort()) {
+    check(`编译器吐的 .${cls} 在样式表里有对应的一行（编出来没样式=塌成裸文本，页面不报错）`,
+      new RegExp('\\.' + cls + '[\\s,{.:]').test(stylesSrc) || stylesSrc.includes('.' + cls + ' '),
+      'styles.css 里没有这一条');
+  }
+
+  // 2) 否决名单：名单里每一档都必须在提示里被点名（禁而不说=模型只能撞上去才知道）
+  const toldVeto = (vetoed || []).filter((bad) => promptSrc25.includes(bt(bad)));
+  check('否决名单前四档提示都点名了（progress / percent / score / mastery 那一族）',
+    (vetoed || []).slice(0, 4).every((bad) => toldVeto.includes(bad)),
+    `提示点了 ${toldVeto.join(',') || '（没点）'}`);
+  check('否决名单只收"数值化学情指标"这一族（Invariant 4 指纹①的机械编码，别的理由不许混进来）',
+    (vetoed || []).every((x) => /progress|percent|score|mastery|bar|meter|rank|badge|leaderboard/.test(x)),
+    (vetoed || []).join(','));
+  check('四档与否决名单不相交（同一档一边给编一边禁止=词汇表自相矛盾）',
+    (kinds || []).every((k) => !(vetoed || []).includes(k)), `${(kinds || []).join(',')} vs ${(vetoed || []).join(',')}`);
+
+  // 3) data-* 那根线：编译器写进 HTML 的名字 ↔ 宿主读的名字（错一位就回收不上状态）
+  const emittedAttrs = [...uiSrc.matchAll(/data-(ui-[a-z-]+)=/g)].map((m) => m[1]);
+  check('编译器一共只写这几个 data-*（多一个就是多一条没人读的记号，契约测试会把它认成断线）',
+    [...emittedAttrs].sort().join(',') === 'ui-calc,ui-check,ui-item,ui-param,ui-slider',
+    [...new Set(emittedAttrs)].sort().join(','));
+  for (const attr of new Set(emittedAttrs)) {
+    const key = attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    // 宿主读的是 dataset?.X（可选链）——只搜 `dataset.X` 会一路假红
+    check(`宿主按 dataset.${key} 读（编译器写了 data-${attr} 而宿主不读=状态断线）`,
+      new RegExp('dataset\\??\\.' + key).test(hostSrc25), `app.js 里找不到 dataset.${key}`);
+  }
+  check('宿主报回的 id 前缀 = 编译器续状态用的那个键位（`ui:` 两边一份）',
+    /const UI_PREFIX = 'ui:'/.test(hostSrc25), 'app.js 里 UI_PREFIX 变了形状');
+  check('只有该存的两档进 UI_STATEFUL（静态形状没有"学习者做过什么"这回事）',
+    (stateful || []).join(',') === 'checklist,calculator', (stateful || []).join(','));
+
+  // 4) 降级回报那条闭环：宿主报的事件名 ↔ 提示里承诺的那句话
+  check('宿主报的是 ui_degraded 事件', /name: 'ui_degraded'/.test(hostSrc25));
+  check('提示里预告了这个事件（模型不认这个事件名就永远读不懂这条反馈）',
+    promptSrc25.includes('ui_degraded'));
+  check('这条反馈复用「制品里发生过的离散事件」那一段（不新造第二条回报通道）',
+    fs.readFileSync(path.join(app, 'server', 'serve.mjs'), 'utf8').includes('artifact_events'));
+
+  // 5) 注入体积：这一轮的新词全部住在 APP_ADAPTER，规则本体一个字都不该多
+  const rulesDir25 = path.join(app, 'server', 'rules');
+  const rulesMd = fs.readdirSync(rulesDir25).filter((f) => f.endsWith('.md'));
+  check('规则里不讲 ```ui 的语法（规则每回合都要重付，新话一律进 APP_ADAPTER）',
+    rulesMd.every((f) => !fs.readFileSync(path.join(rulesDir25, f), 'utf8').includes('kind:')),
+    rulesMd.filter((f) => fs.readFileSync(path.join(rulesDir25, f), 'utf8').includes('kind:')).join(','));
+  check('这一轮没让 server/rules/ 变胖（run.mjs 那道 65000 的墙不许因为新词汇被推高）',
+    /RULES_CHAR_BUDGET = 65000/.test(fs.readFileSync(path.join(app, 'test', 'run.mjs'), 'utf8')),
+    '上限被改了：放宽预算要连同理由一起改，不许顺手');
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;
