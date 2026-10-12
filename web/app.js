@@ -3426,6 +3426,7 @@ function renderLearnPanel(body) {
   renderPendingPatches(body);
   renderGoalCard(body);
   renderRetestCard(body);
+  renderUiStatePanel(body);
   renderGraphPanel(body);
   renderEventsPanel(body);
   renderDecisionsPanel(body);
@@ -3433,6 +3434,47 @@ function renderLearnPanel(body) {
   renderTasksPanel(body);
   renderReviewPanel(body);
   renderBackupPanel(body);
+}
+
+/**
+ * 「这局动过的界面」：```ui 交互档的状态模型下一轮读得到，学习者自己却看不见——
+ * 勾了哪几项、参数滑到哪、图解里看过谁，都只在正文里一闪而过。这里把它们从
+ * progress.artifact_state 的 ui:* 键里捞出来，排成一张只读回看卡（跨回合、跨刷新都在，
+ * 因为盘上是权威；与 hydrateUiState 同一条筛子：前缀 + UI_STATEFUL）。
+ * Invariant 4 边界：只出现象（勾了/滑到/看过/停在），不出数字、不出对错——已勾原文
+ * 照实列出，但绝不写"3/5"这种完成度；没有 ui:* 就不摆卡（没有就不打扰）。
+ */
+function renderUiStatePanel(body) {
+  const stored = state.notebook?.progress?.artifact_state || {};
+  const entries = Object.entries(stored).filter(
+    ([key, s]) => key.startsWith(UI_PREFIX) && s && typeof s === 'object' && UI_STATEFUL.includes(s.uiKind)
+  );
+  if (!entries.length) return;
+  const fit = (s) => { const t = String(s); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
+  const word = { checklist: '清单', calculator: '计算器', diagram: '图解' };
+  const card = el('div', 'ui-state-card');
+  card.append(el('div', 'panel-section-title', '这局动过的界面'));
+  for (const [key, s] of entries) {
+    const id = key.slice(UI_PREFIX.length);
+    const kind = word[s.uiKind] || s.uiKind;
+    card.append(el('div', 'state-note', `${kind}「${id}」`));
+    if (s.uiKind === 'checklist') {
+      const done = Object.keys(s.done || {}).filter((k) => s.done[k]);
+      if (!done.length) card.append(el('div', 'state-note', '· 还没勾'));
+      for (const k of done) card.append(el('div', 'state-note', `· ✓ ${fit(k)}`));
+    } else if (s.uiKind === 'calculator') {
+      for (const [k, v] of Object.entries(s)) {
+        if (k === 'uiKind') continue;
+        card.append(el('div', 'state-note', `· ${fit(k)} = ${v}`));
+      }
+    } else if (s.uiKind === 'diagram') {
+      const viewed = Object.keys(s.viewed || {});
+      if (viewed.length) card.append(el('div', 'state-note', `· 看过：${viewed.map(fit).join('、')}`));
+      if (s.active) card.append(el('div', 'state-note', `· 现在停在：${fit(s.active)}`));
+      if (!viewed.length && !s.active) card.append(el('div', 'state-note', '· 还没点过'));
+    }
+  }
+  body.append(card);
 }
 
 /**

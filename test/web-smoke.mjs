@@ -5180,6 +5180,73 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore41, errors.slice(errsBefore41).join(' | '));
 }
 
+// ─── 42. 右栏「这局动过的界面」：```ui 交互态给学习者自己的回看（第二十八轮）
+// 交互档的状态模型下一轮读得到，学习者自己却看不见——右栏把它从 artifact_state 的
+// ui:* 键里捞出来排成只读回看卡。边界：只出现象（勾了/滑到/看过/停在），
+// 不出数字、不出对错；没有 ui:* 就不摆卡。
+{
+  console.log('\n42. 右栏界面状态回看（勾了/滑到/看过，现象不进判分）');
+  const errsBefore42 = errors.length;
+  const { state: st42, renderPanel } = appModule.__hooks;
+  const cardOf = () => deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
+  const cardText = () => (cardOf() ? deepAll(cardOf(), 'state-note').map((n) => n.textContent) : []);
+  const titles42 = () => deepAll(doc.getElementById('panelBody'), 'panel-section-title').map((t) => t.textContent);
+
+  // 1) 三档状态都在盘上时，卡按原文 / 值 / 看过排出来
+  st42.notebook = sampleNotebook();
+  st42.notebook.progress.artifact_state = {
+    'ui:prep1': { uiKind: 'checklist', done: { 备份数据: true, 关掉服务: true } },
+    'ui:feast': { uiKind: 'calculator', 人数: 12, 肉: 4.8 },
+    'ui:g1': { uiKind: 'diagram', active: '硝化', viewed: { 固氮: true, 硝化: true } },
+  };
+  renderPanel();
+  check('有状态时摆卡，标题是给学习者的话', titles42().includes('这局动过的界面'), titles42().join(' | '));
+  const t42 = cardText();
+  check('清单组把已勾原文逐行列出（键是原文不是序号）',
+    t42.includes('清单「prep1」') && t42.includes('· ✓ 备份数据') && t42.includes('· ✓ 关掉服务'), t42.join(' / '));
+  check('计算器组列参数与值（滑到哪就显示哪）',
+    t42.includes('计算器「feast」') && t42.includes('· 人数 = 12') && t42.includes('· 肉 = 4.8'), t42.join(' / '));
+  check('图解组列看过谁与现在停在谁',
+    t42.includes('图解「g1」') && t42.includes('· 看过：固氮、硝化') && t42.includes('· 现在停在：硝化'), t42.join(' / '));
+  check('卡里没有判分词（完成度 / 对错都不许）',
+    !/score|percent|mastery|correct|incorrect|3\/5/.test(t42.join(' ')), t42.join(' / '));
+
+  // 2) 筛子：非 ui: 前缀不进；非三档的 uiKind 不进（与 hydrateUiState 同一条）
+  st42.notebook.progress.artifact_state = {
+    'game-1': { uiKind: 'checklist', done: { 玩: true } },
+    'ui:cmp1': { uiKind: 'compare', rows: 2 },
+    'ui:ok1': { uiKind: 'checklist', done: { 甲: true } },
+  };
+  renderPanel();
+  const t42b = cardText();
+  check('没有 ui: 前缀的键不进（别的账不是界面状态）',
+    t42b.length === 2 && t42b[0] === '清单「ok1」' && t42b[1] === '· ✓ 甲', t42b.join(' / '));
+  check('不是三档的 uiKind 不进（静态形状没有"做过什么"）',
+    !t42b.join(' ').includes('compare'), t42b.join(' / '));
+  check('三档的照进',
+    t42b.includes('清单「ok1」') && t42b.includes('· ✓ 甲'), t42b.join(' / '));
+
+  // 3) 空态：没有 ui:* 不摆卡（没有就不打扰）；清单空勾 / 图没点过也说得清
+  st42.notebook.progress.artifact_state = {};
+  renderPanel();
+  check('盘上没有 ui:* 时不留空卡', cardOf() === null, '');
+  st42.notebook.progress.artifact_state = { 'ui:prep1': { uiKind: 'checklist', done: {} } };
+  renderPanel();
+  check('清单勾了又全取消，卡里说"还没勾"（现象照实，不猜）',
+    cardText().includes('· 还没勾'), cardText().join(' / '));
+  st42.notebook.progress.artifact_state = { 'ui:g1': { uiKind: 'diagram', active: null, viewed: {} } };
+  renderPanel();
+  check('图解没点过也说人话（不空着）', cardText().includes('· 还没点过'), cardText().join(' / '));
+
+  // 4) 长文本截断：卡不许被一条超长原文撑爆（完整内容在对话里）
+  st42.notebook.progress.artifact_state = { 'ui:prep1': { uiKind: 'checklist', done: { ['长'.repeat(60)]: true } } };
+  renderPanel();
+  const longLine = cardText().find((t) => t.startsWith('· ✓'));
+  check('超过 40 字的原文收短加省略号', Boolean(longLine) && longLine.length <= 44 && longLine.endsWith('…'), longLine);
+
+  check('这一节无异常', errors.length === errsBefore42, errors.slice(errsBefore42).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);
