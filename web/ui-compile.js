@@ -28,11 +28,12 @@ export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram
 export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'meter', 'rank', 'badge', 'leaderboard'];
 
 /**
- * 交互档必须自报 id：宿主每帧都在重画这一块，没有 id 就没有续上那份勾选的地方。
- * 也是回报通道只认这两档的原因——静态形状（compare / steps）没有"学习者在里面做过什么"
- * 这回事，读回来只会是一句空话。
+ * 交互档必须自报 id：宿主每帧都在重画这一块，没有 id 就没有续上那份状态的地方。
+ * 也是回报通道只认这几档的原因——静态形状（compare / steps）没有"学习者在里面做过什么"
+ * 这回事，读回来只会是一句空话。diagram 第二十七轮从静态升成交互档：节点可点击，
+ * "他点了谁 / 看过谁"就是状态，所以它也在这里。
  */
-export const UI_STATEFUL = ['checklist', 'calculator'];
+export const UI_STATEFUL = ['checklist', 'calculator', 'diagram'];
 
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
@@ -392,7 +393,14 @@ function fitText(s, maxChars) {
   return t.length <= maxChars ? t : `${t.slice(0, Math.max(1, maxChars - 1))}…`;
 }
 
+/**
+ * diagram 第二十七轮从静态形状升成交互档：节点可点击，点一下高亮"它连着谁"，
+ * 宿主把「他点了谁 / 看过谁」记进 state.viewed，下一轮模型读得到。
+ * 要有地方记就得有 id（同 checklist / calculator）；没 id 的图谁点了谁没处存，掉回原文。
+ */
 function compileDiagram(fields) {
+  const id = pick(fields, 'id')[0] || '';
+  if (!id) return { error: '这个图没有 id：谁点了谁没有地方记' };
   const title = pick(fields, 'title')[0] || '';
   const rawNodes = pick(fields, 'node');
   const rawEdges = pick(fields, 'edge');
@@ -460,6 +468,18 @@ function compileDiagram(fields) {
     return { error: '图里有环：图解是从先到后的有向关系，回路 / 反馈这类结构走 steps 或正文' };
   }
 
+  // 交互状态从宿主侧续：上次点到谁，重画就把谁的高亮带回来（active 是视图态，
+  // viewed 是学情态——「看过谁」下一轮要读给模型的）。邻接表随 spec 存下：
+  // 点击一响就要算"它连着谁"去给 DOM 上高亮，不存就得把边塞进 data-* 再解析一遍。
+  const stored = readUiState(id)?.state || {};
+  const active = stored.active || null;
+  const spec = { edges: edges.map((e) => ({ src: e.src, dst: e.dst })), names: nodes.map((n) => n.name) };
+  writeUiState(id, 'diagram', stored, spec);
+  const edgeActive = (e) => active !== null && (e.src === active || e.dst === active);
+  const neighbors = new Set(
+    active ? edges.flatMap((e) => (e.src === active ? [e.dst] : e.dst === active ? [e.src] : [])) : []
+  );
+
   // 几何全部由输入决定，跟"第几个输入"无关：同样的 node/edge 永远落在同样的坐标上。
   const PAD = 16; const GAP_X = 88; const GAP_Y = 34; const NODE_H = 48; const CHAR_W = 15;
   const nodeW = (n) => Math.min(240, Math.max(96, n.name.length * CHAR_W + 24));
@@ -498,8 +518,13 @@ function compileDiagram(fields) {
       const nameShown = fitText(n.name, Math.max(4, Math.floor((p.w - 18) / CHAR_W)));
       const noteShown = n.note ? fitText(n.note, Math.max(4, Math.floor((p.w - 18) / 11))) : '';
       const cy = p.y + NODE_H / 2 + (n.note ? 1 : 7);
+      // 每个节点都是可聚焦的按钮：点/回车/空格都能看它连着谁。aria-pressed 报高亮态，
+      // aria-label 把"可点击"讲给读屏——可见的节点名已经在 <text> 里，这里不重复它。
+      const cls = n.name === active ? ' ui-node-active' : neighbors.has(n.name) ? ' ui-node-adjacent' : '';
       return (
-        `<g class="ui-node">${n.note ? `<title>${escapeHtml(n.name)}：${escapeHtml(n.note)}</title>` : ''}` +
+        `<g class="ui-node${cls}" data-ui-node="${escapeHtml(n.name)}" tabindex="0" role="button" ` +
+        `aria-pressed="${n.name === active ? 'true' : 'false'}" aria-label="查看「${escapeHtml(n.name)}」连着谁（点击）">` +
+        `${n.note ? `<title>${escapeHtml(n.name)}：${escapeHtml(n.note)}</title>` : ''}` +
         `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${NODE_H}" rx="8"/>` +
         `<text x="${p.x + p.w / 2}" y="${cy}" text-anchor="middle">${escapeHtml(nameShown)}</text>` +
         (n.note ? `<text class="ui-node-note" x="${p.x + p.w / 2}" y="${p.y + NODE_H - 14}" text-anchor="middle">${escapeHtml(noteShown)}</text>` : '') +
@@ -514,19 +539,21 @@ function compileDiagram(fields) {
       const x1 = u.x + u.w; const y1 = u.y + NODE_H / 2;
       const x2 = v.x; const y2 = v.y + NODE_H / 2;
       const labelShown = e.label ? fitText(e.label, Math.max(6, Math.floor(((x2 - x1) * 0.9) / 11))) : '';
+      // 边的活跃态不靠 data 属性认领：边按声明顺序渲染，spec.edges 同序，重画时按索引对上。
       return (
-        `<g class="ui-edge"><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" marker-end="url(#${arrowId})"/></g>` +
+        `<g class="ui-edge${edgeActive(e) ? ' ui-edge-active' : ''}"><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" marker-end="url(#${arrowId})"/></g>` +
         (labelShown ? `<text class="ui-edge-label" x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 6}" text-anchor="middle">${escapeHtml(labelShown)}</text>` : '')
       );
     })
     .join('');
 
   // 读屏名里刻意不放节点/边的数量：结构数量不是学情指标，但连 aria 里也不出现数字，
-  // 免得哪一天"数字不许进界面面"这条被读屏用户先看见。
+  // 免得哪一天"数字不许进界面面"这条被读屏用户先看见。data-ui-diagram 是这一整块的
+  // 归属 id：宿主点击时靠它知道"点的是哪张图"，重画时靠它把高亮续回来。
   const aria = title ? `关系图解：${title}` : '关系图解：节点与连线表示概念或步骤之间的关系';
   const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
   const body =
-    `<svg class="ui-diagram" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
+    `<svg class="ui-diagram" data-ui-diagram="${escapeHtml(id)}" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
     `<title>${escapeHtml(aria)}</title>${marker}${edgeEls}${nodeEls}</svg>`;
   return { html: `${cap}${body}`, shape: 'diagram' };
 }

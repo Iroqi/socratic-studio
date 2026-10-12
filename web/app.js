@@ -2994,7 +2994,76 @@ function handleUiDeskEvent(evt) {
     forwardArtifactMessage({ type: 'state', state }, uiStateKey(calcId));
     return { handled: true, kind: 'calculator', id: calcId };
   }
+
+  // diagram 的节点是 <g> 不是 input：点击落在 rect/text 上，dataset 在 g 上，
+  // 得靠 closest 找回节点与它所属的图。点击 = 切换高亮（再点同一节点取消），
+  // 并把「看过谁」记进 viewed——那是学情态，下一轮模型读得到；判分一个字都不在这儿发生。
+  const diagNode = node.dataset?.uiNode ? node : node.closest ? node.closest('[data-ui-node]') : null;
+  if (diagNode) {
+    const name = diagNode.dataset?.uiNode;
+    const svg = diagNode.closest ? diagNode.closest('svg[data-ui-diagram]') : null;
+    const id = svg?.dataset?.uiDiagram;
+    if (!id || !name) return { handled: false };
+    const rec = readUiState(id);
+    if (!rec?.spec) return { handled: false }; // 没 spec 就不知道邻接，点不响
+    const prev = rec.state?.active || null;
+    const active = prev === name ? null : name;
+    const viewed = { ...(rec.state?.viewed || {}) };
+    if (active) viewed[name] = true;
+    const state = { ...rec.state, active, viewed, uiKind: 'diagram' };
+    setUiValues(id, 'diagram', state);
+    repaintUiDiagram(id);
+    forwardArtifactMessage({ type: 'state', state }, uiStateKey(id));
+    return { handled: true, kind: 'diagram', id };
+  }
   return { handled: false };
+}
+
+/**
+ * 键盘也走得通：节点带 tabindex=0，聚焦后回车/空格就是一次点击。空格要 preventDefault，
+ * 不然页面会跟着滚。非图节点、非 Enter/空格一律不拦（别的键盘路各走各的）。
+ */
+function handleUiDeskKey(e) {
+  const key = e?.key;
+  if (key !== 'Enter' && key !== ' ') return { handled: false };
+  const node = e?.target;
+  const hit = node?.dataset?.uiNode || (node?.closest ? node.closest('[data-ui-node]') : null);
+  if (!hit) return { handled: false };
+  e.preventDefault?.();
+  return handleUiDeskEvent(e);
+}
+
+/**
+ * 图的高亮不整块重画（正文那一刷会跳滚动）：就地改 class 与 aria，状态住在 Map 里。
+ * 重画恢复高亮时编译器从 Map 读 active 再长一遍，这里是"点了要立刻看得见"那半截。
+ * id 是模型写的，不能拼进选择器（引号会注入）；按属性存在筛、再比对 dataset 值。
+ */
+function repaintUiDiagram(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return;
+  const active = rec.state?.active || null;
+  const svgs = [...(document.querySelectorAll?.('[data-ui-diagram]') || [])].filter((el) => el.dataset?.uiDiagram === id);
+  for (const svg of svgs) {
+    const nodes = [...(svg.querySelectorAll?.('g.ui-node') || [])];
+    const lines = [...(svg.querySelectorAll?.('g.ui-edge') || [])];
+    const edges = rec.spec.edges || [];
+    const neighbors = new Set(
+      active ? edges.flatMap((e) => (e.src === active ? [e.dst] : e.dst === active ? [e.src] : [])) : []
+    );
+    for (const g of nodes) {
+      const name = g.dataset?.uiNode;
+      if (!name) continue;
+      const on = name === active;
+      g.classList?.toggle?.('ui-node-active', on);
+      g.classList?.toggle?.('ui-node-adjacent', !on && neighbors.has(name));
+      g.setAttribute?.('aria-pressed', on ? 'true' : 'false');
+    }
+    lines.forEach((g, i) => {
+      const e = edges[i]; // 边按声明顺序渲染，spec 同序
+      if (!e) return;
+      g.classList?.toggle?.('ui-edge-active', active !== null && (e.src === active || e.dst === active));
+    });
+  }
 }
 
 /**
@@ -5228,6 +5297,9 @@ function bindEvents() {
     for (const type of ['input', 'change']) {
       deskStreamNode.addEventListener(type, (e) => handleUiDeskEvent(e));
     }
+    // diagram 的节点不是 input：click 与键盘（Enter/空格）都要接，走同一幂等路径。
+    deskStreamNode.addEventListener('click', (e) => handleUiDeskEvent(e));
+    deskStreamNode.addEventListener('keydown', (e) => handleUiDeskKey(e));
   }
   // 模型配置入口只剩 chip 一个（原「⚙ 模型配置」按钮已合并进 chip）
   $('modelChip').onclick = openConfig;
@@ -5530,6 +5602,8 @@ export const __hooks = {
   announce,
   // 内联界面（```ui 档，第二十五轮）
   handleUiDeskEvent,
+  handleUiDeskKey,
+  repaintUiDiagram,
   reportUiDegraded,
   hydrateUiState,
   applyUiMode,

@@ -659,6 +659,13 @@ html, body {
 .ui-diagram .ui-edge { stroke: var(--ink-2); stroke-width: 1.4; }
 .ui-diagram .ui-edge-label { fill: var(--ink-3); font-size: 11px; }
 .ui-diagram .ui-arrow-head { fill: var(--ink-2); }
+/* 点击高亮（第二十七轮）：被点节点强高亮、它的边变 accent、邻居次级描边。
+   强调只借 --accent 一族；高亮是状态指示不是正文，文字仍是 ink/surface-2 那对。 */
+.ui-diagram .ui-node { cursor: pointer; }
+.ui-diagram .ui-node:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ui-diagram .ui-node-active rect { stroke: var(--accent); stroke-width: 2; fill: var(--accent-soft); }
+.ui-diagram .ui-node-adjacent rect { stroke: var(--accent); stroke-width: 1.5; }
+.ui-diagram .ui-edge-active { stroke: var(--accent); stroke-width: 2; }
 
 /* 降级：原文看得见 + 一句为什么。它是这一档唯一的"失败可见"面，不许静默吞。 */
 .ui-degraded {

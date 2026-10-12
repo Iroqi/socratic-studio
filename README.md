@@ -1446,6 +1446,8 @@ Intelligent UI 最常被点名的用例是「解释复杂概念 → 交互式图
   本来就是"指着图问、模型接着讲"——OpenAI 自己管这叫"对话仍是控制层"。
   于是 `diagram` 像 `compare` / `steps` 一样不进 `UI_STATEFUL`、不落 `artifact_state`、
   不写 `data-*`，第二十五轮那套宿主接线一行都不用碰，**服务端零改动**。
+  （**这句被第二十七轮作废**：用户拍板"新契约一起做"，`diagram` 升成交互档，
+  进 `UI_STATEFUL`、写 `data-ui-*`、`viewed` 落盘读回——见下一节。）
 - **布局是确定的**：先到后的 DAG（Kahn 最长路径分层），层内按名字排，同样的输入两次
   编译坐标一模一样——流式每帧重编，坐标跳来跳去的图没法对着问为什么。身份是名字：
   重复声明、自环、重复边、**没声明过的端点**都点名掉回原文；有环掉回原文
@@ -1456,12 +1458,46 @@ Intelligent UI 最常被点名的用例是「解释复杂概念 → 交互式图
 - **上限是可数的**：20 节点 / 20 边，与编译器那道 46 行通用墙对齐（20 + 20 + 2 = 42）。
 - **提示从四档变五档**，硬规矩从三条变四条（新第 3 条：边要声明过、图必须无环、
   图上不许加按钮 / "答案键"）。`server/rules/` 一字未动。
+  （第二十七轮把第 3 条里"图解是静态的、不许加按钮"改口为"节点可点击、
+  宿主记下他看过谁"；第 1 条从两档扩成三档必须写 `id`。）
 
 行为 51 条在 `web-smoke` §40，"话必须两处同一句"的检查由 contract §13 自动长出 +7 条
 （`UI_KINDS` 加一档，提示逐行点名、编译器函数、样式类一一对应都是自动推导的）。
 8 枚变异各验过红（驱动见 `docs/iteration-2026-10-12.md` §4.2）——其中 m7 首轮是**假绿**：
 变异驱动把计数器写成了独立语句、从没拼进 id，行为根本没被破坏。锚点唯一性预检只证明
 "字符串被替换了"，证明不了"行为被破坏了"；变异也要先确认自己动了手再数红。
+
+### 交互一起学回来：diagram 升成交互档，新契约整套（2026-10-12b 第二十七轮）
+
+第二十六轮说"交互式图解做不了"，第二十七轮把"做不了"拆成了四件事一起做掉——
+用户拍板的就是"新契约整套"：
+
+- **事件模拟有了正向钉子。** 宿主交互函数本就只认 `{target}`（`handleUiDeskEvent` 收一个
+  事件对象，不碰真实事件系统），所以"点击"的钉子就是给桩一个带 `dataset` / `closest`
+  的假 target——这正是 checklist / calculator 已有的测试形态，diagram 沿用同一把尺。
+  点击落在 SVG 的 rect/text 上、`dataset` 在 `<g>` 上，宿主用 `closest('[data-ui-node]')`
+  找回节点、`closest('svg[data-ui-diagram]')` 找回归属图。
+- **交互态必须可读回 → `viewed` 进 `artifact_state`。** `diagram` 进了 `UI_STATEFUL`
+  （`checklist,calculator,diagram`）。点一个节点：`active` 切到它（再点取消），
+  「看过谁」记进 `state.viewed`（只增不减，取消的是视图不是记忆），走已有的
+  `ui:` 前缀 artifact-message 通道落盘，下一轮模型读得到他停在哪。判分一个字不在这儿
+  发生——`viewed` 是「他看了哪」，不是「他会了」。
+- **无障碍与键盘：** 每个节点是 `role="button"` + `tabindex="0"` 的可聚焦按钮，
+  `aria-pressed` 报高亮态、`aria-label` 说"点它看连着谁"；回车/空格等同一次点击
+  （`handleUiDeskKey`，空格 `preventDefault` 防页面滚动）；`:focus-visible` 有描边。
+- **降级路径逐档同步：** 没写 `id` 的图掉回原文并点名（"谁点了谁没有地方记"）；
+  「只要文字」把交互连根关掉；`data-*` 名单与 `UI_STATEFUL` 断言由契约测试机械更新
+  （`ui-calc,ui-check,ui-diagram,ui-item,ui-node,ui-param,ui-slider` / 三档）。
+- **高亮只借 accent 一族**：被点节点 `ui-node-active`（accent 描边 + `--accent-soft` 软底）、
+  它的边 `ui-edge-active`、邻居 `ui-node-adjacent` 次级描边；零新十六进制。
+  邻接表随 `spec` 落进 Map（点击一响要算"它连着谁"），边按声明序与 DOM 同序对上，
+  不往 `data-*` 里塞边。
+
+行为 40 项在 `web-smoke` §41（点击 / 键盘 / 重画恢复高亮 / 就地重画 / 降级 / 配色），
+§40 全部用例补上 `id:`（升级前它们会集体掉回原文——"行为先行变红"的台阶）。
+7 枚变异（viewed 累积 / 取消高亮 / id 硬规 / repaint 调用点 / spec 落盘 / 邻接方向 /
+stateful 名单）各验过红、零假绿，驱动见 `docs/iteration-2026-10-12b.md` §4.2。
+`server/rules/` 一字未动，`serve.mjs` 一行未动。
 
 ## 已知边界
 

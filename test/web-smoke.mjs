@@ -4807,10 +4807,10 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   // 'e-1' / 'p1' 这种四不像活着，按原名查反而是 null。所以要直接查这份 Map 的账。
   check('续回来的只有该续的那一份（账面上不许有别的键）',
     ui.uiStateIds().join(',') === 'ok1', ui.uiStateIds().join(','));
-  check('有前缀但没有 uiKind（或不是那两档）也不进：一件 iframe 游戏的账不是清单',
+  check('有前缀但没有 uiKind（或不是那三档）也不进：一件 iframe 游戏的账不是清单',
     ui.readUiState('game3') === null && ui.readUiState('cmp1') === null,
     JSON.stringify(ui.readUiState('cmp1')));
-  check('只有清单/计算器那两档续得回来',
+  check('只有有状态的那几档续得回来（清单/计算器/图解）',
     ui.readUiState('ok1')?.state?.done?.甲 === true, JSON.stringify(ui.readUiState('ok1')));
   st39.uiHydratedFrom = null;
   ui.resetUiState();
@@ -4863,12 +4863,14 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore39, errors.slice(errsBefore39).join(' | '));
 }
 
-// ─── 40. 图解：```ui 的 diagram 档（第二十六轮，学 Intelligent UI 的"解释复杂概念→图解"）
+// ─── 40. 图解：```ui 的 diagram 档（第二十六轮学形状，第二十七轮升成交互档）
 // OpenAI 那一手"解释复杂概念 → 交互式图解"在本仓的形状：节点 + 有向连线，先到后的 DAG
 // 分层，同一份输入两次编译坐标一模一样（流式每帧重编，坐标跳来跳去的图没法对着问为什么）。
-// 它只抄形状不抄交互：图是静态的，学习者对图的交互在对话里——指着图问，模型接着讲。
+// 第二十七轮按用户拍板的新契约把它做成交互档：节点可点击，点一下高亮"它连着谁"，
+// 「他点了谁 / 看过谁」进 state.viewed 落盘、下一轮读回——"学形状"变成了"连交互一起学"，
+// 但判分、假控件、装饰性 hover 仍然一个字都不许进。
 {
-  console.log('\n40. 图解（diagram 编译 + DAG 分层 + 静态形状）');
+  console.log('\n40. 图解（diagram 编译 + DAG 分层 + 交互档）');
   const errsBefore40 = errors.length;
   const ui40 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
   const md40 = await import('file:///' + path.join(webDir, 'markdown.js').replace(/\\/g, '/'));
@@ -4876,7 +4878,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
 
   // 1) 合法输入编成内联 SVG：节点、连线、箭头、读屏名
   const dgLines = [
-    'kind: diagram', 'title: 光合作用的两阶段',
+    'kind: diagram', 'id: ps1', 'title: 光合作用的两阶段',
     'node: 光反应 | 在类囊体膜上', 'node: 暗反应', 'node: 卡尔文循环',
     'edge: 光反应 -> 暗反应 | 提供 ATP', 'edge: 暗反应 -> 卡尔文循环',
   ];
@@ -4897,32 +4899,33 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     compile40(dgLines).html === dg, '');
   check('没有 title 时读屏名是一句人话（不露内部计数）',
     /aria-label="关系图解：节点与连线表示概念或步骤之间的关系"/.test(
-      compile40(['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙']).html));
+      compile40(['kind: diagram', 'id: t2', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙']).html));
 
   // 2) 几何是确定的：两节点一箭头，viewBox 由输入算出，前后两列 x 必须拉开
-  const two = compile40(['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙']).html;
+  const two = compile40(['kind: diagram', 'id: t2', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙']).html;
   check('两节点的图占确定的版面（viewBox 是算出来的，不是猜出来的）',
     /viewBox="0 0 312 80"/.test(two), /viewBox="[^"]*"/.exec(two)?.[0]);
   const xs = [...two.matchAll(/<rect x="(\d+)"/g)].map((m) => Number(m[1]));
   check('先发生的在左、后发生的在右（层序就是阅读顺序）',
     xs.length === 2 && xs[0] === 16 && xs[1] === 200, xs.join(','));
 
-  // 3) 身份与方向是硬规矩：每一条都掉回原文并点名原因
+  // 3) 身份与方向是硬规矩：每一条都掉回原文并点名原因（交互档还要先过 id 那一关）
   const dgFails = [
-    ['终点没声明过', ['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 丙'], '「丙」没在 node 里声明'],
-    ['起点没声明过', ['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 丙 -> 乙'], '「丙」没在 node 里声明'],
-    ['节点名重复', ['kind: diagram', 'node: 甲', 'node: 甲', 'edge: 甲 -> 乙'], '「甲」写了两遍：图解的身份是名字'],
-    ['自己连自己', ['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 甲'], '是自己连自己'],
-    ['图里有环', ['kind: diagram', 'node: 甲', 'node: 乙', 'node: 丙', 'edge: 甲 -> 乙', 'edge: 乙 -> 丙', 'edge: 丙 -> 甲'], '图里有环'],
-    ['一条边都没有', ['kind: diagram', 'node: 甲', 'node: 乙'], '一条边都没有'],
-    ['只有一个节点', ['kind: diagram', 'node: 甲'], '图解至少两个节点'],
-    ['同一条边写两遍', ['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙', 'edge: 甲 -> 乙'], '这条边写了两遍'],
-    ['一条边连三个点', ['kind: diagram', 'node: 甲', 'node: 乙', 'node: 丙', 'edge: 甲 -> 乙 -> 丙'], '一条边要写成「甲 -> 乙」'],
-    ['空的节点名', ['kind: diagram', 'node: | 备注', 'node: 乙', 'edge: 甲 -> 乙'], '有空的节点名'],
-    ['边的那一头是空的', ['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> | 说明'], '边的那一头是空的'],
-    ['节点名太长', ['kind: diagram', `node: ${'甲'.repeat(41)}`, 'node: 乙', 'edge: 甲 -> 乙'], '节点名太长'],
-    ['节点的一句话太长', ['kind: diagram', `node: 甲 | ${'注'.repeat(81)}`, 'node: 乙', 'edge: 甲 -> 乙'], '一句话太长了'],
-    ['边上的说明太长', ['kind: diagram', 'node: 甲', 'node: 乙', `edge: 甲 -> 乙 | ${'说'.repeat(41)}`], '边上的说明太长了'],
+    ['没写 id', ['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙'], '这个图没有 id：谁点了谁没有地方记'],
+    ['终点没声明过', ['kind: diagram', 'id: f2', 'node: 甲', 'node: 乙', 'edge: 甲 -> 丙'], '「丙」没在 node 里声明'],
+    ['起点没声明过', ['kind: diagram', 'id: f3', 'node: 甲', 'node: 乙', 'edge: 丙 -> 乙'], '「丙」没在 node 里声明'],
+    ['节点名重复', ['kind: diagram', 'id: f4', 'node: 甲', 'node: 甲', 'edge: 甲 -> 乙'], '「甲」写了两遍：图解的身份是名字'],
+    ['自己连自己', ['kind: diagram', 'id: f5', 'node: 甲', 'node: 乙', 'edge: 甲 -> 甲'], '是自己连自己'],
+    ['图里有环', ['kind: diagram', 'id: f6', 'node: 甲', 'node: 乙', 'node: 丙', 'edge: 甲 -> 乙', 'edge: 乙 -> 丙', 'edge: 丙 -> 甲'], '图里有环'],
+    ['一条边都没有', ['kind: diagram', 'id: f7', 'node: 甲', 'node: 乙'], '一条边都没有'],
+    ['只有一个节点', ['kind: diagram', 'id: f8', 'node: 甲'], '图解至少两个节点'],
+    ['同一条边写两遍', ['kind: diagram', 'id: f9', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙', 'edge: 甲 -> 乙'], '这条边写了两遍'],
+    ['一条边连三个点', ['kind: diagram', 'id: f10', 'node: 甲', 'node: 乙', 'node: 丙', 'edge: 甲 -> 乙 -> 丙'], '一条边要写成「甲 -> 乙」'],
+    ['空的节点名', ['kind: diagram', 'id: f11', 'node: | 备注', 'node: 乙', 'edge: 甲 -> 乙'], '有空的节点名'],
+    ['边的那一头是空的', ['kind: diagram', 'id: f12', 'node: 甲', 'node: 乙', 'edge: 甲 -> | 说明'], '边的那一头是空的'],
+    ['节点名太长', ['kind: diagram', 'id: f13', `node: ${'甲'.repeat(41)}`, 'node: 乙', 'edge: 甲 -> 乙'], '节点名太长'],
+    ['节点的一句话太长', ['kind: diagram', 'id: f14', `node: 甲 | ${'注'.repeat(81)}`, 'node: 乙', 'edge: 甲 -> 乙'], '一句话太长了'],
+    ['边上的说明太长', ['kind: diagram', 'id: f15', 'node: 甲', 'node: 乙', `edge: 甲 -> 乙 | ${'说'.repeat(41)}`], '边上的说明太长了'],
   ];
   for (const [label, lines, why] of dgFails) {
     const r = compile40(lines);
@@ -4931,47 +4934,47 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
       String(r.degraded));
   }
   // 数量上限（通用行数那道 46 的墙之后才是这一档自己的上限：20 节点 / 20 边）
-  const tooManyNodes = ['kind: diagram', ...Array.from({ length: 21 }, (_, i) => `node: 节点${i}`), 'edge: 节点0 -> 节点1'];
+  const tooManyNodes = ['kind: diagram', 'id: tmn', ...Array.from({ length: 21 }, (_, i) => `node: 节点${i}`), 'edge: 节点0 -> 节点1'];
   check('节点超过 20 个不编（图解不是一张地图）',
     /节点太多了/.test(String(compile40(tooManyNodes).degraded)), String(compile40(tooManyNodes).degraded));
   const chain7 = Array.from({ length: 7 }, (_, i) => `node: n${i}`);
   const allPairs = [];
   for (let i = 0; i < 7; i += 1) for (let j = i + 1; j < 7; j += 1) allPairs.push(`edge: n${i} -> n${j}`);
-  const tooManyEdges = ['kind: diagram', ...chain7, ...allPairs.slice(0, 21)];
+  const tooManyEdges = ['kind: diagram', 'id: tme', ...chain7, ...allPairs.slice(0, 21)];
   check('边超过 20 条不编（第 21 条是压垮它的那根草）',
     /边太多了/.test(String(compile40(tooManyEdges).degraded)), String(compile40(tooManyEdges).degraded));
   check('恰好 20 条边照编（上限是可数的，不是拍脑袋）',
-    compile40(['kind: diagram', ...chain7, ...allPairs.slice(0, 20)]).html.includes('ui-diagram'), '');
+    compile40(['kind: diagram', 'id: t20', ...chain7, ...allPairs.slice(0, 20)]).html.includes('ui-diagram'), '');
 
   // 4) 流式那一路：没写完摆占位，写完了照编
-  const dgPartial = compile40(['kind: diagram', 'node: 甲'], true);
+  const dgPartial = compile40(['kind: diagram', 'id: dg1', 'node: 甲'], true);
   check('只有一半的图解摆占位（还没写完，不是写坏了）',
     dgPartial.pending === true && dgPartial.html.includes('ui-skeleton'), dgPartial.html);
   check('半截图里没有数字（占位那格连"假装在动"都不给）',
     !/[0-9]/.test(dgPartial.html.replace(/\D/g, '') || ''), dgPartial.html);
   check('围栏没闭合但内容合法：照样编出图（少了结尾围栏不是写坏了）',
-    md40.renderMarkdown('```ui\nkind: diagram\nnode: 甲\nnode: 乙\nedge: 甲 -> 乙\n', { partial: true }).includes('ui-diagram'));
+    md40.renderMarkdown('```ui\nkind: diagram\nid: dg2\nnode: 甲\nnode: 乙\nedge: 甲 -> 乙\n', { partial: true }).includes('ui-diagram'));
   check('终态里没闭合的半截图当场降级（占位不许活过回合）',
-    md40.renderMarkdown('```ui\nkind: diagram\nnode: 甲\n', { partial: false }).includes('ui-degraded'));
+    md40.renderMarkdown('```ui\nkind: diagram\nid: dg3\nnode: 甲\n', { partial: false }).includes('ui-degraded'));
 
   // 5) XSS：图里的名字与说明进不了可执行位置
-  const dgEvil = compile40(['kind: diagram', 'node: <img src=x onerror=alert(1)>', 'node: 乙', 'edge: <img src=x onerror=alert(1)> -> 乙 | " onclick=alert(2)']).html;
+  const dgEvil = compile40(['kind: diagram', 'id: evil', 'node: <img src=x onerror=alert(1)>', 'node: 乙', 'edge: <img src=x onerror=alert(1)> -> 乙 | " onclick=alert(2)']).html;
   check('节点名里的 HTML 被转义（SVG 里也不许长活标签）',
     dgEvil.includes('&lt;img') && !/<img/.test(dgEvil), dgEvil.slice(0, 200));
-  check('属性位也转义（title / aria 里的引号挤不出事件处理器）',
+  check('属性位也转义（title / aria / data 里的引号挤不出事件处理器）',
     !/" onclick=/.test(dgEvil) && dgEvil.includes('&quot;'), dgEvil.slice(0, 200));
 
   // 6) 渲染器接线：diagram 走同一条 ```ui 围栏路，别的围栏不受影响
-  const dgRendered = md40.renderMarkdown('先看图：\n\n```ui\nkind: diagram\nnode: 甲\nnode: 乙\nedge: 甲 -> 乙\n```\n\n再解释', { partial: true });
+  const dgRendered = md40.renderMarkdown('先看图：\n\n```ui\nkind: diagram\nid: dg4\nnode: 甲\nnode: 乙\nedge: 甲 -> 乙\n```\n\n再解释', { partial: true });
   check('正文里的 diagram 被编译（不是留一个代码块）',
     dgRendered.includes('ui-diagram') && dgRendered.includes('先看图') && dgRendered.includes('再解释'), dgRendered.slice(0, 200));
   check('```js 围栏照旧是代码块（diagram 不抢别人的形状）',
     md40.renderMarkdown('```js\nconst a=1;\n```').includes('lang-js'));
 
-  // 7) 词表口径：diagram 在名单里、不是交互档、不在否决名单、没有判分位置
+  // 7) 词表口径：diagram 在名单里、是交互档、不在否决名单、没有判分位置
   check('diagram 进了封闭词表', ui40.UI_KINDS.includes('diagram'), ui40.UI_KINDS.join(','));
-  check('diagram 不是交互档（静态形状没有"学习者做过什么"这回事）',
-    !ui40.UI_STATEFUL.includes('diagram'), ui40.UI_STATEFUL.join(','));
+  check('diagram 是交互档（第二十七轮：点节点=学习者行为，状态要读回）',
+    ui40.UI_STATEFUL.includes('diagram'), ui40.UI_STATEFUL.join(','));
   check('diagram 不在否决名单（它不承载学情数字）', !ui40.UI_VETOED.includes('diagram'), ui40.UI_VETOED.join(','));
   check('diagram 那一档里没有给判分留位置（Invariant 4 第 ③ 条）',
     !/quiz|answer|grade|judge/.test('diagram'), '');
@@ -5005,6 +5008,176 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   }
 
   check('这一节无异常', errors.length === errsBefore40, errors.slice(errsBefore40).join(' | '));
+}
+
+// ─── 41. diagram 交互：点节点看它连着谁（第二十七轮，新契约整套：事件模拟/状态读回/无障碍/降级）
+// 新契约的内容：diagram 进 UI_STATEFUL；点击切换高亮 + 「看过谁」进 state.viewed 落盘、
+// 下一轮读回；节点可聚焦可键盘操作；没 id 的图掉回原文（谁点了谁没有地方记）。
+{
+  console.log('\n41. diagram 交互（点击高亮 + viewed 读回 + 无障碍 + 降级）');
+  const errsBefore41 = errors.length;
+  const ui41 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { state: st41, handleUiDeskEvent, handleUiDeskKey, repaintUiDiagram } = appModule.__hooks;
+  const compile41 = (lines, partial) => ui41.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  ui41.resetUiState();
+  // 点击落在 rect/text 上时 dataset 在 <g> 上：桩里用 closest 找回节点与它所属的图。
+  const nodeFor = (name, id) => ({
+    dataset: {},
+    closest: (sel) => (sel === '[data-ui-node]'
+      ? { dataset: { uiNode: name }, closest: (s2) => (s2 === 'svg[data-ui-diagram]' ? { dataset: { uiDiagram: id } } : null) }
+      : null),
+  });
+  const g1Lines = ['kind: diagram', 'id: g1', 'title: 氮循环',
+    'node: 固氮 | 细菌的事', 'node: 硝化', 'node: 植物吸收', 'node: 反硝化',
+    'edge: 固氮 -> 硝化', 'edge: 硝化 -> 植物吸收', 'edge: 植物吸收 -> 反硝化'];
+
+  // 1) 编译产物带交互形状：归属 id、可聚焦、读屏能懂
+  const g = compile41(g1Lines).html;
+  check('svg 带着归属 id（宿主点击时知道点的是哪张图）',
+    /<svg class="ui-diagram" data-ui-diagram="g1"/.test(g), g.slice(0, 120));
+  check('每个节点都是可聚焦的按钮（点击与键盘都要通）',
+    (g.match(/role="button"/g) || []).length === 4 && g.includes('tabindex="0"'), g.slice(0, 300));
+  check('节点带 data-ui-node（宿主按名字找状态键，身份是名字不是序号）',
+    g.includes('data-ui-node="硝化"') && !g.includes('data-ui-node="1"'), g.slice(0, 200));
+  check('每个节点初始 aria-pressed=false（高亮态报给读屏，初始是没选中）',
+    g.includes('aria-pressed="false"') && !g.includes('aria-pressed="true"'), g.slice(0, 200));
+  check('aria-label 说人话（点它会看到"连着谁"，不露内部 id）',
+    g.includes('aria-label="查看「固氮」连着谁（点击）"'), g.slice(0, 220));
+  check('交互前的同一份图两次编译一模一样（状态没动过，坐标不许跳）',
+    compile41(g1Lines).html === g, '');
+
+  // 2) 点击：切换高亮 + 记 viewed + 报回（判分一个字都不在这儿发生）
+  st41.notebook = sampleNotebook();
+  st41.uiReported.clear();
+  const posts41 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const before41 = posts41();
+  const r41 = handleUiDeskEvent({ target: nodeFor('硝化', 'g1') });
+  check('点击节点被接住（返回是哪一档、哪张图）',
+    r41.handled === true && r41.kind === 'diagram' && r41.id === 'g1', JSON.stringify(r41));
+  const st41a = ui41.readUiState('g1');
+  check('active 落到被点的节点（高亮要重画得出来）',
+    st41a.state.active === '硝化', JSON.stringify(st41a.state));
+  check('viewed 记了「看过谁」（下一轮模型读得到他停在哪）',
+    st41a.state.viewed && st41a.state.viewed['硝化'] === true, JSON.stringify(st41a.state));
+  check('点击报回服务端（不报=他在这张图里做了什么没人知道）',
+    posts41() === before41 + 1, requests.slice(-2).join(','));
+  check('报回里只有看过谁/停在谁，没有对错（Invariant 4 第 ③ 条）',
+    !/correct|incorrect|score|result/.test(JSON.stringify(st41a.state)), JSON.stringify(st41a.state));
+
+  // 3) 再点同一节点 = 取消高亮；点别的节点 = 高亮切过去、viewed 累积
+  handleUiDeskEvent({ target: nodeFor('硝化', 'g1') });
+  const st41b = ui41.readUiState('g1');
+  check('再点同一节点取消高亮（active 回空）',
+    st41b.state.active === null, JSON.stringify(st41b.state));
+  check('看过的那份不删（取消的是视图不是记忆）',
+    st41b.state.viewed && st41b.state.viewed['硝化'] === true, JSON.stringify(st41b.state));
+  check('取消高亮也报回（同一份幂等浅合并，不是翻倍记账）',
+    posts41() === before41 + 2, '');
+  handleUiDeskEvent({ target: nodeFor('固氮', 'g1') });
+  const st41c = ui41.readUiState('g1');
+  check('点别的节点：高亮切过去、viewed 累积（两份都看得见）',
+    st41c.state.active === '固氮' && st41c.state.viewed['固氮'] === true && st41c.state.viewed['硝化'] === true,
+    JSON.stringify(st41c.state));
+
+  // 4) 键盘走同一路：Enter / 空格 = 一次点击，别的键不拦
+  let prevented41 = false;
+  const keyHit = handleUiDeskKey({ key: 'Enter', target: nodeFor('固氮', 'g1'), preventDefault: () => { prevented41 = true; } });
+  check('回车等同一次点击（同一状态路径，不是第二套逻辑）',
+    keyHit.handled === true && keyHit.kind === 'diagram' && ui41.readUiState('g1').state.active === null, JSON.stringify(keyHit));
+  handleUiDeskKey({ key: ' ', target: nodeFor('硝化', 'g1'), preventDefault: () => { prevented41 = true; } });
+  check('空格也等同一次点击，且 preventDefault（页面不许跟着滚）',
+    prevented41 === true && ui41.readUiState('g1').state.active === '硝化', '');
+  check('别的键不拦（打字的手感不许被抢）',
+    handleUiDeskKey({ key: 'a', target: nodeFor('硝化', 'g1') }).handled === false, '');
+  check('非图节点上的键也不拦（正文打字走自己的路）',
+    handleUiDeskKey({ key: 'Enter', target: { dataset: {} } }).handled === false, '');
+
+  // 4b) 点击要当场点亮 DOM（不是只改 Map 等下一帧重画）：把 document 换成桩树，点一下看 classList
+  const mG = (name) => { const g41 = { dataset: { uiNode: name }, classList: { toggle: (c, f) => g41.calls.toggles.push([c, f]) }, setAttribute: () => {}, calls: { toggles: [] } }; return g41; };
+  const mNodes = [mG('固氮'), mG('硝化'), mG('植物吸收'), mG('反硝化')];
+  const mLines = [mG('固氮->硝化'), mG('硝化->植物吸收'), mG('植物吸收->反硝化')];
+  const mSvg = { dataset: { uiDiagram: 'g1' }, querySelectorAll: (sel) => (sel === 'g.ui-node' ? mNodes : sel === 'g.ui-edge' ? mLines : []) };
+  const realDoc41b = globalThis.document;
+  globalThis.document = { querySelectorAll: (sel) => (sel === '[data-ui-diagram]' ? [mSvg] : []) };
+  handleUiDeskEvent({ target: nodeFor('植物吸收', 'g1') });
+  globalThis.document = realDoc41b;
+  check('点击当场点亮 DOM（点完立刻看得见，不等下一帧重画）',
+    mNodes[2].calls.toggles.some(([c, f]) => c === 'ui-node-active' && f === true)
+      && mLines[1].calls.toggles.some(([c, f]) => c === 'ui-edge-active' && f === true),
+    JSON.stringify(mNodes.map((n) => n.calls)));
+
+  // 5) 不接错：不是节点的动静一概不接；没 spec 的图点不响
+  check('点击空白处不接（委托挂在整台面上，接错就是抢别人的事件）',
+    handleUiDeskEvent({ target: { dataset: {}, tagName: 'svg' } }).handled === false, '');
+  ui41.writeUiState('gx', 'diagram', {}, null);
+  check('图没有 spec 点不响（没邻接就不知道高亮谁）',
+    handleUiDeskEvent({ target: nodeFor('甲', 'gx') }).handled === false, JSON.stringify(ui41.readUiState('gx')));
+
+  // 6) 重画恢复高亮：把 state 写进 Map 再编译，class 与 aria 原样带回来
+  const g2Lines = ['kind: diagram', 'id: g2', 'node: 固氮', 'node: 硝化', 'node: 植物吸收', 'node: 反硝化',
+    'edge: 固氮 -> 硝化', 'edge: 硝化 -> 植物吸收', 'edge: 植物吸收 -> 反硝化'];
+  ui41.writeUiState('g2', 'diagram', { active: '硝化', viewed: { 硝化: true }, uiKind: 'diagram' },
+    { edges: [{ src: '固氮', dst: '硝化' }, { src: '硝化', dst: '植物吸收' }, { src: '植物吸收', dst: '反硝化' }], names: ['固氮', '硝化', '植物吸收', '反硝化'] });
+  const g2 = compile41(g2Lines).html;
+  check('重画把 active 节点带回来（ui-node-active）',
+    g2.includes('class="ui-node ui-node-active"') && /ui-node-active[\s\S]*>硝化</.test(g2), g2.slice(0, 400));
+  check('它连着的两条边也高亮（邻接高亮=这一点的全部信息）',
+    (g2.match(/class="ui-edge ui-edge-active"/g) || []).length === 2, g2.slice(0, 400));
+  check('邻居节点次级高亮（固氮与植物吸收是它的邻居）',
+    (g2.match(/class="ui-node ui-node-adjacent"/g) || []).length === 2, g2.slice(0, 400));
+  check('不邻接的节点不高亮（反硝化不挨着它）',
+    (g2.match(/class="ui-node" /g) || []).length === 1, g2.slice(0, 400));
+  check('aria-pressed 跟着高亮走（读屏念得出"已选中"）',
+    g2.includes('aria-pressed="true"'), g2.slice(0, 200));
+
+  // 7) repaintUiDiagram：点了立刻看得见——就地改 class 与 aria，不整块重画（重画会跳滚动）
+  const mkG = (name) => {
+    const g41 = { dataset: { uiNode: name }, classList: { toggle: (c, f) => g41.calls.toggles.push([c, f]) }, setAttribute: (k, v) => g41.calls.aria.push([k, v]), calls: { toggles: [], aria: [] } };
+    return g41;
+  };
+  const fakeNodes = [mkG('硝化'), mkG('固氮'), mkG('植物吸收'), mkG('反硝化')];
+  const fakeLines = [mkG('固氮->硝化'), mkG('硝化->植物吸收'), mkG('植物吸收->反硝化')];
+  const fakeSvg = { dataset: { uiDiagram: 'g1' }, querySelectorAll: (sel) => (sel === 'g.ui-node' ? fakeNodes : sel === 'g.ui-edge' ? fakeLines : []) };
+  const realDoc41 = globalThis.document;
+  ui41.writeUiState('g1', 'diagram', { active: '固氮', viewed: { 固氮: true, 硝化: true }, uiKind: 'diagram' },
+    { edges: [{ src: '固氮', dst: '硝化' }, { src: '硝化', dst: '植物吸收' }, { src: '植物吸收', dst: '反硝化' }], names: ['固氮', '硝化', '植物吸收', '反硝化'] });
+  globalThis.document = { querySelectorAll: (sel) => (sel === '[data-ui-diagram]' ? [fakeSvg] : []) };
+  repaintUiDiagram('g1');
+  globalThis.document = realDoc41;
+  check('被点节点就地拿到 ui-node-active（classList 加了，不是等下一帧）',
+    fakeNodes[1].calls.toggles.some(([c, f]) => c === 'ui-node-active' && f === true), JSON.stringify(fakeNodes[1].calls));
+  check('它的邻居拿到 ui-node-adjacent（连着谁当场看得见）',
+    fakeNodes[0].calls.toggles.some(([c, f]) => c === 'ui-node-adjacent' && f === true), JSON.stringify(fakeNodes[0].calls));
+  check('它的边拿到 ui-edge-active',
+    fakeLines[0].calls.toggles.some(([c, f]) => c === 'ui-edge-active' && f === true), JSON.stringify(fakeLines[0].calls));
+  check('不邻接的节点不被点亮（高亮只给真的连着的那几个）',
+    !fakeNodes[3].calls.toggles.some(([c, f]) => (c === 'ui-node-active' || c === 'ui-node-adjacent') && f === true),
+    JSON.stringify(fakeNodes[3].calls));
+  check('aria-pressed 就地同步（读屏立即知道高亮换了）',
+    fakeNodes[1].calls.aria.some(([k, v]) => k === 'aria-pressed' && v === 'true'), JSON.stringify(fakeNodes[1].calls));
+  check('没有 spec 的图重画什么都不做（防御，不许炸）',
+    repaintUiDiagram('nope') === undefined, '');
+
+  // 8) 降级路径完整：没 id 掉回原文并点名；简洁模式把交互连根关掉
+  const noid = compile41(['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙']);
+  check('没 id 的图解掉回原文（谁点了谁没有地方记）',
+    Boolean(noid.degraded) && noid.degraded.includes('没有 id') && noid.html.includes('没能编译成界面'), String(noid.degraded));
+  ui41.setUiMode('plain');
+  const gPlain = compile41(g1Lines).html;
+  check('「只要文字」里交互也一起关掉（不留半个 SVG）',
+    gPlain.includes('lang-ui') && !gPlain.includes('ui-diagram'), gPlain.slice(0, 140));
+  ui41.setUiMode('rich');
+
+  // 9) 高亮样式只借 accent 一族（状态指示不是正文，不引新配色）
+  const dgCss41 = /\/\* 图解：[\s\S]*?(?=\/\* 降级：)/.exec(cssText)?.[0] || '';
+  check('高亮那段也在图解样式块里（找不到就别装作量过了）',
+    dgCss41.includes('ui-node-active') && dgCss41.includes('ui-edge-active'), '');
+  check('高亮没引入新配色（accent 一族全在样式块里，十六进制一条不许有）',
+    !/#[0-9a-fA-F]{3,8}/.test(dgCss41), (dgCss41.match(/#[0-9a-fA-F]{3,8}/g) || []).join(','));
+  check('高亮用的是已量过的 accent 那一对（强调只借现成 token）',
+    dgCss41.includes('var(--accent)') && dgCss41.includes('var(--accent-soft)'), dgCss41.slice(0, 300));
+
+  check('这一节无异常', errors.length === errsBefore41, errors.slice(errsBefore41).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
