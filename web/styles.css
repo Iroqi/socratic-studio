@@ -607,7 +607,7 @@ html, body {
 }
 
 /* ── 内联界面（```ui 档）：回答本身就是界面 ─────────────────────────────
-   形状来自封闭词汇表（ui-compile.js 的四档），所以这里的样式也只服务那四种 + 降级/占位。
+   形状来自封闭词汇表（ui-compile.js 的五档），所以这里的样式也只服务那五种 + 降级/占位。
    颜色一分钱没新花：底全部用 --surface-2（对 --ink 的对比度在第 26 节现算过，两套主题都过 AA），
    强调只借现成的 --accent / --accent-ink 那一对。新的配色组合要先重算一遍对比度，
    而这一档的边际收益在形状不在颜色。 */
@@ -649,6 +649,16 @@ html, body {
 .ui-out { display: flex; align-items: baseline; gap: 8px; margin: 6px 0 0; }
 .ui-out-name { font-size: 12.5px; color: var(--ink-2); }
 .ui-out-value { font-size: 15px; font-weight: 640; }
+
+/* 图解：节点与连线。几何（坐标、尺寸）全部由编译器按输入决定，这里只负责用已量过的
+   token 上色。静态形状没有交互态，样式里也就没有 hover/active 那一族。 */
+.ui-diagram { display: block; max-width: 100%; height: auto; margin: 0 0 1em; }
+.ui-diagram .ui-node rect { fill: var(--surface-2); stroke: var(--ink-2); stroke-width: 1; }
+.ui-diagram .ui-node text { fill: var(--ink); font-size: 13px; }
+.ui-diagram .ui-node-note { fill: var(--ink-2); font-size: 11px; }
+.ui-diagram .ui-edge { stroke: var(--ink-2); stroke-width: 1.4; }
+.ui-diagram .ui-edge-label { fill: var(--ink-3); font-size: 11px; }
+.ui-diagram .ui-arrow-head { fill: var(--ink-2); }
 
 /* 降级：原文看得见 + 一句为什么。它是这一档唯一的"失败可见"面，不许静默吞。 */
 .ui-degraded {

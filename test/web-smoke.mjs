@@ -4550,7 +4550,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('退回时说明为什么（一句"没能编译"不给原因=白屏另一种写法）',
     /没有「pie」这一档界面/.test(unknown.html), unknown.html.slice(0, 220));
   check('降级理由里带可用档（让人一眼知道能写什么，不用猜）',
-    unknown.html.includes('compare / steps / checklist / calculator'), unknown.html.slice(0, 300));
+    unknown.html.includes('compare / steps / checklist / calculator / diagram'), unknown.html.slice(0, 300));
   check('对齐不上的 compare 不硬编（每行格数不同就别画表）',
     Boolean(compile(['kind: compare', 'row: a | b', 'row: c | d | e']).degraded));
 
@@ -4861,6 +4861,150 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     btnNode39.getAttribute('aria-pressed') === 'false' && /把界面长出来/.test(btnNode39.title || ''),
     `${btnNode39.getAttribute('aria-pressed')} | ${btnNode39.title}`);
   check('这一节无异常', errors.length === errsBefore39, errors.slice(errsBefore39).join(' | '));
+}
+
+// ─── 40. 图解：```ui 的 diagram 档（第二十六轮，学 Intelligent UI 的"解释复杂概念→图解"）
+// OpenAI 那一手"解释复杂概念 → 交互式图解"在本仓的形状：节点 + 有向连线，先到后的 DAG
+// 分层，同一份输入两次编译坐标一模一样（流式每帧重编，坐标跳来跳去的图没法对着问为什么）。
+// 它只抄形状不抄交互：图是静态的，学习者对图的交互在对话里——指着图问，模型接着讲。
+{
+  console.log('\n40. 图解（diagram 编译 + DAG 分层 + 静态形状）');
+  const errsBefore40 = errors.length;
+  const ui40 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const md40 = await import('file:///' + path.join(webDir, 'markdown.js').replace(/\\/g, '/'));
+  const compile40 = (lines, partial) => ui40.compileUiBlock(lines.filter((l) => l.trim()), partial);
+
+  // 1) 合法输入编成内联 SVG：节点、连线、箭头、读屏名
+  const dgLines = [
+    'kind: diagram', 'title: 光合作用的两阶段',
+    'node: 光反应 | 在类囊体膜上', 'node: 暗反应', 'node: 卡尔文循环',
+    'edge: 光反应 -> 暗反应 | 提供 ATP', 'edge: 暗反应 -> 卡尔文循环',
+  ];
+  const dg = compile40(dgLines).html;
+  check('diagram 编成内联 SVG（不是灰底代码块）',
+    dg.includes('<svg class="ui-diagram"') && dg.includes('role="img"'), dg.slice(0, 120));
+  check('节点长成矩形 + 名字（名字是形状的一部分，不是贴上去的标签）',
+    (dg.match(/class="ui-node"/g) || []).length === 3 && dg.includes('>光反应</text>'), dg.slice(0, 260));
+  check('连线带着箭头（方向是这张图的信息）',
+    dg.includes('class="ui-edge"') && /marker-end="url\(#ui-arrow-/.test(dg), dg.slice(0, 200));
+  check('节点的一句话落进 <title>（悬停看得见，不占格子）',
+    /<title>光反应：在类囊体膜上<\/title>/.test(dg), dg.slice(0, 220));
+  check('svg 自带读屏名（<title> 在 svg 开头，读屏先念这一句）',
+    /<svg[^>]*>[\s\S]{0,60}<title>关系图解：光合作用的两阶段<\/title>/.test(dg), dg.slice(0, 220));
+  check('读屏名里没有数字（结构数量不是学情指标，连 aria 里也不放）',
+    !/[0-9]/.test(/aria-label="[^"]*"/.exec(dg)?.[0] || ''), dg.slice(0, 160));
+  check('同一份输入两次编译长得一模一样（流式每帧重编，坐标不许跳）',
+    compile40(dgLines).html === dg, '');
+  check('没有 title 时读屏名是一句人话（不露内部计数）',
+    /aria-label="关系图解：节点与连线表示概念或步骤之间的关系"/.test(
+      compile40(['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙']).html));
+
+  // 2) 几何是确定的：两节点一箭头，viewBox 由输入算出，前后两列 x 必须拉开
+  const two = compile40(['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙']).html;
+  check('两节点的图占确定的版面（viewBox 是算出来的，不是猜出来的）',
+    /viewBox="0 0 312 80"/.test(two), /viewBox="[^"]*"/.exec(two)?.[0]);
+  const xs = [...two.matchAll(/<rect x="(\d+)"/g)].map((m) => Number(m[1]));
+  check('先发生的在左、后发生的在右（层序就是阅读顺序）',
+    xs.length === 2 && xs[0] === 16 && xs[1] === 200, xs.join(','));
+
+  // 3) 身份与方向是硬规矩：每一条都掉回原文并点名原因
+  const dgFails = [
+    ['终点没声明过', ['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 丙'], '「丙」没在 node 里声明'],
+    ['起点没声明过', ['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 丙 -> 乙'], '「丙」没在 node 里声明'],
+    ['节点名重复', ['kind: diagram', 'node: 甲', 'node: 甲', 'edge: 甲 -> 乙'], '「甲」写了两遍：图解的身份是名字'],
+    ['自己连自己', ['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 甲'], '是自己连自己'],
+    ['图里有环', ['kind: diagram', 'node: 甲', 'node: 乙', 'node: 丙', 'edge: 甲 -> 乙', 'edge: 乙 -> 丙', 'edge: 丙 -> 甲'], '图里有环'],
+    ['一条边都没有', ['kind: diagram', 'node: 甲', 'node: 乙'], '一条边都没有'],
+    ['只有一个节点', ['kind: diagram', 'node: 甲'], '图解至少两个节点'],
+    ['同一条边写两遍', ['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙', 'edge: 甲 -> 乙'], '这条边写了两遍'],
+    ['一条边连三个点', ['kind: diagram', 'node: 甲', 'node: 乙', 'node: 丙', 'edge: 甲 -> 乙 -> 丙'], '一条边要写成「甲 -> 乙」'],
+    ['空的节点名', ['kind: diagram', 'node: | 备注', 'node: 乙', 'edge: 甲 -> 乙'], '有空的节点名'],
+    ['边的那一头是空的', ['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> | 说明'], '边的那一头是空的'],
+    ['节点名太长', ['kind: diagram', `node: ${'甲'.repeat(41)}`, 'node: 乙', 'edge: 甲 -> 乙'], '节点名太长'],
+    ['节点的一句话太长', ['kind: diagram', `node: 甲 | ${'注'.repeat(81)}`, 'node: 乙', 'edge: 甲 -> 乙'], '一句话太长了'],
+    ['边上的说明太长', ['kind: diagram', 'node: 甲', 'node: 乙', `edge: 甲 -> 乙 | ${'说'.repeat(41)}`], '边上的说明太长了'],
+  ];
+  for (const [label, lines, why] of dgFails) {
+    const r = compile40(lines);
+    check(`图解拦住${label}，说的是这一条的原因`,
+      Boolean(r.degraded) && r.degraded.includes(why) && r.html.includes('没能编译成界面'),
+      String(r.degraded));
+  }
+  // 数量上限（通用行数那道 46 的墙之后才是这一档自己的上限：20 节点 / 20 边）
+  const tooManyNodes = ['kind: diagram', ...Array.from({ length: 21 }, (_, i) => `node: 节点${i}`), 'edge: 节点0 -> 节点1'];
+  check('节点超过 20 个不编（图解不是一张地图）',
+    /节点太多了/.test(String(compile40(tooManyNodes).degraded)), String(compile40(tooManyNodes).degraded));
+  const chain7 = Array.from({ length: 7 }, (_, i) => `node: n${i}`);
+  const allPairs = [];
+  for (let i = 0; i < 7; i += 1) for (let j = i + 1; j < 7; j += 1) allPairs.push(`edge: n${i} -> n${j}`);
+  const tooManyEdges = ['kind: diagram', ...chain7, ...allPairs.slice(0, 21)];
+  check('边超过 20 条不编（第 21 条是压垮它的那根草）',
+    /边太多了/.test(String(compile40(tooManyEdges).degraded)), String(compile40(tooManyEdges).degraded));
+  check('恰好 20 条边照编（上限是可数的，不是拍脑袋）',
+    compile40(['kind: diagram', ...chain7, ...allPairs.slice(0, 20)]).html.includes('ui-diagram'), '');
+
+  // 4) 流式那一路：没写完摆占位，写完了照编
+  const dgPartial = compile40(['kind: diagram', 'node: 甲'], true);
+  check('只有一半的图解摆占位（还没写完，不是写坏了）',
+    dgPartial.pending === true && dgPartial.html.includes('ui-skeleton'), dgPartial.html);
+  check('半截图里没有数字（占位那格连"假装在动"都不给）',
+    !/[0-9]/.test(dgPartial.html.replace(/\D/g, '') || ''), dgPartial.html);
+  check('围栏没闭合但内容合法：照样编出图（少了结尾围栏不是写坏了）',
+    md40.renderMarkdown('```ui\nkind: diagram\nnode: 甲\nnode: 乙\nedge: 甲 -> 乙\n', { partial: true }).includes('ui-diagram'));
+  check('终态里没闭合的半截图当场降级（占位不许活过回合）',
+    md40.renderMarkdown('```ui\nkind: diagram\nnode: 甲\n', { partial: false }).includes('ui-degraded'));
+
+  // 5) XSS：图里的名字与说明进不了可执行位置
+  const dgEvil = compile40(['kind: diagram', 'node: <img src=x onerror=alert(1)>', 'node: 乙', 'edge: <img src=x onerror=alert(1)> -> 乙 | " onclick=alert(2)']).html;
+  check('节点名里的 HTML 被转义（SVG 里也不许长活标签）',
+    dgEvil.includes('&lt;img') && !/<img/.test(dgEvil), dgEvil.slice(0, 200));
+  check('属性位也转义（title / aria 里的引号挤不出事件处理器）',
+    !/" onclick=/.test(dgEvil) && dgEvil.includes('&quot;'), dgEvil.slice(0, 200));
+
+  // 6) 渲染器接线：diagram 走同一条 ```ui 围栏路，别的围栏不受影响
+  const dgRendered = md40.renderMarkdown('先看图：\n\n```ui\nkind: diagram\nnode: 甲\nnode: 乙\nedge: 甲 -> 乙\n```\n\n再解释', { partial: true });
+  check('正文里的 diagram 被编译（不是留一个代码块）',
+    dgRendered.includes('ui-diagram') && dgRendered.includes('先看图') && dgRendered.includes('再解释'), dgRendered.slice(0, 200));
+  check('```js 围栏照旧是代码块（diagram 不抢别人的形状）',
+    md40.renderMarkdown('```js\nconst a=1;\n```').includes('lang-js'));
+
+  // 7) 词表口径：diagram 在名单里、不是交互档、不在否决名单、没有判分位置
+  check('diagram 进了封闭词表', ui40.UI_KINDS.includes('diagram'), ui40.UI_KINDS.join(','));
+  check('diagram 不是交互档（静态形状没有"学习者做过什么"这回事）',
+    !ui40.UI_STATEFUL.includes('diagram'), ui40.UI_STATEFUL.join(','));
+  check('diagram 不在否决名单（它不承载学情数字）', !ui40.UI_VETOED.includes('diagram'), ui40.UI_VETOED.join(','));
+  check('diagram 那一档里没有给判分留位置（Invariant 4 第 ③ 条）',
+    !/quiz|answer|grade|judge/.test('diagram'), '');
+
+  // 8) 简洁模式：diagram 跟其它档一样，整段掉回原文
+  ui40.setUiMode('plain');
+  const dgPlain = compile40(dgLines).html;
+  check('「只要文字」里 diagram 就是原文（不留半个 SVG）',
+    dgPlain.includes('lang-ui') && !dgPlain.includes('ui-diagram'), dgPlain.slice(0, 140));
+  check('简洁模式里的原文不算降级（围栏本该是原文，不是失败）',
+    !dgPlain.includes('ui-degraded'), dgPlain.slice(0, 140));
+  ui40.setUiMode('rich');
+  check('切回来就重新编译（开关是个开关不是单行道）',
+    compile40(dgLines).html.includes('ui-diagram'));
+
+  // 9) 看得清吗：图解那一段的每一组前景/背景现算一遍，颜色只借已量过的 token
+  const dgCss = /\/\* 图解：[\s\S]*?(?=\/\* 降级：)/.exec(cssText)?.[0] || '';
+  check('样式表里能找到图解那一整段（找不到就别装作量过了）', dgCss.length > 120, `${dgCss.length} 字符`);
+  check('图解没引入新配色（那一段里没有一条十六进制）',
+    !/#[0-9a-fA-F]{3,8}/.test(dgCss), (dgCss.match(/#[0-9a-fA-F]{3,8}/g) || []).join(','));
+  for (const [theme, block] of [['深色', darkBlock], ['浅色', lightBlock]]) {
+    const pairs = [
+      ['节点名 --ink 落在 --surface-2', token(block, 'ink'), token(block, 'surface-2')],
+      ['节点的一句话 --ink-2 落在 --surface-2', token(block, 'ink-2'), token(block, 'surface-2')],
+      ['边上的说明 --ink-3 落在 --bg', token(block, 'ink-3'), token(block, 'bg')],
+    ];
+    for (const [label, fg, bg] of pairs) {
+      const ratio = contrast(fg, bg);
+      check(`${theme} 图解 ${label} 过 AA 4.5:1`, ratio >= 4.5, `${fg} on ${bg} = ${ratio.toFixed(2)}:1`);
+    }
+  }
+
+  check('这一节无异常', errors.length === errsBefore40, errors.slice(errsBefore40).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

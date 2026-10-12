@@ -6,18 +6,18 @@
 // 升级成一次装软件。这一档补的就是那条缝：**回答本身就是界面，不另起一个产物**。
 //
 // 词汇表是**封闭**的，这一条是整个设计的重心：
-//   · 模型只能在四档里选，选不出新形状，也就造不出"看着像官方控件"的假控件；
+//   · 模型只能在五档里选，选不出新形状，也就造不出"看着像官方控件"的假控件；
 //   · 未知档一律退回原文（看得见，不静默吞），跟 dialogue 那条"三处不猜"同一个脾气；
 //   · 因为可枚举，"这轮放的界面编译过没有"是机械事实，能读回给模型——
 //     忍住不加界面这件事从此不只靠散文自觉。
 //
-// 判分仍然不在这一层：四档里没有"答案键"的位置，checklist 只记"勾了没有"，
+// 判分仍然不在这一层：五档里没有"答案键"的位置，checklist 只记"勾了没有"，
 // 不记"勾对没有"（Invariant 4 第 ③ 条：把判分藏进控件就是违规指纹）。
 
 import { escapeHtml } from './escape.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator'];
+export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -357,7 +357,181 @@ function calcTerms(groups, values) {
   return Math.round(total * 1000) / 1000;
 }
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator };
+// ── 图解 ─────────────────────────────────────────────────────────────
+/**
+ * diagram：`node: 名字 [| 一句话]` + `edge: 甲 -> 乙 [| 说明]`。
+ * 解释"几个东西之间怎么连"：光合作用的两阶段、一次调用的链路、一层架构的分工。
+ * 这是 OpenAI Intelligent UI 那一手"解释复杂概念 → 交互式图解"在本仓的形状，
+ * 但只抄它的**形状**不抄它的**交互**：图是静态的，"学习者在图里做过什么"这回事
+ * 不存在，所以不要求 id、不进 UI_STATEFUL、不落 artifact_state。学习者对图的交互
+ * 是**对话**——指着图问"这里为什么这样连"，是模型接着讲，不是图自己长出手来。
+ *
+ * 布局是**确定的**：先到后的有向分层（Kahn 最长路径），层内按名字排——流式那一路
+ * 每帧重编，坐标跳来跳去的图没法让人对着问为什么。同一份输入两次编译长得一模一样。
+ *
+ * 身份是名字：重复声明一个名字，两个节点就说不清了；每条边的两端必须都在 node 里
+ * 声明过，写了个没声明过的名字就掉回原文并**点名**。图必须是 DAG：回路 / 反馈这类
+ * 结构在这里表达不了——那是 steps 或正文的形状，不是图解写坏了。
+ */
+const DIAGRAM_MAX_NODES = 20;
+const DIAGRAM_MAX_EDGES = 20;
+
+/** 简单 FNV-1a：给箭头 marker 一个由内容决定的 id（同一份内容两次编译长得一模一样）。 */
+function hashText(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+/** 显示截断：格子装不下就收短并打省略号（完整内容在 <title> 悬停里，不是数据丢了）。 */
+function fitText(s, maxChars) {
+  const t = String(s).replace(/\s+/g, ' ').trim();
+  return t.length <= maxChars ? t : `${t.slice(0, Math.max(1, maxChars - 1))}…`;
+}
+
+function compileDiagram(fields) {
+  const title = pick(fields, 'title')[0] || '';
+  const rawNodes = pick(fields, 'node');
+  const rawEdges = pick(fields, 'edge');
+
+  if (rawNodes.length < 2) return { error: '图解至少两个节点' };
+  if (rawNodes.length > DIAGRAM_MAX_NODES) return { error: `节点太多了（最多 ${DIAGRAM_MAX_NODES} 个，图解不是一张地图）` };
+  if (!rawEdges.length) return { error: '一条边都没有：图解的意义在连线' };
+  if (rawEdges.length > DIAGRAM_MAX_EDGES) return { error: `边太多了（最多 ${DIAGRAM_MAX_EDGES} 条）` };
+
+  const nodes = [];
+  const byName = new Map();
+  for (const line of rawNodes) {
+    const [name, ...rest] = line.split('|').map((s) => s.trim());
+    if (!name) return { error: '有空的节点名' };
+    if (name.length > 40) return { error: '节点名太长（≤40 字）' };
+    const note = rest.filter(Boolean).join(' ').trim();
+    if (note.length > 80) return { error: '节点的一句话太长了（≤80 字）' };
+    if (byName.has(name)) return { error: `「${name}」写了两遍：图解的身份是名字` };
+    byName.set(name, true);
+    nodes.push({ name, note });
+  }
+
+  const edges = [];
+  const seenEdges = new Set();
+  for (const line of rawEdges) {
+    const halves = line.split('->').map((s) => s.trim());
+    if (halves.length !== 2 || !halves[0] || !halves[1]) {
+      return { error: '一条边要写成「甲 -> 乙」（一条边只连两个节点）' };
+    }
+    const [src, dstAndLabel] = halves;
+    const [dst, ...labelParts] = dstAndLabel.split('|').map((s) => s.trim());
+    const label = labelParts.filter(Boolean).join(' ').trim();
+    if (!dst) return { error: '边的那一头是空的' };
+    if (label.length > 40) return { error: '边上的说明太长了（≤40 字）' };
+    if (src === dst) return { error: `「${src} -> ${dst}」是自己连自己` };
+    if (!byName.has(src)) return { error: `「${src}」没在 node 里声明（每条边都要从声明过的节点出发）` };
+    if (!byName.has(dst)) return { error: `「${dst}」没在 node 里声明（每条边都要连到声明过的节点）` };
+    const key = `${src}->${dst}`;
+    if (seenEdges.has(key)) return { error: `「${src} -> ${dst}」这条边写了两遍` };
+    seenEdges.add(key);
+    edges.push({ src, dst, label });
+  }
+
+  // DAG 分层（Kahn 最长路径）：layer[v] = max(layer[u]) + 1。这种分层下同一层内的边
+  // 不可能出现（u->v 会让 v 的最长路径至少 +1），所以线永远从左往右、不用画回头弯。
+  const outMap = new Map(nodes.map((n) => [n.name, []]));
+  const indeg = new Map(nodes.map((n) => [n.name, 0]));
+  for (const e of edges) {
+    outMap.get(e.src).push(e.dst);
+    indeg.set(e.dst, indeg.get(e.dst) + 1);
+  }
+  const layer = new Map(nodes.map((n) => [n.name, 0]));
+  const queue = nodes.filter((n) => indeg.get(n.name) === 0).map((n) => n.name);
+  let seen = 0;
+  while (queue.length) {
+    const u = queue.shift();
+    seen += 1;
+    for (const v of outMap.get(u)) {
+      layer.set(v, Math.max(layer.get(v), layer.get(u) + 1));
+      indeg.set(v, indeg.get(v) - 1);
+      if (indeg.get(v) === 0) queue.push(v);
+    }
+  }
+  if (seen !== nodes.length) {
+    return { error: '图里有环：图解是从先到后的有向关系，回路 / 反馈这类结构走 steps 或正文' };
+  }
+
+  // 几何全部由输入决定，跟"第几个输入"无关：同样的 node/edge 永远落在同样的坐标上。
+  const PAD = 16; const GAP_X = 88; const GAP_Y = 34; const NODE_H = 48; const CHAR_W = 15;
+  const nodeW = (n) => Math.min(240, Math.max(96, n.name.length * CHAR_W + 24));
+  const maxW = Math.max(...nodes.map(nodeW));
+  const COL_W = maxW + GAP_X;
+  const byLayer = new Map();
+  for (const n of nodes) {
+    const l = layer.get(n.name);
+    if (!byLayer.has(l)) byLayer.set(l, []);
+    byLayer.get(l).push(n);
+  }
+  const layerKeys = [...byLayer.keys()].sort((a, b) => a - b);
+  let maxRows = 0;
+  for (const l of layerKeys) {
+    byLayer.get(l).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    maxRows = Math.max(maxRows, byLayer.get(l).length);
+  }
+  const svgW = (layerKeys.length - 1) * COL_W + maxW + PAD * 2;
+  const svgH = (maxRows - 1) * (NODE_H + GAP_Y) + NODE_H + PAD * 2;
+  const pos = new Map();
+  for (const l of layerKeys) {
+    byLayer.get(l).forEach((n, row) => {
+      pos.set(n.name, { x: PAD + l * COL_W, y: PAD + row * (NODE_H + GAP_Y), w: nodeW(n) });
+    });
+  }
+
+  // 箭头 id 由内容决定：同一份图重画仍是同一个 marker，不同内容的图不会共用 id。
+  const arrowId = `ui-arrow-${hashText(`${rawNodes.join('\n')}\n${rawEdges.join('\n')}\n${title}`)}`;
+  const marker =
+    `<defs><marker id="${arrowId}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+    `<path class="ui-arrow-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>`;
+
+  const nodeEls = nodes
+    .map((n) => {
+      const p = pos.get(n.name);
+      const nameShown = fitText(n.name, Math.max(4, Math.floor((p.w - 18) / CHAR_W)));
+      const noteShown = n.note ? fitText(n.note, Math.max(4, Math.floor((p.w - 18) / 11))) : '';
+      const cy = p.y + NODE_H / 2 + (n.note ? 1 : 7);
+      return (
+        `<g class="ui-node">${n.note ? `<title>${escapeHtml(n.name)}：${escapeHtml(n.note)}</title>` : ''}` +
+        `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${NODE_H}" rx="8"/>` +
+        `<text x="${p.x + p.w / 2}" y="${cy}" text-anchor="middle">${escapeHtml(nameShown)}</text>` +
+        (n.note ? `<text class="ui-node-note" x="${p.x + p.w / 2}" y="${p.y + NODE_H - 14}" text-anchor="middle">${escapeHtml(noteShown)}</text>` : '') +
+        `</g>`
+      );
+    })
+    .join('');
+
+  const edgeEls = edges
+    .map((e) => {
+      const u = pos.get(e.src); const v = pos.get(e.dst);
+      const x1 = u.x + u.w; const y1 = u.y + NODE_H / 2;
+      const x2 = v.x; const y2 = v.y + NODE_H / 2;
+      const labelShown = e.label ? fitText(e.label, Math.max(6, Math.floor(((x2 - x1) * 0.9) / 11))) : '';
+      return (
+        `<g class="ui-edge"><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" marker-end="url(#${arrowId})"/></g>` +
+        (labelShown ? `<text class="ui-edge-label" x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 6}" text-anchor="middle">${escapeHtml(labelShown)}</text>` : '')
+      );
+    })
+    .join('');
+
+  // 读屏名里刻意不放节点/边的数量：结构数量不是学情指标，但连 aria 里也不出现数字，
+  // 免得哪一天"数字不许进界面面"这条被读屏用户先看见。
+  const aria = title ? `关系图解：${title}` : '关系图解：节点与连线表示概念或步骤之间的关系';
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const body =
+    `<svg class="ui-diagram" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
+    `<title>${escapeHtml(aria)}</title>${marker}${edgeEls}${nodeEls}</svg>`;
+  return { html: `${cap}${body}`, shape: 'diagram' };
+}
+
+const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram };
 
 /**
  * 编译器入口。partial = 这一段还在流里长（围栏未闭合）。

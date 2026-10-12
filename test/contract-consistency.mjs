@@ -1240,7 +1240,7 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
   check('能解析出编译器那三份名单（解析不出来就别装作测过了）',
     Boolean(kinds && vetoed && stateful), `kinds=${kinds && kinds.length} vetoed=${vetoed && vetoed.length} stateful=${stateful && stateful.length}`);
   const taught = (kinds || []).filter((kind) => promptSrc25.includes('| ' + bt(kind) + ' |'));
-  check('提示那张四档表逐行点名，一行不缺（漏一档=模型压根不知道能这么写）',
+  check('提示那张词表逐行点名，一行不缺（漏一档=模型压根不知道能这么写）',
     taught.length === (kinds || []).length,
     `词表 ${(kinds || []).join(',')} / 表里 ${taught.join(',') || '（空）'}`);
   for (const kind of kinds || []) {
