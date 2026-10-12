@@ -1268,7 +1268,7 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
   // 3) data-* 那根线：编译器写进 HTML 的名字 ↔ 宿主读的名字（错一位就回收不上状态）
   const emittedAttrs = [...uiSrc.matchAll(/data-(ui-[a-z-]+)=/g)].map((m) => m[1]);
   check('编译器一共只写这几个 data-*（多一个就是多一条没人读的记号，契约测试会把它认成断线）',
-    [...emittedAttrs].sort().join(',') === 'ui-calc,ui-check,ui-diagram,ui-item,ui-node,ui-param,ui-slider',
+    [...emittedAttrs].sort().join(',') === 'ui-calc,ui-check,ui-diagram,ui-handoff,ui-item,ui-node,ui-param,ui-slider',
     [...new Set(emittedAttrs)].sort().join(','));
   for (const attr of new Set(emittedAttrs)) {
     const key = attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase());

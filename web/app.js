@@ -2960,12 +2960,66 @@ function evalUiTerms(groups, values) {
 }
 
 /**
+ * handoff（第二十九轮，学 Intelligent UI 的 issueNewTurn 不学自动发言）：
+ * 交互档把学习者当前的状态递回对话的唯一出口。点了把「勾了哪几项 / 参数滑到哪 /
+ * 停在哪」拼成一句人话放进输入框，由他自己看过、改过再发。
+ *
+ * 为什么拼句必须在这儿、不能交给模型：这是机械事实不是判断，经过模型就有抄错/发挥
+ * 的空间；为什么只放输入框、不自动发：话是学习者的话，界面只省掉"把状态抄回输入框"
+ * 这一步——它不替学习者发言，也就不会替他把疑问也猜了。
+ *
+ * 名字优先用 spec.title（界面里的话不许露内部 id）；清单最多列 5 项加省略号，
+ * 输入框不许被一份长清单塞爆。没有可交回的状态（没勾 / 没点开）照实说，不猜。
+ */
+function handoffUiState(id) {
+  const rec = readUiState(id);
+  const box = $('input');
+  if (!rec || !box) return false;
+  const name = rec.spec?.title || id;
+  const kind = rec.kind;
+  let text = '';
+  if (kind === 'checklist') {
+    const done = rec.state?.done || {};
+    const checked = Object.keys(done).filter((k) => done[k]);
+    text = checked.length
+      ? `我在清单「${name}」里勾了：${checked.slice(0, 5).join('、')}${checked.length > 5 ? '…' : ''}`
+      : `我在清单「${name}」里还没有勾任何一项`;
+  } else if (kind === 'calculator') {
+    const parts = (rec.spec?.params || []).map((p) => `${p.name}=${rec.state?.[p.name] ?? p.def}`);
+    text = `我在计算器「${name}」里调到：${parts.join('、')}`;
+  } else if (kind === 'diagram') {
+    const active = rec.state?.active;
+    const viewed = Object.keys(rec.state?.viewed || {}).filter((k) => rec.state.viewed[k]);
+    text = active
+      ? `我在图解「${name}」里点开看了：${active}`
+      : viewed.length
+        ? `我在图解「${name}」里看过：${viewed[viewed.length - 1]}`
+        : `我在图解「${name}」里还没有点开节点`;
+  } else {
+    return false;
+  }
+  box.value = text;
+  autosize();
+  box.focus?.();
+  toast('已放进输入框，看过再发');
+  return true;
+}
+
+/**
  * 台面委托接住一次控件动作。返回值里的 `handled` 只为测试好看，浏览器不看。
  * 只做两件事：更新那份状态、就地重画——判定一个字都不在这儿发生（Invariant 4 ③）。
  */
 function handleUiDeskEvent(evt) {
   const node = evt?.target;
   if (!node) return { handled: false };
+
+  // handoff：交互档把状态递回对话的出口。按钮是真实 <button>，键盘天然可走，
+  // 委托只要认它的 data-ui-handoff。拼句与填框全在 handoffUiState（不自动发）。
+  const handoffId = node.dataset?.uiHandoff;
+  if (handoffId) {
+    const ok = handoffUiState(handoffId);
+    return ok ? { handled: true, kind: 'handoff', id: handoffId } : { handled: false };
+  }
 
   const listId = node.dataset?.uiCheck;
   if (listId) {

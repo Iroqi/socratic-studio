@@ -5247,6 +5247,109 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore42, errors.slice(errsBefore42).join(' | '));
 }
 
+// ─── 43. handoff：交互档把状态递回对话（第二十九轮，学 IUI 的 issueNewTurn 不学自动发言）
+// 交互档可选带 handoff: 一句人话：界面尾部多一个按钮，点了把学习者当前的勾选 / 参数 /
+// 停在谁拼成一句人话放进输入框，由他自己看过、改过再发。静态档没有状态可递，
+// 写 handoff 掉回原文；文案超 24 字同样掉回原文。
+{
+  console.log('\n43. handoff 出口（状态拼成人话递回对话，学习者看过再发）');
+  const errsBefore43 = errors.length;
+  const { state: st43, handleUiDeskEvent } = appModule.__hooks;
+  const ui43 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const compile43 = (lines) => ui43.compileUiBlock(lines.filter((l) => l.trim()), false).html;
+  const input43 = doc.getElementById('input');
+  const requestsBefore43 = requests.length;
+  ui43.resetUiState();
+
+  // 1) 三档都能长出手off 按钮：label 是 handoff 那句人话，按钮认得这份界面的 id
+  const cl = compile43(['kind: checklist', 'id: lst1', 'title: 出发前', 'item: 备份', 'item: 停服', 'handoff: 把这组勾选发回对话']);
+  check('清单带 handoff 时长出按钮（按钮认得这份清单的 id）',
+    cl.includes('<button type="button" class="ui-handoff" data-ui-handoff="lst1"') && cl.includes('把这组勾选发回对话'), cl.slice(-260));
+  const ca = compile43(['kind: calculator', 'id: feast', 'title: 报价', 'param: 人数 | 8', 'formula: 月费 = 人数 * 29', 'handoff: 把这组参数发回对话']);
+  check('计算器带 handoff 时长出按钮',
+    ca.includes('data-ui-handoff="feast"') && ca.includes('把这组参数发回对话'), ca.slice(-260));
+  const dg = compile43(['kind: diagram', 'id: g1', 'title: 氮循环', 'node: 固氮', 'node: 硝化', 'edge: 固氮 -> 硝化', 'handoff: 把这个点发回对话']);
+  check('图解带 handoff 时长出按钮',
+    dg.includes('data-ui-handoff="g1"') && dg.includes('把这个点发回对话'), dg.slice(-260));
+  check('三档都不带 handoff 时不长按钮（没写就没有，不加戏）',
+    !compile43(['kind: checklist', 'id: x1', 'item: 备份']).includes('ui-handoff'), '');
+
+  // 2) 静态档没有状态可递：写 handoff 掉回原文并点名（不静默吞）
+  const cmp = ui43.compileUiBlock(['kind: compare', 'row: 甲 | 乙', 'row: 丙 | 丁', 'handoff: 发回'], false);
+  check('compare 带 handoff 掉回原文（没有可交回的状态，不许静默不编译）',
+    Boolean(cmp.degraded) && cmp.degraded.includes('handoff') && cmp.html.includes('没能编译成界面'), String(cmp.degraded));
+  const stp = ui43.compileUiBlock(['kind: steps', 'step: 一', 'handoff: 发回'], false);
+  check('steps 带 handoff 同样掉回原文', Boolean(stp.degraded) && stp.degraded.includes('handoff'), String(stp.degraded));
+
+  // 3) 文案超长掉回原文（按钮不许被一条超长文案撑爆）
+  const longH = ui43.compileUiBlock(['kind: checklist', 'id: x2', 'item: 备份', 'handoff: ' + '发'.repeat(25)], false);
+  check('handoff 文案超 24 字掉回原文并点名', Boolean(longH.degraded) && longH.degraded.includes('24'), String(longH.degraded));
+
+  // 4) 点按钮：状态拼成人话放进输入框，不自动发（话是学习者的话，界面只递状态）
+  st43.notebook = sampleNotebook();
+  ui43.writeUiState('lst1', 'checklist', { uiKind: 'checklist', done: { 备份: true, 停服: true } }, { title: '出发前' });
+  const rHand = handleUiDeskEvent({ target: { dataset: { uiHandoff: 'lst1' } } });
+  check('handoff 按钮被接住（返回是哪个 id）',
+    rHand.handled === true && rHand.kind === 'handoff' && rHand.id === 'lst1', JSON.stringify(rHand));
+  check('清单拼出已勾原文（键是原文不是序号）',
+    input43.value === '我在清单「出发前」里勾了：备份、停服', input43.value);
+  check('没有自动发回合（不许界面替学习者发言）',
+    requests.length === requestsBefore43, requests.slice(requestsBefore43).join(','));
+
+  // 5) 清单：最多列 5 项加省略号；一个没勾照实说
+  const many = {};
+  for (let i = 1; i <= 6; i += 1) many[`第${i}项`] = true;
+  ui43.writeUiState('many', 'checklist', { uiKind: 'checklist', done: many }, { title: '长清单' });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'many' } } });
+  check('超过 5 项收短加省略号（输入框不许被塞爆）',
+    input43.value === '我在清单「长清单」里勾了：第1项、第2项、第3项、第4项、第5项…', input43.value);
+  ui43.writeUiState('empty', 'checklist', { uiKind: 'checklist', done: {} }, { title: '空清单' });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'empty' } } });
+  check('一个没勾照实说（现象如实，不猜）',
+    input43.value === '我在清单「空清单」里还没有勾任何一项', input43.value);
+
+  // 6) 计算器：参数 = 值（滑到哪就写哪，机械事实不经过模型）
+  ui43.writeUiState('feast', 'calculator', { 人数: 12, uiKind: 'calculator' }, {
+    params: [{ name: '人数', def: 8, lo: 2, hi: 20 }, { name: '肉', def: 4, lo: 1, hi: 10 }],
+    formulas: [], unit: '公斤', title: '报价',
+  });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'feast' } } });
+  check('计算器拼出参数与当前值',
+    input43.value === '我在计算器「报价」里调到：人数=12、肉=4', input43.value);
+
+  // 7) 图解：点开看了谁 / 看过谁 / 还没点开
+  ui43.writeUiState('g1', 'diagram', { active: '硝化', viewed: { 固氮: true, 硝化: true }, uiKind: 'diagram' }, { edges: [], names: ['固氮', '硝化'], title: '氮循环' });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'g1' } } });
+  check('图解拼出「点开看了」（现在停在谁）',
+    input43.value === '我在图解「氮循环」里点开看了：硝化', input43.value);
+  ui43.writeUiState('g2', 'diagram', { active: null, viewed: { 固氮: true }, uiKind: 'diagram' }, { edges: [], names: ['固氮'], title: '氮循环' });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'g2' } } });
+  check('没停在谁但看过，拼「看过」（取消的是视图不是记忆）',
+    input43.value === '我在图解「氮循环」里看过：固氮', input43.value);
+  ui43.writeUiState('g3', 'diagram', { active: null, viewed: {}, uiKind: 'diagram' }, { edges: [], names: ['固氮'], title: '氮循环' });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'g3' } } });
+  check('一个没点开也照实说',
+    input43.value === '我在图解「氮循环」里还没有点开节点', input43.value);
+
+  // 8) 名字优先用 title，没有才退回 id（界面里说的话不许露内部标识，也不许发无主的话）
+  ui43.writeUiState('lst9', 'checklist', { uiKind: 'checklist', done: { 甲: true } }, { title: '' });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'lst9' } } });
+  check('没有 title 退回 id',
+    input43.value === '我在清单「lst9」里勾了：甲', input43.value);
+
+  // 9) 边界：没有这份状态点不响；非控件动静依旧不接
+  const none43 = handleUiDeskEvent({ target: { dataset: { uiHandoff: 'nope' } } });
+  check('没有状态的 handoff 点不响', none43.handled === false, JSON.stringify(none43));
+  check('非控件动静依旧不接',
+    handleUiDeskEvent({ target: { dataset: {}, tagName: 'DIV' } }).handled === false, '');
+
+  // 10) Invariant 4：拼出来的是"他做了什么"（现象），不是"他做得对不对"（判分）
+  check('拼句里没有判分词（对错 / 分数 / 完成度都不许）',
+    !/correct|incorrect|score|percent|mastery|3\/5/.test(input43.value), input43.value);
+
+  check('这一节无异常', errors.length === errsBefore43, errors.slice(errsBefore43).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

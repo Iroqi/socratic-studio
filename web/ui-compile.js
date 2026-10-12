@@ -13,6 +13,11 @@
 //
 // 判分仍然不在这一层：五档里没有"答案键"的位置，checklist 只记"勾了没有"，
 // 不记"勾对没有"（Invariant 4 第 ③ 条：把判分藏进控件就是违规指纹）。
+//
+// 交互档（checklist / calculator / diagram）还可以带 `handoff: 一句人话`：界面尾部
+// 多一个按钮，点了把学习者当前的状态拼成一句人话放进输入框，由他看过、改过再发——
+// 这是界面把状态递回对话的唯一出口（第二十九轮，学 Intelligent UI 的 issueNewTurn，
+// 不学自动替学习者发言）。静态档没有状态可递，写 handoff 会掉回原文。
 
 import { escapeHtml } from './escape.js';
 
@@ -38,6 +43,25 @@ export const UI_STATEFUL = ['checklist', 'calculator', 'diagram'];
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
 const MAX_TEXT = 240;
+
+/** handoff 按钮文案的上限：它是按钮上的一句话，不是一段说明（超长掉回原文）。 */
+const HANDOFF_MAX = 24;
+
+/**
+ * handoff（第二十九轮，学 Intelligent UI 的 issueNewTurn，不学自动发言）：
+ * 交互档把学习者当前的状态递回对话的唯一出口。模型写好按钮文案，宿主在点击时
+ * 把「勾了哪几项 / 参数滑到哪 / 停在哪」**机械地**拼成一句人话放进输入框，
+ * 由学习者看过、改过再发——话是学习者的话，界面只省掉"把状态抄回输入框"这一步。
+ *
+ * 为什么拼句不经过模型：这是机械事实不是判断，经过模型就有抄错/发挥的空间；
+ * 为什么只放输入框、不自动发：界面不替学习者发言，也就不会替他把疑问也猜了。
+ */
+function handoffButton(id, label) {
+  return (
+    `<button type="button" class="ui-handoff" data-ui-handoff="${escapeHtml(id)}">` +
+    `${escapeHtml(label)}</button>`
+  );
+}
 
 // ── 状态侧存：DOM 会被流式重画，状态不能住在 DOM 里 ──────────────────────
 /**
@@ -176,6 +200,7 @@ function inlineSafe(text) {
  * 第一行默认当表头；`head: no` 声明"没有表头"——这时第一列当标签列。
  */
 function compileCompare(fields, lines) {
+  if (pick(fields, 'handoff').length) return { error: 'compare 这一档没有可交回的状态：handoff 只配 checklist / calculator / diagram' };
   const rows = pick(fields, 'row');
   if (rows.length < 2) return { error: '并排对照至少两行' };
   const grid = rows.map((r) => r.split('|').map((c) => c.trim()));
@@ -202,6 +227,7 @@ function compileCompare(fields, lines) {
 
 /** steps：`step: 这一步 | 为什么在这一步`（第二段可省）。有序列表 + `<ol>`，读屏天然带序号。 */
 function compileSteps(fields, lines) {
+  if (pick(fields, 'handoff').length) return { error: 'steps 这一档没有可交回的状态：handoff 只配 checklist / calculator / diagram' };
   const items = pick(fields, 'step');
   if (items.length < 1) return { error: '没有一行 step' };
   const title = pick(fields, 'title')[0] || '';
@@ -227,6 +253,8 @@ function compileSteps(fields, lines) {
 function compileChecklist(fields) {
   const id = pick(fields, 'id')[0];
   if (!id) return { error: '这份清单没有 id：勾选态没地方续' };
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
   const items = pick(fields, 'item').map((s) => s.trim());
   if (!items.length) return { error: '一行 item 都没有' };
   if (items.some((s) => !s)) return { error: '有一行是空的' };
@@ -234,6 +262,9 @@ function compileChecklist(fields) {
   const done = readUiState(id)?.state?.done || {};
   const title = pick(fields, 'title')[0] || '';
   const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  // spec 从这一轮起也存 title：handoff 点击时要拼"我在清单「标题」里勾了…"，
+  // 那时只剩 Map 可查（DOM 每帧被重画，title 不在 data-* 里）。
+  writeUiState(id, 'checklist', { uiKind: 'checklist', done }, { title });
   const boxes = items
     .map((s) => {
       const on = done[s] ? true : false;
@@ -243,7 +274,7 @@ function compileChecklist(fields) {
   // 不带 data-ui-list：勾选态的落点全在每格的 data-ui-check 上，整份清单再挂一个 id
   // 就是没人读的属性——契约测试会把它当成"宿主该读却没读"的断线，那种红是误报，
   // 但把它留下更容易：写了没人读的记号，下一轮就没人知道它到底算不算契约。
-  return { html: `${cap}<div class="ui-checklist">${boxes}</div>`, shape: 'checklist' };
+  return { html: `${cap}<div class="ui-checklist">${boxes}</div>${handoff ? handoffButton(id, handoff) : ''}`, shape: 'checklist' };
 }
 
 /**
@@ -299,7 +330,9 @@ function compileCalculator(fields, lines, partial) {
   const unit = pick(fields, 'unit')[0] || '';
   const title = pick(fields, 'title')[0] || '';
   const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
-  const spec = { params, formulas, unit };
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
+  const spec = { params, formulas, unit, title };
   writeUiState(id, 'calculator', values, spec);
   const sliders = params
     .map((p) => {
@@ -319,7 +352,7 @@ function compileCalculator(fields, lines, partial) {
         `<output class="ui-out-value">${calcTerms(f.terms, values)}${unit ? ` ${escapeHtml(unit)}` : ''}</output></p>`,
     )
     .join('');
-  return { html: `${cap}<div class="ui-calc" data-ui-calc="${escapeHtml(id)}">${sliders}${outs}</div>`, shape: 'calculator' };
+  return { html: `${cap}<div class="ui-calc" data-ui-calc="${escapeHtml(id)}">${sliders}${outs}</div>${handoff ? handoffButton(id, handoff) : ''}`, shape: 'calculator' };
 }
 
 /** 表达式的形状：积项之和。`a * b + 3 * c` → [[{p:'a'},{p:'b'}],[{n:3},{p:'c'}]]。不认这个形状就返回 null。 */
@@ -402,6 +435,8 @@ function compileDiagram(fields) {
   const id = pick(fields, 'id')[0] || '';
   if (!id) return { error: '这个图没有 id：谁点了谁没有地方记' };
   const title = pick(fields, 'title')[0] || '';
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
   const rawNodes = pick(fields, 'node');
   const rawEdges = pick(fields, 'edge');
 
@@ -473,7 +508,7 @@ function compileDiagram(fields) {
   // 点击一响就要算"它连着谁"去给 DOM 上高亮，不存就得把边塞进 data-* 再解析一遍。
   const stored = readUiState(id)?.state || {};
   const active = stored.active || null;
-  const spec = { edges: edges.map((e) => ({ src: e.src, dst: e.dst })), names: nodes.map((n) => n.name) };
+  const spec = { edges: edges.map((e) => ({ src: e.src, dst: e.dst })), names: nodes.map((n) => n.name), title };
   writeUiState(id, 'diagram', stored, spec);
   const edgeActive = (e) => active !== null && (e.src === active || e.dst === active);
   const neighbors = new Set(
@@ -555,7 +590,7 @@ function compileDiagram(fields) {
   const body =
     `<svg class="ui-diagram" data-ui-diagram="${escapeHtml(id)}" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
     `<title>${escapeHtml(aria)}</title>${marker}${edgeEls}${nodeEls}</svg>`;
-  return { html: `${cap}${body}`, shape: 'diagram' };
+  return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'diagram' };
 }
 
 const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram };

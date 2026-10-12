@@ -667,6 +667,17 @@ html, body {
 .ui-diagram .ui-node-adjacent rect { stroke: var(--accent); stroke-width: 1.5; }
 .ui-diagram .ui-edge-active { stroke: var(--accent); stroke-width: 2; }
 
+/* handoff（第二十九轮）：交互档把状态递回对话的按钮。底色仍只借 --surface-2
+   （那条"底色全用量过的 surface-2"的账不许破），hover 只换文字与描边，不引新背景。 */
+.ui-handoff {
+  display: inline-block; margin: 2px 0 1em; padding: 5px 12px;
+  background: var(--surface-2); color: var(--ink-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  font-size: 12.5px; cursor: pointer;
+}
+.ui-handoff:hover { color: var(--ink); border-color: var(--ink-2); }
+.ui-handoff:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* 降级：原文看得见 + 一句为什么。它是这一档唯一的"失败可见"面，不许静默吞。 */
 .ui-degraded {
   margin: -0.4em 0 1em; font-size: 12px; color: var(--ink-3);
