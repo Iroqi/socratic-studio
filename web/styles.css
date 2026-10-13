@@ -720,6 +720,13 @@ html, body {
 .ui-swatch-2 { border: 2px solid var(--ink-2); }
 .ui-swatch-3 { border: 2px solid var(--ink); }
 
+/* 交互 chart（第三十二轮，学 IUI "change an input to see what happens"）：
+   滑杆一行。名字与读数用已量过的 token，滑杆只借 accent 色（与 .ui-param 同一把尺）。 */
+.ui-chart-controls { display: flex; align-items: center; gap: 9px; margin-top: 8px; }
+.ui-chart-slider-name { font-size: 12.5px; color: var(--ink-2); flex: 0 0 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-chart-controls input[type="range"] { min-width: 0; flex: 1 1 auto; accent-color: var(--accent); }
+.ui-chart-snap { font-family: var(--mono); font-size: 12.5px; color: var(--ink); flex: 0 0 auto; }
+
 /* 降级：原文看得见 + 一句为什么。它是这一档唯一的"失败可见"面，不许静默吞。 */
 .ui-degraded {
   margin: -0.4em 0 1em; font-size: 12px; color: var(--ink-3);

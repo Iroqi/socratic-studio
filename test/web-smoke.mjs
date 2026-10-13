@@ -5485,9 +5485,10 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('kind: bar 仍被否决（学情指标族不因图表出现而开口子）',
     Boolean(d12.degraded) && /不提供/.test(d12.degraded), String(d12.degraded));
 
-  // 6) Invariant 4 边界：chart 是静态档——不记状态、不判分、不出学情数字
-  check('chart 不进 UI_STATEFUL（没有要被下一轮读回的状态）',
-    !ui45.UI_STATEFUL.includes('chart'), ui45.UI_STATEFUL.join(','));
+  // 6) Invariant 4 边界：静态 chart 不记状态、不判分、不出学情数字。
+  //    （chart 已在 UI_STATEFUL 里——第三十二轮随 slider 升成交互档，静态形态不写状态。）
+  check('chart 在 UI_STATEFUL 里（第三十二轮随 slider 升交互档；静态形态不写状态）',
+    ui45.UI_STATEFUL.includes('chart'), ui45.UI_STATEFUL.join(','));
   check('编译产物里一个 data-* 都不写（静态档没有宿主要读的记号）',
     !/data-ui-/.test(ch + cb), '');
   const reqBefore45 = requests.length;
@@ -5505,6 +5506,132 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     !/\d/.test(aria45), aria45);
 
   check('这一节无异常', errors.length === errsBefore45, errors.slice(errsBefore45).join(' | '));
+}
+
+// ─── 46. 交互式 chart：滑块切快照（第三十二轮，学 IUI 旗舰用例
+// "change an input to see what happens"——中心极限定理的滑块演示：拖样本量，看分布变）。
+// 带 slider 的 chart 是第四交互档：id 必填、snap 快照 2–8 条、状态 {snap} 落盘续回、
+// handoff 拼句、右栏回看卡可见；静态 chart（无 slider）保持第三十一轮的形状与边界。
+{
+  console.log('\n46. 交互式 chart（slider + snap 快照，拖一拖看形状怎么变）');
+  const errsBefore46 = errors.length;
+  const ui46 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { state: st46, handleUiDeskEvent, renderPanel } = appModule.__hooks;
+  const compile46 = (lines, partial) => ui46.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  ui46.resetUiState();
+  const input46 = doc.getElementById('input');
+  const clt = ['kind: chart', 'id: clt1', 'title: 样本量越大，均值分布越窄', 'type: bar', 'slider: 样本量',
+    'x: 区间一,区间二,区间三,区间四,区间五',
+    'snap: n5 = 0.1,0.3,0.4,0.3,0.1',
+    'snap: n10 = 0.2,0.35,0.3,0.2,0.1',
+    'snap: n30 = 0.25,0.3,0.25,0.15,0.1',
+    'handoff: 把这个样本量发回对话'];
+
+  // 1) 交互形状：滑块 + 读数 + 归属 id + 当前快照渲染
+  const c = compile46(clt).html;
+  check('滑块控件在图上（min0 max2 step1，value 0 = 第一条快照）',
+    c.includes('type="range"') && c.includes('min="0"') && c.includes('max="2"') && c.includes('step="1"') && c.includes('value="0"'), c.slice(-360));
+  check('滑块带着归属 id（宿主知道滑的是哪张图）', c.includes('data-ui-chart-snap="clt1"'), c.slice(-360));
+  check('整块带着归属 id（重画/续状态能找到这张图）', c.includes('<div class="ui-chart" data-ui-chart="clt1"'), c.slice(0, 200));
+  check('默认画第一条快照（柱状：n5 的 5 个点 = 5 个 rect）',
+    (c.match(/<rect /g) || []).length === 5, c.slice(0, 400));
+  check('读数显示当前快照名（身份是名字不是序号）', c.includes('<output class="ui-chart-snap">n5</output>'), c.slice(-300));
+  check('交互图不摆图例（一次只画一张快照，读数就是身份）', !c.includes('ui-legend'), '');
+  check('读屏名带标题、当前快照与可拖动说明（不塞数据值）',
+    c.includes('aria-label="数据图：样本量越大，均值分布越窄。柱状图：n5（「样本量」可拖动切换）"'), c.slice(0, 300));
+
+  // 2) 确定性：同一份输入两次编译一模一样（状态没动过，坐标不许跳）
+  check('交互 chart 两次编译一模一样', compile46(clt).html === c, '');
+
+  // 3) 状态续回：上次滑到 n30，重画就停 n30
+  ui46.writeUiState('clt1', 'chart', { snap: 'n30', uiKind: 'chart' });
+  const c2 = compile46(clt).html;
+  check('重画续回上次的快照（读数与滑块都停在 n30）',
+    c2.includes('<output class="ui-chart-snap">n30</output>') && c2.includes('value="2"'), c2.slice(-300));
+  check('读屏名跟着当前快照走', c2.includes('柱状图：n30'), c2.slice(0, 300));
+
+  // 4) 折线快照：坐标随快照换（几何由输入决定，宿主只挑现成那段）
+  const ln = ['kind: chart', 'id: t1', 'slider: 情形', 'snap: 甲 = 1,2,3', 'snap: 乙 = 9,8,7'];
+  const pts1 = (/points="([^"]+)"/.exec(compile46(ln).html) || [])[1] || '';
+  ui46.writeUiState('t1', 'chart', { snap: '乙', uiKind: 'chart' });
+  const pts2 = (/points="([^"]+)"/.exec(compile46(ln).html) || [])[1] || '';
+  check('折线画当前快照的点，切快照后坐标换了',
+    Boolean(pts1) && Boolean(pts2) && pts1 !== pts2, `${pts1} vs ${pts2}`);
+
+  // 5) 降级路径：不静默吞——逐条点名
+  const deg46 = (lines) => ui46.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  check('带 slider 却不写 id：掉回原文并点名', Boolean(deg46(['kind: chart', 'slider: 样本量', 'snap: n5 = 1,2']).includes('id')), '');
+  check('只有一条快照没得滑：掉回原文并点名', Boolean(deg46(['kind: chart', 'id: x1', 'slider: 样本量', 'snap: n5 = 1,2,3']).includes('至少')), '');
+  check('两条快照重名：掉回原文并点名', Boolean(deg46(['kind: chart', 'id: x2', 'slider: 样本量', 'snap: n5 = 1,2', 'snap: n5 = 3,4']).includes('重名')), '');
+  check('快照值不是数（千分位陷阱）：掉回原文并点名', Boolean(deg46(['kind: chart', 'id: x3', 'slider: 样本量', 'snap: n5 = 1,000,2', 'snap: n10 = 3,4']).includes('不是数')), '');
+  check('x 标签与某条快照点数对不上：掉回原文并点名',
+    Boolean(deg46(['kind: chart', 'id: x4', 'slider: 样本量', 'x: 一,二', 'snap: n5 = 1,2,3', 'snap: n10 = 4,5']).includes('对不上')), '');
+  const nineSnaps = Array.from({ length: 9 }, (_, i) => `snap: s${i} = ${i + 1},${i + 2}`);
+  check('快照超过 8 条：掉回原文并点名',
+    Boolean(deg46(['kind: chart', 'id: x5', 'slider: 样本量', ...nineSnaps]).includes('最多')), '');
+  check('交互 chart 的 handoff 超 24 字：掉回原文并点名',
+    Boolean(deg46(['kind: chart', 'id: x6', 'slider: 样本量', 'snap: n5 = 1,2', 'snap: n10 = 3,4', 'handoff: ' + '发'.repeat(25)]).includes('24')), '');
+  check('快照名不合法（含空格）：掉回原文并点名',
+    Boolean(deg46(['kind: chart', 'id: x7', 'slider: 样本量', 'snap: n 5 = 1,2', 'snap: n10 = 3,4']).includes('不合法')), '');
+  check('滑块名不合法（含空格）：掉回原文并点名',
+    Boolean(deg46(['kind: chart', 'id: x8', 'slider: 样本 量', 'snap: n5 = 1,2', 'snap: n10 = 3,4']).includes('不合法')), '');
+  check('静态 chart 写 handoff 仍掉回原文（没得可交回的状态）',
+    Boolean(deg46(['kind: chart', 'series: 收入 = 1,2,3', 'handoff: 递回']).includes('handoff')), '');
+  check('type 非法对交互档同样掉回原文',
+    Boolean(deg46(['kind: chart', 'id: x9', 'slider: 样本量', 'type: pie', 'snap: n5 = 1,2', 'snap: n10 = 3,4']).includes('type')), '');
+
+  // 6) 宿主接线：滑块动作 → 状态 + 报回（判分一个字都不发生；快照是数据情形不是学情）
+  st46.notebook = sampleNotebook();
+  st46.uiReported.clear();
+  const posts46 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const before46 = posts46();
+  compile46(clt); // 把 spec 写进 Map（宿主点滑杆要靠 spec.snaps 换快照）
+  const r46 = handleUiDeskEvent({ target: { dataset: { uiChartSnap: 'clt1' }, value: '2' } });
+  check('滑块动作被接住（返回是哪一档、哪张图）',
+    r46.handled === true && r46.kind === 'chart' && r46.id === 'clt1', JSON.stringify(r46));
+  const st46a = ui46.readUiState('clt1');
+  check('snap 落到第 3 张快照（滑到哪就记哪）', st46a.state.snap === 'n30', JSON.stringify(st46a.state));
+  check('状态走 artifact-message 报回（与其它交互档同一条通道）', posts46() === before46 + 1, `posts ${before46} → ${posts46()}`);
+  const r46b = handleUiDeskEvent({ target: { dataset: { uiChartSnap: 'nope' }, value: '1' } });
+  check('不认得的 id 点不响（没 spec 就不知道快照）', r46b.handled === false, JSON.stringify(r46b));
+  const r46c = handleUiDeskEvent({ target: { dataset: { uiChartSnap: 'clt1' }, value: '9' } });
+  check('越界的滑块值点不响（不猜快照）', r46c.handled === false, JSON.stringify(r46c));
+
+  // 7) repaint：SVG 只换内容、滑块不换（拖到一半不能被整块重画抹掉——和计算器同一把尺）
+  const chartBlock = doc.createElement('div');
+  chartBlock.className = 'ui-chart';
+  chartBlock.dataset.uiChart = 'clt1';
+  const svg46 = doc.createElement('svg'); svg46.className = 'ui-chart-svg';
+  const readout46 = doc.createElement('output'); readout46.className = 'ui-chart-snap'; readout46.textContent = 'n5';
+  chartBlock.append(svg46, readout46);
+  domRoot.append(chartBlock);
+  const svgBefore46 = svg46._innerHTML;
+  handleUiDeskEvent({ target: { dataset: { uiChartSnap: 'clt1' }, value: '1' } });
+  check('滑到第 2 档后 SVG 内容换了（只换图，不重画整块）',
+    svg46._innerHTML !== svgBefore46 && svg46._innerHTML.includes('n10'), '');
+  check('读数换成当前快照名', readout46.textContent === 'n10', readout46.textContent);
+  check('svg 的 aria-label 换成当前快照', (svg46.attributes.get('aria-label') || '').includes('n10'), String(svg46.attributes.get('aria-label')));
+  chartBlock.remove();
+
+  // 8) handoff：交互 chart 把"滑到哪张快照"机械地拼成话递回对话（不自动发）
+  const boxBefore46 = input46.value;
+  ui46.writeUiState('clt1', 'chart', { snap: 'n30', uiKind: 'chart' }, { snaps: [{ name: 'n5' }, { name: 'n10' }, { name: 'n30' }], slider: '样本量', title: '样本量越大，均值分布越窄' });
+  const r46h = handleUiDeskEvent({ target: { dataset: { uiHandoff: 'clt1' } } });
+  check('交互 chart 的 handoff 被接住（返回是哪个 id）',
+    r46h.handled === true && r46h.kind === 'handoff' && r46h.id === 'clt1', JSON.stringify(r46h));
+  check('拼句：我在图表「标题」里把「样本量」滑到了 n30',
+    input46.value === '我在图表「样本量越大，均值分布越窄」里把「样本量」滑到了 n30', input46.value);
+  input46.value = boxBefore46;
+
+  // 9) 右栏回看卡：交互 chart 出现在「这局动过的界面」（与 hydrate 同一条筛子）
+  st46.notebook.progress.artifact_state = { 'ui:clt1': { uiKind: 'chart', snap: 'n30' } };
+  renderPanel();
+  const card46 = deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
+  const notes46 = card46 ? deepAll(card46, 'state-note').map((n) => n.textContent) : [];
+  check('右栏卡把交互 chart 排进来（只出现象：现在停在）',
+    notes46.includes('图表「clt1」') && notes46.includes('· 现在停在：n30'), notes46.join(' / '));
+
+  check('这一节无异常', errors.length === errsBefore46, errors.slice(errsBefore46).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

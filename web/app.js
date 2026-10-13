@@ -2962,7 +2962,7 @@ function evalUiTerms(groups, values) {
 /**
  * handoff（第二十九轮，学 Intelligent UI 的 issueNewTurn 不学自动发言）：
  * 交互档把学习者当前的状态递回对话的唯一出口。点了把「勾了哪几项 / 参数滑到哪 /
- * 停在哪」拼成一句人话放进输入框，由他自己看过、改过再发。
+ * 停在哪 / 滑到哪张快照」拼成一句人话放进输入框，由他自己看过、改过再发。
  *
  * 为什么拼句必须在这儿、不能交给模型：这是机械事实不是判断，经过模型就有抄错/发挥
  * 的空间；为什么只放输入框、不自动发：话是学习者的话，界面只省掉"把状态抄回输入框"
@@ -2995,6 +2995,11 @@ function handoffUiState(id) {
       : viewed.length
         ? `我在图解「${name}」里看过：${viewed[viewed.length - 1]}`
         : `我在图解「${name}」里还没有点开节点`;
+  } else if (kind === 'chart') {
+    const snap = rec.state?.snap;
+    text = snap
+      ? `我在图表「${name}」里把「${rec.spec?.slider || ''}」滑到了 ${snap}`
+      : `我在图表「${name}」里还没有动过滑块`;
   } else {
     return false;
   }
@@ -3061,6 +3066,23 @@ function handleUiDeskEvent(evt) {
     repaintUiCalc(calcId);
     forwardArtifactMessage({ type: 'state', state }, uiStateKey(calcId));
     return { handled: true, kind: 'calculator', id: calcId };
+  }
+
+  // chart（第三十二轮）：带 slider 的图。滑杆动 = 学习者切到哪张快照，宿主把当前快照
+  // 记进 state.snap、就地换 SVG——判分一个字都不在这儿发生（快照是正在教的数据情形，
+  // 不是学情）。spec.snaps 是编译时整张快照算好的（SVG 与读屏名都在里面），这里只挑。
+  const chartId = node.dataset?.uiChartSnap;
+  if (chartId) {
+    const rec = readUiState(chartId);
+    if (!rec?.spec) return { handled: false };
+    const idx = Number(node.value);
+    if (!Number.isFinite(idx)) return { handled: false };
+    const snap = rec.spec.snaps[idx];
+    if (!snap) return { handled: false };
+    setUiValues(chartId, 'chart', { snap: snap.name, uiKind: 'chart' });
+    repaintUiChart(chartId);
+    forwardArtifactMessage({ type: 'state', state: { snap: snap.name, uiKind: 'chart' } }, uiStateKey(chartId));
+    return { handled: true, kind: 'chart', id: chartId };
   }
 
   // diagram 的节点是 <g> 不是 input：点击落在 rect/text 上，dataset 在 g 上，
@@ -3131,6 +3153,29 @@ function repaintUiDiagram(id) {
       if (!e) return;
       g.classList?.toggle?.('ui-edge-active', active !== null && (e.src === active || e.dst === active));
     });
+  }
+}
+
+/**
+ * 快照切换不整块重画（整块重画会把滑杆抹掉——拖到一半被换掉，手感当场没了，和计算器
+ * 同一把尺）：只换 SVG 内容与读数。SVG 是编译时**整张快照**都算好、存在 spec 里的
+ * （chartSnapSvg 只此一份，宿主不重算坐标——两处实现迟早漂），这里按名字挑现成那段换进去。
+ * id 是模型写的，不能拼进选择器（引号会注入）：按 class 找、再比对 dataset 值。
+ */
+function repaintUiChart(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return;
+  const snap = (rec.spec.snaps || []).find((s) => s.name === rec.state?.snap);
+  if (!snap) return;
+  const blocks = [...(document.querySelectorAll?.('.ui-chart') || [])].filter((n) => n.dataset?.uiChart === id);
+  for (const block of blocks) {
+    const svg = block.querySelector?.('.ui-chart-svg');
+    if (svg) {
+      svg.innerHTML = snap.svg; // 整段含 <title>，重画后读屏名跟着换
+      svg.setAttribute?.('aria-label', snap.aria);
+    }
+    const readout = block.querySelector?.('.ui-chart-snap');
+    if (readout) readout.textContent = snap.name;
   }
 }
 
@@ -3519,7 +3564,7 @@ function renderUiStatePanel(body) {
   );
   if (!entries.length) return;
   const fit = (s) => { const t = String(s); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
-  const word = { checklist: '清单', calculator: '计算器', diagram: '图解' };
+  const word = { checklist: '清单', calculator: '计算器', diagram: '图解', chart: '图表' };
   const card = el('div', 'ui-state-card');
   card.append(el('div', 'panel-section-title', '这局动过的界面'));
   for (const [key, s] of entries) {
@@ -3540,6 +3585,9 @@ function renderUiStatePanel(body) {
       if (viewed.length) card.append(el('div', 'state-note', `· 看过：${viewed.map(fit).join('、')}`));
       if (s.active) card.append(el('div', 'state-note', `· 现在停在：${fit(s.active)}`));
       if (!viewed.length && !s.active) card.append(el('div', 'state-note', '· 还没点过'));
+    } else if (s.uiKind === 'chart') {
+      if (s.snap) card.append(el('div', 'state-note', `· 现在停在：${fit(s.snap)}`));
+      else card.append(el('div', 'state-note', '· 还没动过滑块'));
     }
   }
   body.append(card);
@@ -5714,6 +5762,7 @@ export const __hooks = {
   handleUiDeskEvent,
   handleUiDeskKey,
   repaintUiDiagram,
+  repaintUiChart,
   reportUiDegraded,
   hydrateUiState,
   applyUiMode,

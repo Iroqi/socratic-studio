@@ -14,8 +14,8 @@
 // 判分仍然不在这一层：七档里没有"答案键"的位置，checklist 只记"勾了没有"，
 // 不记"勾对没有"（Invariant 4 第 ③ 条：把判分藏进控件就是违规指纹）。
 //
-// 交互档（checklist / calculator / diagram）还可以带 `handoff: 一句人话`：界面尾部
-// 多一个按钮，点了把学习者当前的状态拼成一句人话放进输入框，由他看过、改过再发——
+// 交互档（checklist / calculator / diagram / 带 slider 的 chart）还可以带 `handoff: 一句人话`：
+// 界面尾部多一个按钮，点了把学习者当前的状态拼成一句人话放进输入框，由他看过、改过再发——
 // 这是界面把状态递回对话的唯一出口（第二十九轮，学 Intelligent UI 的 issueNewTurn，
 // 不学自动替学习者发言）。静态档没有状态可递，写 handoff 会掉回原文。
 
@@ -34,11 +34,12 @@ export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'met
 
 /**
  * 交互档必须自报 id：宿主每帧都在重画这一块，没有 id 就没有续上那份状态的地方。
- * 也是回报通道只认这几档的原因——静态形状（compare / steps）没有"学习者在里面做过什么"
- * 这回事，读回来只会是一句空话。diagram 第二十七轮从静态升成交互档：节点可点击，
- * "他点了谁 / 看过谁"就是状态，所以它也在这里。
+ * 也是回报通道只认这几档的原因——静态形状（compare / steps / 静态 chart）没有
+ * "学习者在里面做过什么"这回事，读回来只会是一句空话。diagram 第二十七轮从静态升成
+ * 交互档：节点可点击，"他点了谁 / 看过谁"就是状态；chart 第三十二轮随 slider 升成交互档：
+ * "滑到哪张快照"就是状态（没写 slider 的静态 chart 不进这一档，也不写 id）。
  */
-export const UI_STATEFUL = ['checklist', 'calculator', 'diagram'];
+export const UI_STATEFUL = ['checklist', 'calculator', 'diagram', 'chart'];
 
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
@@ -209,7 +210,7 @@ function inlineSafe(text) {
  * 第一行默认当表头；`head: no` 声明"没有表头"——这时第一列当标签列。
  */
 function compileCompare(fields, lines) {
-  if (pick(fields, 'handoff').length) return { error: 'compare 这一档没有可交回的状态：handoff 只配 checklist / calculator / diagram' };
+  if (pick(fields, 'handoff').length) return { error: 'compare 这一档没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
   const rows = pick(fields, 'row');
   if (rows.length < 2) return { error: '并排对照至少两行' };
   const grid = rows.map((r) => r.split('|').map((c) => c.trim()));
@@ -236,7 +237,7 @@ function compileCompare(fields, lines) {
 
 /** steps：`step: 这一步 | 为什么在这一步`（第二段可省）。有序列表 + `<ol>`，读屏天然带序号。 */
 function compileSteps(fields, lines) {
-  if (pick(fields, 'handoff').length) return { error: 'steps 这一档没有可交回的状态：handoff 只配 checklist / calculator / diagram' };
+  if (pick(fields, 'handoff').length) return { error: 'steps 这一档没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
   const items = pick(fields, 'step');
   if (items.length < 1) return { error: '没有一行 step' };
   const title = pick(fields, 'title')[0] || '';
@@ -663,6 +664,9 @@ const CHART_MIN_POINTS = 2;
 const CHART_MAX_POINTS = 40;
 const CHART_NAME_MAX = 20;
 const CHART_XLABEL_MAX = 12;
+/** 交互档的快照：至少两条才滑得动（一条没得滑），最多八条（多了是翻页不是看图）。 */
+const CHART_SNAP_MIN = 2;
+const CHART_SNAP_MAX = 8;
 /** 系列数据里的数值只收这种形状：可负、可小数；千分位逗号、科学计数、空格一律不认——
  * 认了就是"1,000"被拆成两个点的静默坏数据，那比掉回原文糟。 */
 const CHART_NUM = /^[+-]?(0|[1-9]\d*)(\.\d+)?$/;
@@ -675,13 +679,36 @@ function chartNum(n) {
   return s.length > 9 ? n.toExponential(2) : s;
 }
 
-/** 数据图是静态档：没有可交回的状态，handoff 只配交互档。 */
+/**
+ * chart 有两种形状，看有没有 `slider`：
+ *
+ * **静态**（第三十一轮，学 IUI 旗舰用例「把复杂概念画出来」）：`series: 名 = 数值,数值,…`
+ * （1–4 条，每条 2–40 个点）+ 可选 `x: 标签,…`（数量与点数对齐）+ 可选 `type: bar | line`
+ * （缺省 line）+ 可选 `title`。图是静态的，学习者对图的交互是对话（指着图问"如果更大呢"，
+ * 模型下一轮再画一张）。它像 compare / steps 一样：没有 id、不进 UI_STATEFUL、
+ * 不落 artifact_state、不写 data-*、写 handoff 掉回原文。
+ *
+ * **交互**（第三十二轮，学 IUI 旗舰用例 "change an input to see what happens"——中心极限
+ * 定理的滑块演示：拖样本量，看分布的形状变）：加 `slider: 维度名` + `snap: 情形名 = 数值,数值,…`
+ * （2–8 条，同一张图的不同情形）+ `id:`（滑到哪张快照要有地方续）+ 可选 `handoff`。
+ * 滑杆一拖，图换成另一张快照——快照是**正在教的对象**的数据情形（样本量=5 与样本量=30 的
+ * 分布），不是学习者的学情（Invariant 4 那道线照旧：进度 / 对错 / 掌握度不画进任何一档）。
+ *
+ * 布局是**确定的**：同一份输入两次编译长得一模一样（流式每帧重编，坐标跳来跳去的图没法
+ * 对着问为什么）。交互档的几何**编译时一次算好**，整张快照的 SVG 与读屏名都存进 spec——
+ * 滑杆一响宿主只挑现成那段换进去，不在宿主侧重写这套数学（两处实现迟早漂）。
+ * 颜色是**借来的**：系列色只从已量过的 token 里取（--accent / --teal / --ink-2 / --ink），
+ * 轴与标签用 --ink-3，零新十六进制。
+ */
 function compileChart(fields) {
-  if (pick(fields, 'handoff').length) {
-    return { error: 'chart 这一档没有可交回的状态：handoff 只配 checklist / calculator / diagram' };
-  }
   const type = pick(fields, 'type')[0] || 'line';
   if (type !== 'bar' && type !== 'line') return { error: 'type 只认 bar 或 line' };
+  const title = pick(fields, 'title')[0] || '';
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (pick(fields, 'slider').length) return compileInteractiveChart(fields, { type, title, handoff });
+  if (handoff.length) {
+    return { error: '静态 chart 没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
+  }
 
   const series = [];
   for (const raw of pick(fields, 'series')) {
@@ -717,7 +744,6 @@ function compileChart(fields) {
     if (xLabels.some((s) => s.length > CHART_XLABEL_MAX)) return { error: `x 标签太长了（≤${CHART_XLABEL_MAX} 字）` };
   }
 
-  const title = pick(fields, 'title')[0] || '';
   const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
 
   // 几何完全由输入决定（与 diagram 同一把尺）：同样的 series/x 永远落在同样的坐标上。
@@ -774,6 +800,134 @@ function compileChart(fields) {
     `<svg class="ui-chart-svg" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
     `<title>${escapeHtml(aria)}</title>${frameEls}${yLabels}${xEls}${seriesEls}</svg>${legend}`;
   return { html: `${cap}<div class="ui-chart">${body}</div>`, shape: 'chart' };
+}
+
+/** 交互档：`slider: 维度名` + `snap: 情形名 = 数值,数值,…`（2–8 条）+ `id:`。 */
+function compileInteractiveChart(fields, shared) {
+  const { type, title, handoff } = shared;
+  const id = pick(fields, 'id')[0];
+  if (!id) return { error: '带 slider 的 chart 必须有 id：滑到哪一档没有地方续' };
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
+  const sliderName = pick(fields, 'slider')[0].trim();
+  if (!sliderName) return { error: 'slider 的名字是空的' };
+  if (sliderName.length > CHART_NAME_MAX) return { error: `滑块名太长了（≤${CHART_NAME_MAX} 字）` };
+  if (!UI_IDENT.test(sliderName)) return { error: `滑块名「${sliderName}」不合法（字母/汉字起头，中间不许空格与 * + |）` };
+
+  // 快照：同一张图的不同情形（CLT 里就是不同的样本量）。身份是名字，数值只收一种形状——
+  // 千分位逗号 / 科学计数 / 空格一律不认，认了就是"1,000"被拆成两个点的静默坏数据。
+  const snaps = [];
+  for (const raw of pick(fields, 'snap')) {
+    const eq = raw.indexOf('=');
+    if (eq < 0) return { error: 'snap 要写成「名 = 数值,数值,…」' };
+    const name = raw.slice(0, eq).trim();
+    if (!name) return { error: 'snap 的名字是空的' };
+    if (name.length > CHART_NAME_MAX) return { error: `快照名太长了（≤${CHART_NAME_MAX} 字）` };
+    if (!UI_IDENT.test(name)) return { error: `快照名「${name}」不合法（字母/汉字起头，中间不许空格与 * + |）` };
+    if (snaps.some((s) => s.name === name)) return { error: `两条 snap 重名「${name}」：身份是名字` };
+    const rawVals = raw.slice(eq + 1).split(',').map((v) => v.trim());
+    if (rawVals.some((v) => !v)) return { error: '有一个数值是空的（别用两个逗号挨着）' };
+    if (rawVals.length < CHART_MIN_POINTS) return { error: `一条快照至少 ${CHART_MIN_POINTS} 个点（一个点看不出形状）` };
+    if (rawVals.length > CHART_MAX_POINTS) return { error: `点太多了（最多 ${CHART_MAX_POINTS} 个）` };
+    const vals = [];
+    for (const v of rawVals) {
+      if (!CHART_NUM.test(v)) return { error: `「${v}」不是数（只认数字，别用千分位逗号、别写科学计数）` };
+      vals.push(Number(v));
+    }
+    snaps.push({ name, vals });
+  }
+  if (snaps.length < CHART_SNAP_MIN) return { error: `至少 ${CHART_SNAP_MIN} 条快照（一条没得滑：对比不出"变"）` };
+  if (snaps.length > CHART_SNAP_MAX) return { error: `快照太多了（最多 ${CHART_SNAP_MAX} 条，多了是翻页不是看图）` };
+
+  const xRaw = pick(fields, 'x');
+  let xLabels = [];
+  if (xRaw.length) {
+    xLabels = xRaw[0].split(',').map((s) => s.trim());
+    if (xLabels.some((s) => !s)) return { error: '有一个 x 标签是空的' };
+    if (xLabels.some((s) => s.length > CHART_XLABEL_MAX)) return { error: `x 标签太长了（≤${CHART_XLABEL_MAX} 字）` };
+    for (const s of snaps) {
+      if (xLabels.length !== s.vals.length) {
+        return { error: `x 标签的数量（${xLabels.length}）和快照「${s.name}」的点数（${s.vals.length}）对不上` };
+      }
+    }
+  }
+
+  // 状态从宿主侧续：上次滑到哪档，重画就停在哪档（新出现的那份用第一条快照）。
+  const stored = readUiState(id)?.state || {};
+  const snapIdx = Math.max(0, snaps.findIndex((s) => s.name === stored.snap));
+  const current = snaps[snapIdx];
+  const typeName = type === 'bar' ? '柱状图' : '折线图';
+
+  // 几何**编译时一次算好**：每张快照的完整 SVG（含 <title>）与读屏名都存进 spec，
+  // 宿主 repaint 只挑现成那段换进 SVG，不重算坐标（两处实现迟早漂）。
+  const pre = snaps.map((s) => chartSnapSvg(s, type, xLabels, title, sliderName));
+  const spec = {
+    snaps: snaps.map((s, i) => ({ name: s.name, svg: pre[i].svg, aria: pre[i].aria })),
+    slider: sliderName,
+    title,
+    typeName,
+  };
+  writeUiState(id, 'chart', { snap: current.name, uiKind: 'chart' }, spec);
+
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const body =
+    `<div class="ui-chart" data-ui-chart="${escapeHtml(id)}">` +
+    `<svg class="ui-chart-svg" role="img" aria-label="${escapeHtml(pre[snapIdx].aria)}" viewBox="0 0 ${pre[snapIdx].w} ${pre[snapIdx].h}" width="${pre[snapIdx].w}" height="${pre[snapIdx].h}">` +
+    `${pre[snapIdx].svg}</svg>` +
+    `<div class="ui-chart-controls">` +
+    `<span class="ui-chart-slider-name">${escapeHtml(sliderName)}</span>` +
+    `<input type="range" min="0" max="${snaps.length - 1}" step="1" value="${snapIdx}" ` +
+    `data-ui-chart-snap="${escapeHtml(id)}" aria-label="「${escapeHtml(sliderName)}」：拖动切换快照，看数据的形状怎么变" />` +
+    `<output class="ui-chart-snap">${escapeHtml(current.name)}</output>` +
+    `</div></div>`;
+  return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'chart' };
+}
+
+/** 一张快照的完整几何：单条系列，坐标全部由输入决定。返回 { svg, aria, w, h }。 */
+function chartSnapSvg(snap, type, xLabels, title, sliderName) {
+  const vals = snap.vals;
+  let mn = Infinity, mx = -Infinity;
+  for (const v of vals) { if (v < mn) mn = v; if (v > mx) mx = v; }
+  const span = mx - mn;
+  const pad = span === 0 ? 1 : span * 0.08;
+  const yMax = mx + pad, yMin = mn - pad;
+  const PAD_L = 72, PAD_R = 14, PAD_T = 10, PAD_B = xLabels.length ? 26 : 12;
+  const PLOT_H = 160, GAP = 64;
+  const y = (v) => PAD_T + ((yMax - v) / (yMax - yMin)) * PLOT_H;
+  const barW = Math.min(34, GAP * 0.66);
+  const plotL = PAD_L + (type === 'bar' ? barW / 2 : 0);
+  const cx = (i) => plotL + i * GAP;
+  const w = plotL + GAP * (vals.length - 1) + PAD_R + (type === 'bar' ? barW / 2 + 20 : 26);
+  const h = PAD_T + PLOT_H + PAD_B;
+  const baseY = Math.max(PAD_T, Math.min(PAD_T + PLOT_H, y(0)));
+  const typeName = type === 'bar' ? '柱状图' : '折线图';
+  // 读屏名里只放"是什么、当前快照与怎么动"：数据值就在可见的轴上，快照名是身份不是值，
+  // 不塞数据本身（连 aria 也不出现数值序列）。
+  const aria = `数据图：${title || '数据的形状'}。${typeName}：${snap.name}（「${sliderName}」可拖动切换）`;
+
+  const yLabels =
+    `<text class="ui-chart-ylabel" x="${PAD_L - 8}" y="${PAD_T + 11}" text-anchor="end">${escapeHtml(chartNum(yMax))}</text>` +
+    `<text class="ui-chart-ylabel" x="${PAD_L - 8}" y="${PAD_T + PLOT_H - 4}" text-anchor="end">${escapeHtml(chartNum(yMin))}</text>`;
+  const xEls = xLabels.map((s, i) =>
+    `<text class="ui-chart-xlabel" x="${cx(i)}" y="${PAD_T + PLOT_H + 16}" text-anchor="middle">${escapeHtml(fitText(s, 6))}</text>`
+  ).join('');
+  const frameEls =
+    `<line class="ui-chart-axis" x1="${PAD_L}" y1="${PAD_T + PLOT_H}" x2="${w - PAD_R}" y2="${PAD_T + PLOT_H}"/>` +
+    `<line class="ui-chart-axis" x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${PAD_T + PLOT_H}"/>`;
+  let seriesEls;
+  // 交互档一次只画一条系列，系列色取第一档 token（--accent）。类名走插值不写字面量：
+  // 契约那张"编译器吐的 class 都要有样式"的账是按源码文本扫的，字面量会把扫描器带歪。
+  const cls = 'ui-series-0';
+  if (type === 'bar') {
+    seriesEls = vals.map((v, i) => {
+      const x0 = cx(i) - barW / 2;
+      const top = Math.min(baseY, y(v));
+      return `<rect class="${cls}" x="${x0}" y="${top}" width="${barW}" height="${Math.abs(y(v) - baseY)}"/>`;
+    }).join('');
+  } else {
+    const pts = vals.map((v, i) => `${cx(i)},${y(v)}`).join(' ');
+    seriesEls = `<polyline class="${cls}" points="${pts}"/>`;
+  }
+  return { svg: `<title>${escapeHtml(aria)}</title>${frameEls}${yLabels}${xEls}${seriesEls}`, aria, w, h };
 }
 
 const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, chart: compileChart, suggest: compileSuggest };

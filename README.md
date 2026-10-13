@@ -1590,6 +1590,29 @@ Intelligent UI 官方旗舰用例「Learn complex topics more easily」那一节
 专属上下文）；M8 替换型变异不能用"原针仍在"当没动手的证据（每枚变异配独立 verify）。
 详细判决在 `docs/iteration-2026-10-13c.md`。
 
+### chart 升交互档：滑块切快照（2026-10-13d 第三十二轮）
+
+IUI 旗舰用例的另一半是"**change an input to see what happens**"（改一个输入、看会发生什么）——
+中心极限定理一例就是拖样本量滑块、看均值分布变窄。第三十二轮沿 diagram"先形状后交互"的路径，
+给 chart 补上**第四个交互档**（checklist / calculator / diagram / chart）：
+
+- 静态 chart（无 `slider`）保持第三十一轮原样：不进状态、不写 data-*、写 handoff 掉回原文。
+- 交互版：`id:`（必填）+ `slider: 维度名` + `snap: 情形名 = 数值,数值,…`（2–8 条、名字唯一、
+  单系列、数值只认数字）+ 可选 `handoff`（≤24 字）。滑杆一拖图换另一张快照——**快照是
+  同一张图的不同情形**（样本量=5 与样本量=30 的分布窄与宽），不是学习者做过什么。
+- **几何编译时一次算好**：所有快照的完整 SVG 与 aria 都存进 `spec.snaps`，宿主 `repaintUiChart`
+  只换 `svg.innerHTML` / aria / 读数，**不重算坐标**（两处实现迟早漂）；状态只存快照名
+  （`state.snap`），不存数值序列（Invariant 4：数值出不了界面）。
+- 与其它交互档同一套管道：滑一下 → 状态 + `artifact-message` 报回 → 右栏回看卡"现在停在"；
+  handoff 把"在图表「标题」里把「样本量」滑到了 n30"拼成话递回对话（填框不发）。
+- 降级逐条点名：有 slider 无 id / 只有一条快照 / 重名 / 千分位陷阱 / x 对不上 / 超 8 条 /
+  handoff 超 24 字 / 快照名或滑块名不合法 / 静态 chart 写 handoff / type 非法，全掉回原文。
+
+行为 34 项在 web-smoke §46（§45 一处断言随语义更新：chart 已在 UI_STATEFUL 里），契约 348 项，
+10 枚变异各验过红、零假绿。契约过程里抓到两个真问题：`class="ui-series-0"` 字面量被扫描器误认
+（改回插值写法）；`data-ui-chartsnap` 的驼峰是 `uiChartsnap` 而宿主读 `uiChartSnap`（属性改名
+`data-ui-chart-snap`）。详细判决在 `docs/iteration-2026-10-13d.md`。
+
 ## 已知边界
 
 - **没有音频旁白（TTS）。** 原版的 `narration.py` + 时间轴那一整套没搬，需要先做完整套件才能支持。
