@@ -5350,6 +5350,74 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore43, errors.slice(errsBefore43).join(' | '));
 }
 
+// ─── 44. suggest：回答末尾的"往哪走"分支条（第三十轮，学 IUI 的 tappable suggestion chips，
+// 点一下只填进输入框、不自动发）。1–3 条 pick，每条 ≤20 字；它不记状态、不判分、不出数字。
+{
+  console.log('\n44. suggest 分支条（点一条填进输入框，学习者看过再发）');
+  const errsBefore44 = errors.length;
+  const { handleUiDeskEvent } = appModule.__hooks;
+  const ui44 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const compile44 = (lines) => ui44.compileUiBlock(lines.filter((l) => l.trim()), false).html;
+  const input44 = doc.getElementById('input');
+  const requestsBefore44 = requests.length;
+  ui44.resetUiState();
+
+  // 1) 三条 pick 长成三个小条：每条是真按钮，带着那句话（data-ui-suggest），title 成引导语
+  const sg = compile44(['kind: suggest', 'title: 接着往哪走', 'pick: 再举个生活里的例子', 'pick: 这里我还想再问问', 'pick: 接着学下一点']);
+  check('三条 pick 长成三个 chip（按钮各带那句话）',
+    (sg.match(/class="ui-suggest-chip"/g) || []).length === 3 &&
+    sg.includes('data-ui-suggest="再举个生活里的例子"') &&
+    sg.includes('data-ui-suggest="接着学下一点"'), sg.slice(0, 300));
+  check('title 渲染成引导语（.ui-cap）', sg.includes('<p class="ui-cap">接着往哪走</p>'), sg.slice(0, 120));
+  check('不带 title 就不长引导语（不加戏）',
+    !compile44(['kind: suggest', 'pick: 甲']).includes('ui-cap'), '');
+
+  // 2) 降级路径：不静默吞——没写 pick / 超过 3 条 / 太长 / 重复 / 误写 handoff
+  const none = ui44.compileUiBlock(['kind: suggest'], false);
+  check('一条 pick 都没有掉回原文', Boolean(none.degraded) && /pick/.test(none.degraded), String(none.degraded));
+  const tooMany = ui44.compileUiBlock(['kind: suggest', 'pick: 甲', 'pick: 乙', 'pick: 丙', 'pick: 丁'], false);
+  check('超过 3 条掉回原文（多了就是菜单不是建议）', Boolean(tooMany.degraded) && /3/.test(tooMany.degraded), String(tooMany.degraded));
+  const long = ui44.compileUiBlock(['kind: suggest', 'pick: ' + '问'.repeat(21)], false);
+  check('单条超 20 字掉回原文并点名上限', Boolean(long.degraded) && long.degraded.includes('20'), String(long.degraded));
+  const dup = ui44.compileUiBlock(['kind: suggest', 'pick: 甲', 'pick: 甲'], false);
+  check('两条 pick 写重了掉回原文', Boolean(dup.degraded) && /一模一样|重复|重/.test(dup.degraded), String(dup.degraded));
+  const h44 = ui44.compileUiBlock(['kind: suggest', 'handoff: 发回', 'pick: 甲'], false);
+  check('给 suggest 写 handoff 掉回原文（它自己就是递话出口）',
+    Boolean(h44.degraded) && h44.degraded.includes('handoff'), String(h44.degraded));
+
+  // 3) 点 chip：那句话填进输入框，不自动发（话是学习者的，界面不替他发言）
+  const beforeVal = input44.value;
+  const r44 = handleUiDeskEvent({ target: { dataset: { uiSuggest: '再举个生活里的例子' } } });
+  check('chip 被接住（返回 kind 是 suggest）',
+    r44.handled === true && r44.kind === 'suggest' && r44.text === '再举个生活里的例子', JSON.stringify(r44));
+  check('那句话被原样填进输入框（不添油加醋）',
+    input44.value === '再举个生活里的例子', input44.value);
+  check('没有自动发回合（不许界面替学习者发言）',
+    requests.length === requestsBefore44, requests.slice(requestsBefore44).join(','));
+
+  // 4) 非 chip 的动静不接；点完输入框留着那句话（学习者可改可发）
+  check('非 chip 动静依旧不接',
+    handleUiDeskEvent({ target: { dataset: {}, tagName: 'DIV' } }).handled === false, '');
+  check('空 chip 不接（data 为空字符串点不响）',
+    handleUiDeskEvent({ target: { dataset: { uiSuggest: '' } } }).handled === false, '');
+
+  // 5) 转义：一句话里带引号 / 尖括号，写进属性要转义、不能长出第二个属性
+  const esc = compile44(['kind: suggest', 'pick: 他说 "你好" <script>']);
+  check('chip 文案里的引号被转义（属性不被切开）',
+    esc.includes('data-ui-suggest="他说 &quot;你好&quot; &lt;script&gt;"'), esc.slice(0, 200));
+  check('转义后不真的长出脚本标签', !/<script/.test(esc), esc.slice(0, 200));
+
+  // 6) Invariant 4：这一档不记状态、不判分、不出数字
+  check('suggest 不进 UI_STATEFUL（没有要被下一轮读回的状态）',
+    !ui44.UI_STATEFUL.includes('suggest'), ui44.UI_STATEFUL.join(','));
+  check('点完没有落 artifact_state / 状态消息（它不是状态档）',
+    !/artifact-message/.test(JSON.stringify(requests.slice(requestsBefore44).map((r) => r.url))),
+    requests.slice(requestsBefore44).map((r) => r.url).join(','));
+
+  input44.value = beforeVal;
+  check('这一节无异常', errors.length === errsBefore44, errors.slice(errsBefore44).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

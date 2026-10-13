@@ -22,7 +22,7 @@
 import { escapeHtml } from './escape.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram'];
+export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'suggest'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -46,6 +46,15 @@ const MAX_TEXT = 240;
 
 /** handoff 按钮文案的上限：它是按钮上的一句话，不是一段说明（超长掉回原文）。 */
 const HANDOFF_MAX = 24;
+
+/**
+ * suggest（第三十轮，学 Intelligent UI 回答末尾的「If you want, I can:」建议动作条，
+ * 不学它点一下直接发出那一手）：讲完一段后，把"往哪走"的几个中性分支摆成可点的小条。
+ * 点一条，宿主把那句话**填进输入框、不自动发**——和 handoff 同一把尺：话是学习者的，
+ * 他看过、改成自己的话再发。它不记状态、不判分、不出数字；要收答/判对错仍走 ask_user_question。
+ */
+const SUGGEST_MAX = 3;
+const SUGGEST_TEXT_MAX = 20;
 
 /**
  * handoff（第二十九轮，学 Intelligent UI 的 issueNewTurn，不学自动发言）：
@@ -593,7 +602,45 @@ function compileDiagram(fields) {
   return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'diagram' };
 }
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram };
+/**
+ * suggest：`pick: 一句短话`（1–3 行）。回答末尾的"往哪走"分支条。
+ *
+ * 为什么它不进 UI_STATEFUL：点一条只是把那句话填进输入框，学习者没有在这一档里"留下"
+ * 任何要被下一轮读回的状态——他填进去又删掉、或改成别的话，都是他自己的动作，
+ * 下一轮该看的是他**发出去**那句话，不是这条菜单。所以它没有 id、不写 artifact_state、
+ * 也不发 artifact-message。
+ *
+ * 为什么点了不自动发（这是和 OpenAI 那一手唯一被改掉的地方）：OpenAI 的建议条点一下
+ * 直接替用户发出一条模板话；本仓第二十九轮已经立过尺——界面不替学习者发言。这里照办：
+ * 填进输入框，他看过、改成自己的话再点发送。问什么仍是他的事。
+ *
+ * 它是探索方向的菜单（再举个例子 / 这里还想问 / 接着下一点），不是 A/B/C 答题——
+ * 要收答、要判对错归 ask_user_question（它会阻塞、会记录）；这一档不记状态、不判分、
+ * 不出数字（Invariant 4 一条不破）。
+ */
+function compileSuggest(fields) {
+  if (pick(fields, 'handoff').length) {
+    return { error: 'suggest 这一档自己就是把话递回输入框的出口，不要再写 handoff' };
+  }
+  const picks = pick(fields, 'pick').map((s) => s.trim()).filter(Boolean);
+  if (!picks.length) return { error: '至少写一行 pick（一句想让学习者接着问的话）' };
+  if (picks.length > SUGGEST_MAX) return { error: `最多 ${SUGGEST_MAX} 个分支（多了就是菜单，不是建议）` };
+  if (new Set(picks).size !== picks.length) return { error: '两条 pick 一模一样' };
+  if (picks.some((p) => p.length > SUGGEST_TEXT_MAX)) {
+    return { error: `每条分支太长了（≤${SUGGEST_TEXT_MAX} 字）` };
+  }
+  const title = pick(fields, 'title')[0] || '';
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const chips = picks
+    .map(
+      (p) =>
+        `<button type="button" class="ui-suggest-chip" data-ui-suggest="${escapeHtml(p)}">${cell(p)}</button>`,
+    )
+    .join('');
+  return { html: `${cap}<div class="ui-suggest">${chips}</div>`, shape: 'suggest' };
+}
+
+const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, suggest: compileSuggest };
 
 /**
  * 编译器入口。partial = 这一段还在流里长（围栏未闭合）。

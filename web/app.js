@@ -3021,6 +3021,20 @@ function handleUiDeskEvent(evt) {
     return ok ? { handled: true, kind: 'handoff', id: handoffId } : { handled: false };
   }
 
+  // suggest（第三十轮）：回答末尾的"往哪走"分支条。按钮自己带着那句话（data-ui-suggest），
+  // 点了把它填进输入框、不自动发——和 handoff 同一把尺，界面不替学习者发言。它不读 Map、
+  // 不发 artifact-message：这一档没有要被下一轮读回的状态，学习者发出去的话才是状态。
+  const suggestText = node.dataset?.uiSuggest;
+  if (suggestText !== undefined && suggestText !== '') {
+    const box = $('input');
+    if (!box) return { handled: false };
+    box.value = suggestText;
+    autosize();
+    box.focus?.();
+    toast('已放进输入框，看过再发');
+    return { handled: true, kind: 'suggest', text: suggestText };
+  }
+
   const listId = node.dataset?.uiCheck;
   if (listId) {
     const item = node.dataset?.uiItem;
