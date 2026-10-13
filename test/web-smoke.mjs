@@ -5418,6 +5418,95 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore44, errors.slice(errsBefore44).join(' | '));
 }
 
+// ─── 45. chart：数据的形状（第三十一轮，学 IUI 旗舰用例"把复杂概念画出来"，
+// 但只借形状不借交互——静态图，学习者对图的交互在对话里）。series 数据 → 确定性的 SVG：
+// 折线/柱状、x 标签、图例、轴刻度；不写 data-*、不进 UI_STATEFUL、写 handoff 掉回原文。
+{
+  console.log('\n45. chart 数据图（静态形状：趋势 / 分布 / 对比）');
+  const errsBefore45 = errors.length;
+  const ui45 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const compile45 = (lines) => ui45.compileUiBlock(lines.filter((l) => l.trim()), false).html;
+  ui45.resetUiState();
+
+  // 1) 两系列折线：数据长成两条 polyline，title 成引导语，读屏与图例都在
+  const ch = compile45(['kind: chart', 'title: 每月走势', 'type: line', 'x: 一月,二月,三月', 'series: 收入 = 3,5,4', 'series: 支出 = 2,4,3']);
+  check('两系列折线长成两条 polyline（数据画出来了）',
+    (ch.match(/<polyline /g) || []).length === 2 && ch.includes('ui-series-0') && ch.includes('ui-series-1'), ch.slice(0, 400));
+  check('title 渲染成引导语（.ui-cap）', ch.includes('<p class="ui-cap">每月走势</p>'), ch.slice(0, 120));
+  check('svg 带 role="img" 与 aria-label（读屏读得到这张图）',
+    /role="img"/.test(ch) && ch.includes('aria-label="数据图：每月走势。折线图：收入、支出"'), ch.slice(0, 300));
+  check('图例把两条系列的名字摆出来', ch.includes('ui-legend') && ch.includes('收入') && ch.includes('支出'), ch.slice(0, 300));
+  check('不带 title 就不长引导语（不加戏）',
+    !compile45(['kind: chart', 'series: 收入 = 1,2']).includes('ui-cap'), '');
+  check('不写 type 缺省折线（polyline 而不是 rect）',
+    !compile45(['kind: chart', 'series: 收入 = 1,2']).includes('<rect '), '');
+
+  // 2) 柱状：2 系列 × 2 点 = 4 个 rect；读屏名说它是柱状图
+  const cb = compile45(['kind: chart', 'type: bar', 'x: 甲,乙', 'series: 甲组 = 4,6', 'series: 乙组 = 2,8']);
+  check('type: bar 长成柱状（2 系列 × 2 点 = 4 个 rect，没有 polyline）',
+    (cb.match(/<rect /g) || []).length === 4 && !cb.includes('<polyline '), cb.slice(0, 300));
+  check('柱状图的读屏名说它是柱状图', cb.includes('柱状图：甲组、乙组'), cb.slice(0, 200));
+
+  // 3) 刻度与标签：x 标签照数量渲染，y 轴有上下两个刻度（图有比例可读）
+  check('x 标签照数量渲染（3 个点 3 个标签）',
+    (ch.match(/class="ui-chart-xlabel"/g) || []).length === 3, ch.slice(0, 400));
+  check('y 轴摆出上下两个刻度', (ch.match(/class="ui-chart-ylabel"/g) || []).length === 2, ch.slice(0, 300));
+
+  // 4) 确定性：同一份输入两次编译长得一模一样（流式每帧重编，坐标不许跳）
+  check('同一份输入两次编译长得一模一样',
+    compile45(['kind: chart', 'x: 一月,二月', 'series: 收入 = 3,5']) === compile45(['kind: chart', 'x: 一月,二月', 'series: 收入 = 3,5']), '');
+
+  // 5) 降级路径：不静默吞——逐条点名
+  const deg = (lines) => ui45.compileUiBlock(lines, false);
+  const d1 = deg(['kind: chart']);
+  check('一行 series 都没有掉回原文并点名', Boolean(d1.degraded) && /series/.test(d1.degraded), String(d1.degraded));
+  const d2 = deg(['kind: chart', 'series: 收入 = 1']);
+  check('一个点看不出形状，掉回原文并点名下限', Boolean(d2.degraded) && /2/.test(d2.degraded), String(d2.degraded));
+  const d3 = deg(['kind: chart', 'series: 收入 = 1,2', 'series: 支出 = 1,2,3']);
+  check('两条系列点数不对齐掉回原文', Boolean(d3.degraded) && /对齐/.test(d3.degraded), String(d3.degraded));
+  const d4 = deg(['kind: chart', 'series: 收入 = 1,2', 'series: 收入 = 3,4']);
+  check('系列重名掉回原文（身份是名字）', Boolean(d4.degraded) && /重名/.test(d4.degraded), String(d4.degraded));
+  const d5 = deg(['kind: chart', 'series: 收入 = 1,000,2']);
+  check('千分位逗号不静默拆点：掉回原文并点名', Boolean(d5.degraded) && /不是数/.test(d5.degraded), String(d5.degraded));
+  const d6 = deg(['kind: chart', 'series: 收入 = 1,甲']);
+  check('非数掉回原文', Boolean(d6.degraded) && /不是数/.test(d6.degraded), String(d6.degraded));
+  const d7 = deg(['kind: chart', 'x: 一月', 'series: 收入 = 1,2']);
+  check('x 标签数量和点数对不上掉回原文', Boolean(d7.degraded) && /对不上/.test(d7.degraded), String(d7.degraded));
+  const d8 = deg(['kind: chart', 'type: pie', 'series: 收入 = 1,2']);
+  check('type 只认 bar/line，别的掉回原文', Boolean(d8.degraded) && /bar/.test(d8.degraded), String(d8.degraded));
+  const d9 = deg(['kind: chart', 'handoff: 递回', 'series: 收入 = 1,2']);
+  check('静态档写 handoff 掉回原文并点名', Boolean(d9.degraded) && d9.degraded.includes('handoff'), String(d9.degraded));
+  const longSeries = 'series: 收入 = ' + Array.from({ length: 41 }, (_, i) => i).join(',');
+  const d10 = deg(['kind: chart', longSeries]);
+  check('超过 40 个点掉回原文', Boolean(d10.degraded) && /40/.test(d10.degraded), String(d10.degraded));
+  const d11 = deg(['kind: chart', 'series: 一 = 1,2', 'series: 二 = 1,2', 'series: 三 = 1,2', 'series: 四 = 1,2', 'series: 五 = 1,2']);
+  check('超过 4 条系列掉回原文（多了是彩虹不是图）', Boolean(d11.degraded) && /4/.test(d11.degraded), String(d11.degraded));
+  const d12 = deg(['kind: bar', 'series: 收入 = 1,2']);
+  check('kind: bar 仍被否决（学情指标族不因图表出现而开口子）',
+    Boolean(d12.degraded) && /不提供/.test(d12.degraded), String(d12.degraded));
+
+  // 6) Invariant 4 边界：chart 是静态档——不记状态、不判分、不出学情数字
+  check('chart 不进 UI_STATEFUL（没有要被下一轮读回的状态）',
+    !ui45.UI_STATEFUL.includes('chart'), ui45.UI_STATEFUL.join(','));
+  check('编译产物里一个 data-* 都不写（静态档没有宿主要读的记号）',
+    !/data-ui-/.test(ch + cb), '');
+  const reqBefore45 = requests.length;
+  check('这一档不发任何状态消息（不落 artifact_state）',
+    requests.length === reqBefore45 && !/artifact-message/.test(JSON.stringify(requests.slice(reqBefore45).map((r) => r.url))), '');
+
+  // 7) 转义：标签里的引号 / 尖括号进属性要转义，不长出脚本
+  const esc = compile45(['kind: chart', 'x: 他说 "你好" <script>', 'series: 收入 = 1,2']);
+  check('x 标签里的引号/尖括号转义进属性、不真长出脚本标签',
+    esc.includes('&quot;你好&quot; &lt;script&gt;') && !/<script/.test(esc), esc.slice(0, 300));
+
+  // 8) aria 只讲"是什么、有哪些系列"，不塞数字（数据值在可见轴上，读屏名照 diagram 的尺）
+  const aria45 = (ch.match(/aria-label="([^"]*)"/) || [])[1] || '';
+  check('读屏名只放标题与系列名，不塞数字',
+    !/\d/.test(aria45), aria45);
+
+  check('这一节无异常', errors.length === errsBefore45, errors.slice(errsBefore45).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

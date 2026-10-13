@@ -690,6 +690,36 @@ html, body {
 .ui-suggest-chip:hover { color: var(--ink); border-color: var(--ink-2); }
 .ui-suggest-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* chart（第三十一轮）：数据的形状。学 IUI 旗舰用例"把复杂概念画出来"，但只借形状不借交互——
+   图是静态的，学习者对图的交互在对话里。颜色只借已量过的 token：系列色按
+   --accent / --teal / --ink-2 / --ink 顺序取，轴与标签用 --ink-3（对 --surface-2 实测 4.70:1），
+   零新十六进制。 */
+.ui-chart {
+  margin: 0 0 1em; padding: 10px 12px 8px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.ui-chart-svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.ui-chart-axis { stroke: var(--ink-3); stroke-width: 1; }
+.ui-chart-ylabel, .ui-chart-xlabel { fill: var(--ink-3); font-size: 10px; }
+.ui-chart .ui-series-0 { stroke: var(--accent); }
+.ui-chart .ui-series-1 { stroke: var(--teal); }
+.ui-chart .ui-series-2 { stroke: var(--ink-2); }
+.ui-chart .ui-series-3 { stroke: var(--ink); }
+.ui-chart rect.ui-series-0 { fill: var(--accent); }
+.ui-chart rect.ui-series-1 { fill: var(--teal); }
+.ui-chart rect.ui-series-2 { fill: var(--ink-2); }
+.ui-chart rect.ui-series-3 { fill: var(--ink); }
+.ui-chart polyline { fill: none; stroke-width: 2; }
+.ui-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
+.ui-legend-item { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); }
+/* 色点不做成自造底色块（§39 那条"块状底色只借 --surface-2"的机械账不许破）：
+   9px 方块，底仍是量过的 surface-2，系列色只出现在描边上——图例映射靠描边，不靠填色。 */
+.ui-legend-dot { width: 9px; height: 9px; border-radius: 3px; flex: 0 0 auto; background: var(--surface-2); }
+.ui-swatch-0 { border: 2px solid var(--accent); }
+.ui-swatch-1 { border: 2px solid var(--teal); }
+.ui-swatch-2 { border: 2px solid var(--ink-2); }
+.ui-swatch-3 { border: 2px solid var(--ink); }
+
 /* 降级：原文看得见 + 一句为什么。它是这一档唯一的"失败可见"面，不许静默吞。 */
 .ui-degraded {
   margin: -0.4em 0 1em; font-size: 12px; color: var(--ink-3);

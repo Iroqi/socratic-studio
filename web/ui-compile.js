@@ -6,12 +6,12 @@
 // 升级成一次装软件。这一档补的就是那条缝：**回答本身就是界面，不另起一个产物**。
 //
 // 词汇表是**封闭**的，这一条是整个设计的重心：
-//   · 模型只能在五档里选，选不出新形状，也就造不出"看着像官方控件"的假控件；
+//   · 模型只能在七档里选，选不出新形状，也就造不出"看着像官方控件"的假控件；
 //   · 未知档一律退回原文（看得见，不静默吞），跟 dialogue 那条"三处不猜"同一个脾气；
 //   · 因为可枚举，"这轮放的界面编译过没有"是机械事实，能读回给模型——
 //     忍住不加界面这件事从此不只靠散文自觉。
 //
-// 判分仍然不在这一层：五档里没有"答案键"的位置，checklist 只记"勾了没有"，
+// 判分仍然不在这一层：七档里没有"答案键"的位置，checklist 只记"勾了没有"，
 // 不记"勾对没有"（Invariant 4 第 ③ 条：把判分藏进控件就是违规指纹）。
 //
 // 交互档（checklist / calculator / diagram）还可以带 `handoff: 一句人话`：界面尾部
@@ -22,7 +22,7 @@
 import { escapeHtml } from './escape.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'suggest'];
+export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'chart', 'suggest'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -640,7 +640,143 @@ function compileSuggest(fields) {
   return { html: `${cap}<div class="ui-suggest">${chips}</div>`, shape: 'suggest' };
 }
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, suggest: compileSuggest };
+// ── 数据图 ─────────────────────────────────────────────────────────────
+/**
+ * chart：`series: 名 = 数值,数值,…`（1–4 条，每条 2–40 个点）+ 可选 `x: 标签,…`
+ * （数量与点数对齐）+ 可选 `type: bar | line`（缺省 line）+ 可选 `title`。
+ *
+ * 学的是 OpenAI Intelligent UI 官方旗舰用例里「把复杂概念画出来」那一手（中心极限定理一例：
+ * 分布的形状一眼见底），但**只借形状、不借交互**——图是静态的，学习者对图的交互是对话
+ * （指着图问"如果更大呢"，模型下一轮再画一张）。于是它像 compare / steps 一样：
+ * 没有 id、不进 UI_STATEFUL、不落 artifact_state、不写 data-*、写 handoff 掉回原文。
+ *
+ * 数据的边界是 Invariant 4 那道线：画的是**正在教的对象**的数据（温度 / 价格 / 人数），
+ * 不是学习者的学情（进度 / 对错 / 掌握度）——后者是 UI_VETOED 整档否决的东西，
+ * chart 里也不许装（编译器不查内容，那条是提示里的散文纪律，与 checklist"不记对不对"同一把尺）。
+ *
+ * 布局是**确定的**：同一份输入两次编译长得一模一样（流式每帧重编，坐标跳来跳去的图没法
+ * 对着问为什么）。颜色是**借来的**：系列色只从已量过的 token 里取
+ * （--accent / --teal / --ink-2 / --ink），轴与标签用 --ink-3，零新十六进制。
+ */
+const CHART_MAX_SERIES = 4;
+const CHART_MIN_POINTS = 2;
+const CHART_MAX_POINTS = 40;
+const CHART_NAME_MAX = 20;
+const CHART_XLABEL_MAX = 12;
+/** 系列数据里的数值只收这种形状：可负、可小数；千分位逗号、科学计数、空格一律不认——
+ * 认了就是"1,000"被拆成两个点的静默坏数据，那比掉回原文糟。 */
+const CHART_NUM = /^[+-]?(0|[1-9]\d*)(\.\d+)?$/;
+
+/** 轴标签的数值写法：最多三位小数、去尾零；太长换科学计数，别把左轴挤爆。 */
+function chartNum(n) {
+  if (Object.is(n, -0)) n = 0;
+  const r = Math.round(n * 1000) / 1000;
+  const s = String(r);
+  return s.length > 9 ? n.toExponential(2) : s;
+}
+
+/** 数据图是静态档：没有可交回的状态，handoff 只配交互档。 */
+function compileChart(fields) {
+  if (pick(fields, 'handoff').length) {
+    return { error: 'chart 这一档没有可交回的状态：handoff 只配 checklist / calculator / diagram' };
+  }
+  const type = pick(fields, 'type')[0] || 'line';
+  if (type !== 'bar' && type !== 'line') return { error: 'type 只认 bar 或 line' };
+
+  const series = [];
+  for (const raw of pick(fields, 'series')) {
+    const eq = raw.indexOf('=');
+    if (eq < 0) return { error: 'series 要写成「名 = 数值,数值,…」' };
+    const name = raw.slice(0, eq).trim();
+    if (!name) return { error: 'series 的名字是空的' };
+    if (name.length > CHART_NAME_MAX) return { error: `系列名太长了（≤${CHART_NAME_MAX} 字）` };
+    if (!UI_IDENT.test(name)) return { error: `系列名「${name}」不合法（字母/汉字起头，中间不许空格与 * + |）` };
+    if (series.some((s) => s.name === name)) return { error: `两条 series 重名「${name}」：身份是名字` };
+    const rawVals = raw.slice(eq + 1).split(',').map((v) => v.trim());
+    if (rawVals.some((v) => !v)) return { error: '有一个数值是空的（别用两个逗号挨着）' };
+    if (rawVals.length < CHART_MIN_POINTS) return { error: `一条线至少 ${CHART_MIN_POINTS} 个点（一个点看不出形状）` };
+    if (rawVals.length > CHART_MAX_POINTS) return { error: `点太多了（最多 ${CHART_MAX_POINTS} 个）` };
+    const vals = [];
+    for (const v of rawVals) {
+      if (!CHART_NUM.test(v)) return { error: `「${v}」不是数（只认数字，别用千分位逗号、别写科学计数）` };
+      vals.push(Number(v));
+    }
+    series.push({ name, vals });
+  }
+  if (!series.length) return { error: '至少一行 series（没数据画什么）' };
+  if (series.length > CHART_MAX_SERIES) return { error: `最多 ${CHART_MAX_SERIES} 条系列（多了是彩虹不是图）` };
+  const n = series[0].vals.length;
+  if (series.some((s) => s.vals.length !== n)) return { error: '每条 series 的点数要对齐（少一个点就少一截）' };
+
+  const xRaw = pick(fields, 'x');
+  let xLabels = [];
+  if (xRaw.length) {
+    xLabels = xRaw[0].split(',').map((s) => s.trim());
+    if (xLabels.some((s) => !s)) return { error: '有一个 x 标签是空的' };
+    if (xLabels.length !== n) return { error: `x 标签的数量（${xLabels.length}）和点数（${n}）对不上` };
+    if (xLabels.some((s) => s.length > CHART_XLABEL_MAX)) return { error: `x 标签太长了（≤${CHART_XLABEL_MAX} 字）` };
+  }
+
+  const title = pick(fields, 'title')[0] || '';
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+
+  // 几何完全由输入决定（与 diagram 同一把尺）：同样的 series/x 永远落在同样的坐标上。
+  let mn = Infinity, mx = -Infinity;
+  for (const s of series) for (const v of s.vals) { if (v < mn) mn = v; if (v > mx) mx = v; }
+  const span = mx - mn;
+  const pad = span === 0 ? 1 : span * 0.08;
+  const yMax = mx + pad, yMin = mn - pad;
+  const PAD_L = 72, PAD_R = 14, PAD_T = 10, PAD_B = xLabels.length ? 26 : 12;
+  const PLOT_H = 160, GAP = 64;
+  const y = (v) => PAD_T + ((yMax - v) / (yMax - yMin)) * PLOT_H;
+  const barW = Math.min(34, (GAP * 0.66) / series.length);
+  // 柱状图把第一组让出半个组宽，别让第一条柱压在左轴上；折线图从 PAD_L 起。
+  const plotL = PAD_L + (type === 'bar' ? (barW * series.length) / 2 : 0);
+  const cx = (i) => plotL + i * GAP;
+  const svgW = plotL + GAP * (n - 1) + PAD_R + (type === 'bar' ? (barW * series.length) / 2 + 20 : 26);
+  const svgH = PAD_T + PLOT_H + PAD_B;
+  const baseY = Math.max(PAD_T, Math.min(PAD_T + PLOT_H, y(0)));
+
+  const typeName = type === 'bar' ? '柱状图' : '折线图';
+  // 读屏名里只放"是什么、有哪些系列"：数据值就在可见的轴上，结构数量不是学情指标，
+  // 但连 aria 也不塞数字——免得哪天"数字不许进界面"这条被读屏用户先看见。
+  const aria = `数据图：${title || '数据的形状'}。${typeName}：${series.map((s) => s.name).join('、')}`;
+
+  const yLabels =
+    `<text class="ui-chart-ylabel" x="${PAD_L - 8}" y="${PAD_T + 11}" text-anchor="end">${escapeHtml(chartNum(yMax))}</text>` +
+    `<text class="ui-chart-ylabel" x="${PAD_L - 8}" y="${PAD_T + PLOT_H - 4}" text-anchor="end">${escapeHtml(chartNum(yMin))}</text>`;
+  const xEls = xLabels.map((s, i) =>
+    `<text class="ui-chart-xlabel" x="${cx(i)}" y="${PAD_T + PLOT_H + 16}" text-anchor="middle">${escapeHtml(fitText(s, 6))}</text>`
+  ).join('');
+  const frameEls =
+    `<line class="ui-chart-axis" x1="${PAD_L}" y1="${PAD_T + PLOT_H}" x2="${svgW - PAD_R}" y2="${PAD_T + PLOT_H}"/>` +
+    `<line class="ui-chart-axis" x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${PAD_T + PLOT_H}"/>`;
+
+  const seriesEls = series.map((s, idx) => {
+    const cls = `ui-series-${idx}`;
+    if (type === 'bar') {
+      return s.vals.map((v, i) => {
+        const x0 = cx(i) - (barW * series.length) / 2 + idx * barW;
+        const top = Math.min(baseY, y(v));
+        return `<rect class="${cls}" x="${x0}" y="${top}" width="${barW}" height="${Math.abs(y(v) - baseY)}"/>`;
+      }).join('');
+    }
+    const pts = s.vals.map((v, i) => `${cx(i)},${y(v)}`).join(' ');
+    return `<polyline class="${cls}" points="${pts}"/>`;
+  }).join('');
+
+  const legend =
+    `<div class="ui-legend">` +
+    series.map((s, i) => `<span class="ui-legend-item"><span class="ui-legend-dot ui-swatch-${i}"></span>${cell(s.name)}</span>`).join('') +
+    `</div>`;
+
+  const body =
+    `<svg class="ui-chart-svg" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
+    `<title>${escapeHtml(aria)}</title>${frameEls}${yLabels}${xEls}${seriesEls}</svg>${legend}`;
+  return { html: `${cap}<div class="ui-chart">${body}</div>`, shape: 'chart' };
+}
+
+const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, chart: compileChart, suggest: compileSuggest };
 
 /**
  * 编译器入口。partial = 这一段还在流里长（围栏未闭合）。
