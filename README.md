@@ -1613,6 +1613,32 @@ IUI 旗舰用例的另一半是"**change an input to see what happens**"（改�
 （改回插值写法）；`data-ui-chartsnap` 的驼峰是 `uiChartsnap` 而宿主读 `uiChartSnap`（属性改名
 `data-ui-chart-snap`）。详细判决在 `docs/iteration-2026-10-13d.md`。
 
+### 分段探索：```ui 那一档加了 explore（2026-10-14 第三十三轮）
+
+IUI 最新官方博文（GPT-6 for everyone，2026-10-07）旗舰演示排第一位的是拆解一辆七速自行车——
+"**Select a system to explore its role**"：五个系统用分段按钮摆着，点一个，那一面的角色当场换上来。
+这是"**一个整体有几面，逐面聚焦看**"，本仓七档里没有一档装得下（compare 并排、steps 有序、
+diagram 必须画连线——而"面"之间往往没有先后、也没有边）。第三十三轮补成**第五个交互档** `explore`：
+
+- 围栏：`kind: explore` + `id:`（必填）+ `tab: 名字 | 一句话`（2–8 条、名字唯一、≤20 字、
+  一句话 ≤80 字）+ 可选 `title` / `handoff`（≤24 字）。一排真实 `<button>` 分段按钮 + 一个面板，
+  点哪一面、那一面的名字与角色就换上来（`aria-pressed` 报激活、`aria-live` 把换上的读给读屏）。
+- 状态 `{active, viewed}`：点开哪一面记进 `active`、看过哪些记进 `viewed`——与 diagram 同一族，
+  "他看了哪"不是"他会了"，判分仍是模型的活。**默认 active = null**：没点过就照实说，
+  面板摆一句中性引导，不替学习者声称他看过某一面；点当前已激活的一面保持激活不折叠
+  （分段控件没有"全貌"可回，与 diagram 的"再点取消"有意不同）。
+- 与其它交互档同一套管道：点击 → 状态 + `artifact-message` 报回 → 右栏回看卡"看过 / 现在停在"；
+  handoff 把"我在「标题」里点开看了：车架"拼成话递回对话（填框不发）。
+- 面与面之间没有先后、没有连线：有连线的用 `diagram`、有序的用 `steps`、并排对照用 `compare`；
+  要收答判对错用 `ask_user_question`，别拿 `explore` 装题（规则硬规矩 8）。
+- 降级逐条点名：无 id / 只有一面 / 两面一模一样 / 空名 / 名太长 / 一句话太长 / 超 8 面 /
+  handoff 超 24 字，全掉回原文。
+
+行为 37 项在 web-smoke §47，契约 359 项（data-* 名单 11 → 14：`ui-explore` / `ui-explore-tab` /
+`ui-tab-name`；`UI_STATEFUL` 四档 → 五档），11 枚变异各验过红、零假绿。样式零新十六进制：
+激活态只换文字与描边（`--accent-ink` 字 + `--accent` 描边，底仍是 `--surface-2`——
+"块状底色只借 surface-2"的机械账不许破）。详细判决在 `docs/iteration-2026-10-14.md`。
+
 ## 已知边界
 
 - **没有音频旁白（TTS）。** 原版的 `narration.py` + 时间轴那一整套没搬，需要先做完整套件才能支持。

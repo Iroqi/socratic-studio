@@ -22,7 +22,7 @@
 import { escapeHtml } from './escape.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'chart', 'suggest'];
+export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'explore', 'chart', 'suggest'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -38,8 +38,9 @@ export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'met
  * "学习者在里面做过什么"这回事，读回来只会是一句空话。diagram 第二十七轮从静态升成
  * 交互档：节点可点击，"他点了谁 / 看过谁"就是状态；chart 第三十二轮随 slider 升成交互档：
  * "滑到哪张快照"就是状态（没写 slider 的静态 chart 不进这一档，也不写 id）。
+ * explore 第三十三轮："点开看了哪一面"就是状态（一个整体拆成几面，分段按钮逐面看）。
  */
-export const UI_STATEFUL = ['checklist', 'calculator', 'diagram', 'chart'];
+export const UI_STATEFUL = ['checklist', 'calculator', 'diagram', 'chart', 'explore'];
 
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
@@ -603,6 +604,85 @@ function compileDiagram(fields) {
   return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'diagram' };
 }
 
+// ── 分段探索 ─────────────────────────────────────────────────────────────
+/**
+ * explore（第三十三轮，学 IUI 官方旗舰演示「Select a system to explore its role」——
+ * 七速自行车拆解：五个系统用分段按钮摆着，点一个，那一面的角色当场换上来）：
+ * `tab: 名字 [| 一句话]`（2–8 条）+ `id:`（必填）+ 可选 `title` / `handoff`。
+ *
+ * 它补的是七档里装不下的一类内容：**一个整体有哪几面，每一面在整体里是什么角色**。
+ * compare 是并排对照、steps 是有序过程、diagram 必须画节点之间的连线——而"面"之间
+ * 往往没有先后、也没有边，有的只是同一整体的不同侧面。这一档就是那个形状。
+ *
+ * 交互态与 diagram 同一族：点开哪一面记进 state.active、看过哪些记进 state.viewed——
+ * 那是「他看了哪」，不是「他会了」，判分仍然是模型的活（Invariant 4 ③）。
+ * **默认 active = null**：没点过就照实说，面板摆一句中性引导，不替学习者声称他看过某一面。
+ * 点当前已激活的面保持激活（分段控件不折叠——探索没有"全貌"可回，与 diagram 的
+ * "再点取消"有意不同）。
+ *
+ * 按钮是真实 <button>：键盘天然可走（Tab 聚焦 + Enter/空格），不新造键盘协议；
+ * aria-pressed 报激活态（与 diagram 节点的 aria-pressed 同一族），面板 aria-live 把
+ * 换上的那一面读给读屏。不写任何数字：没有序号、没有"第几面"（Invariant 4 一条不破）。
+ */
+const EXPLORE_MIN_TABS = 2;
+const EXPLORE_MAX_TABS = 8;
+const EXPLORE_NAME_MAX = 20;
+const EXPLORE_NOTE_MAX = 80;
+
+function compileExplore(fields) {
+  const id = pick(fields, 'id')[0];
+  if (!id) return { error: '这个探索没有 id：点开哪一面没有地方续' };
+  const title = pick(fields, 'title')[0] || '';
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
+
+  const tabs = [];
+  for (const line of pick(fields, 'tab')) {
+    const [name, ...rest] = line.split('|').map((s) => s.trim());
+    if (!name) return { error: '有空的 tab 名' };
+    if (name.length > EXPLORE_NAME_MAX) return { error: `tab 名太长了（≤${EXPLORE_NAME_MAX} 字）` };
+    const note = rest.filter(Boolean).join(' ').trim();
+    if (note.length > EXPLORE_NOTE_MAX) return { error: `tab 的一句话太长了（≤${EXPLORE_NOTE_MAX} 字）` };
+    if (tabs.some((t) => t.name === name)) return { error: `「${name}」写了两遍：两个部分一模一样，分不清点的是哪一面` };
+    tabs.push({ name, note });
+  }
+  if (tabs.length < EXPLORE_MIN_TABS) return { error: `至少 ${EXPLORE_MIN_TABS} 个部分（一个没得切）` };
+  if (tabs.length > EXPLORE_MAX_TABS) return { error: `部分太多了（最多 ${EXPLORE_MAX_TABS} 个，多了是菜单不是探索）` };
+
+  // 状态从宿主侧续：上次停在谁，重画就把谁带回来；viewed 是学情态，下一轮读给模型。
+  // spec 存 tabs 与 title：repaint 与 handoff 都要在点击发生时取现成的那份，不重新解析围栏。
+  const stored = readUiState(id)?.state || {};
+  const active = stored.active || null;
+  const spec = { tabs, title };
+  writeUiState(id, 'explore', stored, spec);
+
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const groupAria = title
+    ? `探索「${title}」的各个部分（点一个，看它在整体里的角色）`
+    : '这个整体的各个部分（点一个，看它在整体里的角色）';
+  const tabEls = tabs
+    .map((t) => {
+      const on = t.name === active;
+      return (
+        `<button type="button" class="ui-explore-tab${on ? ' ui-explore-active' : ''}" ` +
+        `data-ui-explore-tab="${escapeHtml(id)}" data-ui-tab-name="${escapeHtml(t.name)}" ` +
+        `aria-pressed="${on ? 'true' : 'false'}">${cell(t.name)}</button>`
+      );
+    })
+    .join('');
+  const hit = active ? tabs.find((t) => t.name === active) : null;
+  const pane = hit
+    ? `<p class="ui-explore-pane-name">${cell(hit.name)}</p>` +
+      (hit.note ? `<p class="ui-explore-pane-note">${cell(hit.note)}</p>` : '')
+    : `<p class="ui-explore-pane-hint">点上面的部分，看看每一面在这件事里的角色</p>`;
+  const body =
+    `<div class="ui-explore" data-ui-explore="${escapeHtml(id)}">` +
+    `<div class="ui-explore-tabs" role="group" aria-label="${escapeHtml(groupAria)}">${tabEls}</div>` +
+    `<div class="ui-explore-pane" aria-live="polite">${pane}</div>` +
+    `</div>`;
+  return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'explore' };
+}
+
 /**
  * suggest：`pick: 一句短话`（1–3 行）。回答末尾的"往哪走"分支条。
  *
@@ -930,7 +1010,7 @@ function chartSnapSvg(snap, type, xLabels, title, sliderName) {
   return { svg: `<title>${escapeHtml(aria)}</title>${frameEls}${yLabels}${xEls}${seriesEls}`, aria, w, h };
 }
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, chart: compileChart, suggest: compileSuggest };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest };
 
 /**
  * 编译器入口。partial = 这一段还在流里长（围栏未闭合）。

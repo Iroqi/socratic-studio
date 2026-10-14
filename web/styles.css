@@ -727,6 +727,28 @@ html, body {
 .ui-chart-controls input[type="range"] { min-width: 0; flex: 1 1 auto; accent-color: var(--accent); }
 .ui-chart-snap { font-family: var(--mono); font-size: 12.5px; color: var(--ink); flex: 0 0 auto; }
 
+/* explore（第三十三轮，学 IUI 官方旗舰演示 "Select a system to explore its role"）：
+   一个整体拆成几面，分段按钮逐面看。按钮沿 .ui-suggest-chip 那尺——底色只借量过的
+   --surface-2（"底色全用量过的 surface-2"的账不许破），hover 与激活态都只换文字与描边、
+   不引新背景（激活 = accent 描边 + accent-ink 字，底仍是 surface-2），零新十六进制。 */
+.ui-explore { margin: 0 0 1em; }
+.ui-explore-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.ui-explore-tab {
+  padding: 5px 11px; background: var(--surface-2); color: var(--ink-2);
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  font-size: 12.5px; cursor: pointer;
+}
+.ui-explore-tab:hover { color: var(--ink); border-color: var(--ink-2); }
+.ui-explore-tab.ui-explore-active { color: var(--accent-ink); border-color: var(--accent); }
+.ui-explore-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-explore-pane {
+  padding: 10px 12px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.ui-explore-pane-name { margin: 0 0 2px; font-size: 13.5px; font-weight: 620; color: var(--ink); }
+.ui-explore-pane-note { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+.ui-explore-pane-hint { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+
 /* 降级：原文看得见 + 一句为什么。它是这一档唯一的"失败可见"面，不许静默吞。 */
 .ui-degraded {
   margin: -0.4em 0 1em; font-size: 12px; color: var(--ink-3);

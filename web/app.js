@@ -3000,6 +3000,14 @@ function handoffUiState(id) {
     text = snap
       ? `我在图表「${name}」里把「${rec.spec?.slider || ''}」滑到了 ${snap}`
       : `我在图表「${name}」里还没有动过滑块`;
+  } else if (kind === 'explore') {
+    const active = rec.state?.active;
+    const viewed = Object.keys(rec.state?.viewed || {}).filter((k) => rec.state.viewed[k]);
+    text = active
+      ? `我在「${name}」里点开看了：${active}`
+      : viewed.length
+        ? `我在「${name}」里看过：${viewed[viewed.length - 1]}`
+        : `我在「${name}」里还没有点开任何一面`;
   } else {
     return false;
   }
@@ -3083,6 +3091,24 @@ function handleUiDeskEvent(evt) {
     repaintUiChart(chartId);
     forwardArtifactMessage({ type: 'state', state: { snap: snap.name, uiKind: 'chart' } }, uiStateKey(chartId));
     return { handled: true, kind: 'chart', id: chartId };
+  }
+
+  // explore（第三十三轮，学 IUI 官方旗舰演示「Select a system to explore its role」）：
+  // 点一个分段按钮 = 学习者把焦点换到那一面。active 是"现在停在谁"，viewed 是"看过谁"——
+  // 都是学情态，下一轮模型读得到；判分一个字都不在这儿发生（面是对象的结构，不是学情）。
+  const exploreId = node.dataset?.uiExploreTab;
+  if (exploreId) {
+    const name = node.dataset?.uiTabName;
+    if (!name) return { handled: false };
+    const rec = readUiState(exploreId);
+    if (!rec?.spec) return { handled: false };
+    const viewed = { ...(rec.state?.viewed || {}) };
+    viewed[name] = true;
+    const state = { ...rec.state, active: name, viewed, uiKind: 'explore' };
+    setUiValues(exploreId, 'explore', state);
+    repaintUiExplore(exploreId);
+    forwardArtifactMessage({ type: 'state', state }, uiStateKey(exploreId));
+    return { handled: true, kind: 'explore', id: exploreId };
   }
 
   // diagram 的节点是 <g> 不是 input：点击落在 rect/text 上，dataset 在 g 上，
@@ -3176,6 +3202,39 @@ function repaintUiChart(id) {
     }
     const readout = block.querySelector?.('.ui-chart-snap');
     if (readout) readout.textContent = snap.name;
+  }
+}
+
+/**
+ * 分段探索的切换不整块重画（正文那一刷会跳滚动，和计算器"拖到一半被换掉手感没了"
+ * 同一把尺）：就地切按钮的激活态与 aria-pressed、换面板内容。面板内容从 spec.tabs 里
+ * 挑现成的（编译器只此一份，宿主不重新解析围栏——两处实现迟早漂）。
+ * id 是模型写的，不能拼进选择器（引号会注入）：按 class 找、再比对 dataset 值。
+ */
+function repaintUiExplore(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return;
+  const active = rec.state?.active || null;
+  const tab = (rec.spec.tabs || []).find((t) => t.name === active) || null;
+  const blocks = [...(document.querySelectorAll?.('.ui-explore') || [])].filter((n) => n.dataset?.uiExplore === id);
+  for (const block of blocks) {
+    const buttons = [...(block.querySelectorAll?.('.ui-explore-tab') || [])];
+    for (const btn of buttons) {
+      const name = btn.dataset?.uiTabName;
+      const on = name === active;
+      btn.classList?.toggle?.('ui-explore-active', on);
+      btn.setAttribute?.('aria-pressed', on ? 'true' : 'false');
+    }
+    const pane = block.querySelector?.('.ui-explore-pane');
+    if (pane) {
+      pane.innerHTML = '';
+      if (tab) {
+        pane.append(el('p', 'ui-explore-pane-name', tab.name));
+        if (tab.note) pane.append(el('p', 'ui-explore-pane-note', tab.note));
+      } else {
+        pane.append(el('p', 'ui-explore-pane-hint', '点上面的部分，看看每一面在这件事里的角色'));
+      }
+    }
   }
 }
 
@@ -3564,7 +3623,7 @@ function renderUiStatePanel(body) {
   );
   if (!entries.length) return;
   const fit = (s) => { const t = String(s); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
-  const word = { checklist: '清单', calculator: '计算器', diagram: '图解', chart: '图表' };
+  const word = { checklist: '清单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索' };
   const card = el('div', 'ui-state-card');
   card.append(el('div', 'panel-section-title', '这局动过的界面'));
   for (const [key, s] of entries) {
@@ -3588,6 +3647,11 @@ function renderUiStatePanel(body) {
     } else if (s.uiKind === 'chart') {
       if (s.snap) card.append(el('div', 'state-note', `· 现在停在：${fit(s.snap)}`));
       else card.append(el('div', 'state-note', '· 还没动过滑块'));
+    } else if (s.uiKind === 'explore') {
+      const viewed = Object.keys(s.viewed || {});
+      if (viewed.length) card.append(el('div', 'state-note', `· 看过：${viewed.map(fit).join('、')}`));
+      if (s.active) card.append(el('div', 'state-note', `· 现在停在：${fit(s.active)}`));
+      if (!viewed.length && !s.active) card.append(el('div', 'state-note', '· 还没点过'));
     }
   }
   body.append(card);
@@ -5763,6 +5827,7 @@ export const __hooks = {
   handleUiDeskKey,
   repaintUiDiagram,
   repaintUiChart,
+  repaintUiExplore,
   reportUiDegraded,
   hydrateUiState,
   applyUiMode,

@@ -5634,6 +5634,146 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore46, errors.slice(errsBefore46).join(' | '));
 }
 
+// ─── 47. explore：分段探索（第三十三轮，学 IUI 官方旗舰演示
+// "Select a system to explore its role"——七速自行车拆解：点一个分段按钮，那一面的角色换上来）。
+// explore 是第五交互档：id 必填、tab 2–8 条、状态 {active, viewed} 落盘续回、
+// handoff 拼句、右栏回看卡可见；面与面之间没有先后与连线（那是 diagram / steps 的形状）。
+{
+  console.log('\n47. explore（分段探索：一个整体拆成几面，点开看每一面的角色）');
+  const errsBefore47 = errors.length;
+  const ui47 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { state: st47, handleUiDeskEvent, renderPanel } = appModule.__hooks;
+  const compile47 = (lines, partial) => ui47.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  ui47.resetUiState();
+  const input47 = doc.getElementById('input');
+  const bike = ['kind: explore', 'id: bike', 'title: 一辆七速自行车',
+    'tab: 车架 | 承载骑手，连接前后轮',
+    'tab: 车轮 | 让车滚动',
+    'tab: 传动 | 把蹬踏变成前进',
+    'handoff: 接着问这个部件'];
+
+  // 1) 编译形状：分段按钮 + 面板 + 归属 id + 默认引导（不替学习者声称看过哪一面）
+  const c = compile47(bike).html;
+  check('三个分段按钮（真实 button + type=button，键盘天然可走）',
+    (c.match(/<button type="button" class="ui-explore-tab/g) || []).length === 3, c.slice(0, 400));
+  check('每个按钮带着归属 id 与那一面的名字',
+    c.includes('data-ui-explore-tab="bike"') && c.includes('data-ui-tab-name="车轮"'), c.slice(0, 400));
+  check('整块带着归属 id（重画/续状态能找到这份探索）',
+    c.includes('<div class="ui-explore" data-ui-explore="bike"'), c.slice(0, 200));
+  check('默认没有任何一面被激活（没点过就照实说，aria-pressed 全 false）',
+    !c.includes('ui-explore-active') && c.includes('aria-pressed="false"'), c.slice(0, 400));
+  check('默认面板是中性引导（不替学习者声称他看过某一面）',
+    c.includes('ui-explore-pane-hint') && c.includes('点上面的部分'), c.slice(-300));
+  check('面板带 aria-live（点一下，读屏把换上的那一面读出来）',
+    c.includes('class="ui-explore-pane" aria-live="polite"'), c.slice(0, 300));
+  check('分组带读屏名（role=group + 标题）',
+    c.includes('role="group"') && c.includes('探索「一辆七速自行车」的各个部分'), c.slice(0, 300));
+  check('title 帽 + handoff 按钮（沿交互档的既有出口）',
+    c.includes('ui-cap') && c.includes('class="ui-handoff" data-ui-handoff="bike"'), c.slice(-300));
+  check('编译输出没有数字、没有判分词（Invariant 4：没序号、没完成度、没对错）',
+    !/[0-9]/.test(c) && !/score|percent|mastery|correct|incorrect/i.test(c), c.slice(0, 400));
+
+  // 2) 确定性：同一份输入两次编译一模一样（状态没动过，不许跳）
+  check('explore 两次编译一模一样', compile47(bike).html === c, '');
+
+  // 3) 状态续回：上次停在车轮，重画就停在车轮
+  ui47.writeUiState('bike', 'explore', { active: '车轮', viewed: { '车架': true, '车轮': true }, uiKind: 'explore' });
+  const c2 = compile47(bike).html;
+  check('重画续回上次停的那一面（按钮激活 + aria-pressed=true）',
+    c2.includes('ui-explore-active') && c2.includes('data-ui-tab-name="车轮" aria-pressed="true"'), c2.slice(0, 400));
+  check('面板换回那一面的名字与角色',
+    c2.includes('<p class="ui-explore-pane-name">车轮</p>') && c2.includes('ui-explore-pane-note'), c2.slice(-300));
+  check('其它面没有被激活', c2.includes('data-ui-tab-name="车架" aria-pressed="false"'), c2.slice(0, 400));
+  ui47.writeUiState('bike', 'explore', { active: null, viewed: {}, uiKind: 'explore' });
+
+  // 4) 降级路径：不静默吞——逐条点名
+  const deg47 = (lines) => ui47.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  check('没有 id：掉回原文并点名', Boolean(deg47(['kind: explore', 'tab: 甲 | x', 'tab: 乙 | y']).includes('id')), '');
+  check('只有一面没得切：掉回原文并点名', Boolean(deg47(['kind: explore', 'id: a', 'tab: 甲 | x']).includes('至少')), '');
+  check('两面一模一样：掉回原文并点名', Boolean(deg47(['kind: explore', 'id: a', 'tab: 甲 | x', 'tab: 甲 | y']).includes('一模一样')), '');
+  check('tab 名是空的：掉回原文并点名', Boolean(deg47(['kind: explore', 'id: a', 'tab:  | x', 'tab: 乙 | y']).includes('空的')), '');
+  check('tab 名太长：掉回原文并点名',
+    Boolean(deg47(['kind: explore', 'id: a', 'tab: ' + '甲'.repeat(21) + ' | x', 'tab: 乙 | y']).includes('太长')), '');
+  check('tab 的一句话太长：掉回原文并点名',
+    Boolean(deg47(['kind: explore', 'id: a', 'tab: 甲 | ' + 'x'.repeat(81), 'tab: 乙 | y']).includes('太长')), '');
+  const nineTabs = Array.from({ length: 9 }, (_, i) => `tab: 面${i} | 第${i}面`);
+  check('超过 8 面：掉回原文并点名', Boolean(deg47(['kind: explore', 'id: a', ...nineTabs]).includes('最多')), '');
+  check('handoff 超 24 字：掉回原文并点名',
+    Boolean(deg47(['kind: explore', 'id: a', 'tab: 甲 | x', 'tab: 乙 | y', 'handoff: ' + '发'.repeat(25)]).includes('24')), '');
+
+  // 5) 宿主接线：点一面 → active/viewed 落对 + 报回（判分一个字都不发生）
+  st47.notebook = sampleNotebook();
+  st47.uiReported.clear();
+  const posts47 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const before47 = posts47();
+  compile47(bike); // 把 spec 写进 Map（宿主点击要靠 spec.tabs 换面板）
+  const r47 = handleUiDeskEvent({ target: { dataset: { uiExploreTab: 'bike', uiTabName: '车轮' } } });
+  check('点一面被接住（返回是哪一档、哪份探索）',
+    r47.handled === true && r47.kind === 'explore' && r47.id === 'bike', JSON.stringify(r47));
+  const st47a = ui47.readUiState('bike');
+  check('active 落到点的那一面、viewed 记下看过它',
+    st47a.state.active === '车轮' && st47a.state.viewed['车轮'] === true, JSON.stringify(st47a.state));
+  check('状态走 artifact-message 报回（与其它交互档同一条通道）', posts47() === before47 + 1, `posts ${before47} → ${posts47()}`);
+  const r47b = handleUiDeskEvent({ target: { dataset: { uiExploreTab: 'nope', uiTabName: '车轮' } } });
+  check('不认得的 id 点不响（没 spec 就不知道有哪几面）', r47b.handled === false, JSON.stringify(r47b));
+  const r47c = handleUiDeskEvent({ target: { dataset: { uiExploreTab: 'bike', uiTabName: '车架' } } });
+  check('再点另一面：active 换过去、viewed 追加', ui47.readUiState('bike').state.active === '车架'
+    && ui47.readUiState('bike').state.viewed['车架'] === true, JSON.stringify(ui47.readUiState('bike').state));
+  const r47d = handleUiDeskEvent({ target: { dataset: { uiExploreTab: 'bike', uiTabName: '车架' } } });
+  check('再点当前已激活的一面：保持激活不折叠（分段控件没有"全貌"可回）',
+    r47d.handled === true && ui47.readUiState('bike').state.active === '车架', JSON.stringify(ui47.readUiState('bike').state));
+
+  // 6) repaint：只换按钮态与面板（整块不重画；正文那一刷会跳滚动）
+  const exploreBlock = doc.createElement('div');
+  exploreBlock.className = 'ui-explore';
+  exploreBlock.dataset.uiExplore = 'bike';
+  const btn1 = doc.createElement('button'); btn1.className = 'ui-explore-tab'; btn1.dataset.uiTabName = '车架';
+  const btn2 = doc.createElement('button'); btn2.className = 'ui-explore-tab'; btn2.dataset.uiTabName = '车轮';
+  const pane47 = doc.createElement('div'); pane47.className = 'ui-explore-pane';
+  const hintP = doc.createElement('p'); hintP.className = 'ui-explore-pane-hint';
+  hintP.textContent = '点上面的部分，看看每一面在这件事里的角色';
+  pane47.append(hintP);
+  exploreBlock.append(btn1, btn2, pane47);
+  domRoot.append(exploreBlock);
+  handleUiDeskEvent({ target: { dataset: { uiExploreTab: 'bike', uiTabName: '车轮' } } });
+  check('repaint 把按钮激活态换过去（class + aria-pressed）',
+    btn2.classList.contains('ui-explore-active') && btn2.attributes.get('aria-pressed') === 'true'
+    && !btn1.classList.contains('ui-explore-active'), '');
+  check('repaint 只换面板内容（整块没被重画：块还在原处、按钮没被换掉）',
+    domRoot._kids.includes(exploreBlock) && pane47._kids.length === 2 && pane47._kids[0]._text === '车轮', '');
+  check('面板内容来自 spec（名字 + 角色，宿主编译时一次算好、点击时只挑）',
+    pane47._kids[0].className === 'ui-explore-pane-name' && pane47._kids[1]?.className === 'ui-explore-pane-note' && pane47._kids[1]?._text === '让车滚动', '');
+  exploreBlock.remove();
+
+  // 7) handoff：把"停在哪一面"机械地拼成话递回对话（不自动发）
+  const boxBefore47 = input47.value;
+  ui47.writeUiState('bike', 'explore', { active: '车轮', viewed: { '车架': true, '车轮': true }, uiKind: 'explore' }, { tabs: [{ name: '车架', note: 'x' }, { name: '车轮', note: 'y' }], title: '一辆七速自行车' });
+  const r47h = handleUiDeskEvent({ target: { dataset: { uiHandoff: 'bike' } } });
+  check('explore 的 handoff 被接住（返回是哪个 id）',
+    r47h.handled === true && r47h.kind === 'handoff' && r47h.id === 'bike', JSON.stringify(r47h));
+  check('拼句：我在「标题」里点开看了：车轮（不露内部 id）',
+    input47.value === '我在「一辆七速自行车」里点开看了：车轮', input47.value);
+  ui47.writeUiState('bike', 'explore', { active: null, viewed: { '车架': true }, uiKind: 'explore' }, { tabs: [{ name: '车架', note: 'x' }], title: '一辆七速自行车' });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'bike' } } });
+  check('没停在某一面但看过：照实说看过最后一面', input47.value === '我在「一辆七速自行车」里看过：车架', input47.value);
+  ui47.writeUiState('bike', 'explore', { active: null, viewed: {}, uiKind: 'explore' }, { tabs: [{ name: '车架', note: 'x' }], title: '一辆七速自行车' });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'bike' } } });
+  check('什么都没点开：照实说还没点开任何一面', input47.value === '我在「一辆七速自行车」里还没有点开任何一面', input47.value);
+  check('拼句里没有判分词（Invariant 4：话里不出对错/分数）',
+    !/score|percent|mastery|correct|incorrect|3|5/.test(input47.value), input47.value);
+  input47.value = boxBefore47;
+
+  // 8) 右栏回看卡：explore 出现在「这局动过的界面」（与 hydrate 同一条筛子）
+  st47.notebook.progress.artifact_state = { 'ui:bike': { uiKind: 'explore', active: '车轮', viewed: { '车架': true, '车轮': true } } };
+  renderPanel();
+  const card47 = deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
+  const notes47 = card47 ? deepAll(card47, 'state-note').map((n) => n.textContent) : [];
+  check('右栏卡把 explore 排进来（只出现象：看过 + 现在停在）',
+    notes47.includes('探索「bike」') && notes47.includes('· 看过：车架、车轮') && notes47.includes('· 现在停在：车轮'), notes47.join(' / '));
+
+  check('这一节无异常', errors.length === errsBefore47, errors.slice(errsBefore47).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);
