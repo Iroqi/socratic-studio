@@ -727,6 +727,19 @@ html, body {
 .ui-chart-controls input[type="range"] { min-width: 0; flex: 1 1 auto; accent-color: var(--accent); }
 .ui-chart-snap { font-family: var(--mono); font-size: 12.5px; color: var(--ink); flex: 0 0 auto; }
 
+/* chart 的数据表替代视图（第三十四轮，学 IUI 组件库里的 table——同一份数据，
+   图看形状、表查数值，读屏拿得到完整数据）。披露用原生 <details>：展开态归浏览器，
+   不引宿主状态、不新造键盘协议；底色仍是量过的 --surface-2，零新十六进制。 */
+.ui-chart-table { margin: 8px 0 0; }
+.ui-chart-table-summary { cursor: pointer; font-size: 12.5px; color: var(--accent-ink); }
+.ui-chart-table-summary:hover { color: var(--ink); }
+.ui-chart-table-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-chart-table-body { margin-top: 6px; }
+.ui-chart-table-el { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.ui-chart-table-el th, .ui-chart-table-el td { border: 1px solid var(--border-strong); padding: 4px 9px; }
+.ui-chart-table-el th { color: var(--ink-2); font-weight: 620; text-align: left; }
+.ui-chart-table-el td { color: var(--ink); font-family: var(--mono); text-align: right; }
+
 /* explore（第三十三轮，学 IUI 官方旗舰演示 "Select a system to explore its role"）：
    一个整体拆成几面，分段按钮逐面看。按钮沿 .ui-suggest-chip 那尺——底色只借量过的
    --surface-2（"底色全用量过的 surface-2"的账不许破），hover 与激活态都只换文字与描边、

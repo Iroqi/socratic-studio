@@ -3184,8 +3184,11 @@ function repaintUiDiagram(id) {
 
 /**
  * 快照切换不整块重画（整块重画会把滑杆抹掉——拖到一半被换掉，手感当场没了，和计算器
- * 同一把尺）：只换 SVG 内容与读数。SVG 是编译时**整张快照**都算好、存在 spec 里的
+ * 同一把尺）：只换 SVG 内容、读数与数据表。SVG 是编译时**整张快照**都算好、存在 spec 里的
  * （chartSnapSvg 只此一份，宿主不重算坐标——两处实现迟早漂），这里按名字挑现成那段换进去。
+ * 数据表（第三十四轮）同样编译时算好存在 spec.snaps[i].table：带 table 的快照滑块一动
+ * 表跟着换（读屏用户拿得到当前快照的完整数值）；没写 table 的图没有 .ui-chart-table-body，
+ * 这一行是空操作，不引宿主状态（<details> 展开态归浏览器，不承诺跨重画）。
  * id 是模型写的，不能拼进选择器（引号会注入）：按 class 找、再比对 dataset 值。
  */
 function repaintUiChart(id) {
@@ -3202,6 +3205,8 @@ function repaintUiChart(id) {
     }
     const readout = block.querySelector?.('.ui-chart-snap');
     if (readout) readout.textContent = snap.name;
+    const tableBody = block.querySelector?.('.ui-chart-table-body');
+    if (tableBody) tableBody.innerHTML = snap.table; // 数据表跟着快照走
   }
 }
 

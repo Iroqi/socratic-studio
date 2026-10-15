@@ -5613,7 +5613,68 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('svg 的 aria-label 换成当前快照', (svg46.attributes.get('aria-label') || '').includes('n10'), String(svg46.attributes.get('aria-label')));
   chartBlock.remove();
 
-  // 8) handoff：交互 chart 把"滑到哪张快照"机械地拼成话递回对话（不自动发）
+  // 8) 数据表替代视图（第三十四轮，学 IUI 组件库里的 table——同一份数据，图看形状、表查数值，
+  //    读屏拿得到完整数据）：table: 表名 → 图下多一张可展开的数据表（原生 <details>，键盘天然
+  //    可走，展开态归浏览器、不引宿主状态），跟着快照走。表名 ≤40 字；table 只配带 slider 的 chart。
+  //    用独立 id tbl1（clt1 被前序用例滑过，状态不许串）。
+  const tbl = ['kind: chart', 'id: tbl1', 'title: 样本量越大，均值分布越窄', 'type: bar', 'slider: 样本量',
+    'x: 区间一,区间二,区间三,区间四,区间五',
+    'snap: n5 = 0.1,0.3,0.4,0.3,0.1',
+    'snap: n10 = 0.2,0.35,0.3,0.2,0.1',
+    'snap: n30 = 0.25,0.3,0.25,0.15,0.1',
+    'table: 每个样本量的分布'];
+  ui46.writeUiState('tbl1', 'chart', { snap: 'n5', uiKind: 'chart' });
+  const ct = compile46(tbl).html;
+  check('table 长出原生 <details> 披露（summary = 表名）',
+    ct.includes('<details class="ui-chart-table"><summary class="ui-chart-table-summary">每个样本量的分布</summary>'), ct.slice(-300));
+  check('表体在披露里、整块仍归属同一张图（宿主换快照时找得到）',
+    ct.includes('<div class="ui-chart-table-body">') && ct.includes('data-ui-chart="tbl1"'), ct.slice(0, 400));
+  check('表头是 x 标签（列 = 数据点，scope=col）',
+    (ct.match(/<th scope="col">/g) || []).length === 5, ct.slice(-600));
+  check('行头是当前快照名（身份是名字不是序号，scope=row）',
+    ct.includes('<th scope="row">n5</th>'), ct.slice(-600));
+  check('格子里是当前快照的数据值（chartNum 同一套格式）',
+    ct.includes('<td>0.1</td>') && ct.includes('<td>0.4</td>'), ct.slice(-600));
+  check('表里是正在教的数据、不是学情（没有判分词）',
+    !/score|percent|mastery|progress/i.test(ct), ct.slice(-600));
+  check('没写 table 的交互图不带披露（表是模型的显式选择）', !c.includes('ui-chart-table'), '');
+  check('不带 x 标签的快照不摆空表头（列没有名字，不编"第几列"）',
+    !compile46(['kind: chart', 'id: t2', 'slider: 情形', 'snap: 甲 = 1,2', 'snap: 乙 = 9,8', 'table: 数据']).html.includes('<thead>'), '');
+  check('表名超 40 字：掉回原文并点名',
+    Boolean(deg46(['kind: chart', 'id: x10', 'slider: 样本量', 'snap: n5 = 1,2', 'snap: n10 = 3,4', 'table: ' + '表'.repeat(41)]).includes('表名')), '');
+  check('静态 chart 写 table 掉回原文（table 只配带 slider 的 chart）',
+    Boolean(deg46(['kind: chart', 'series: 收入 = 1,2,3', 'table: 数据']).includes('table')), '');
+  check('compare 写 table 掉回原文并点名（table 只配带 slider 的 chart）',
+    Boolean(deg46(['kind: compare', 'row: 甲 | 乙', 'row: 丙 | 丁', 'table: 数据']).includes('table')), '');
+  check('explore 写 table 掉回原文并点名',
+    Boolean(deg46(['kind: explore', 'id: e1', 'tab: 一 | 甲', 'tab: 二 | 乙', 'table: 数据']).includes('table')), '');
+  check('表名里的引号/尖括号转义进属性、不真长出脚本',
+    !/<script/.test(compile46(['kind: chart', 'id: t3', 'slider: 情形', 'snap: 甲 = 1,2', 'snap: 乙 = 9,8', 'table: 他说 "你好" <脚本>']).html), '');
+  check('带 table 的交互图两次编译一模一样（几何与表都由输入决定）',
+    compile46(tbl).html === ct, '');
+  ui46.writeUiState('tbl1', 'chart', { snap: 'n30', uiKind: 'chart' });
+  const ct2 = compile46(tbl).html;
+  check('重画续回快照时表也跟着（行头与数值都换到 n30）',
+    ct2.includes('<th scope="row">n30</th>') && ct2.includes('<td>0.25</td>'), ct2.slice(-600));
+  ui46.writeUiState('tbl1', 'chart', { snap: 'n5', uiKind: 'chart' });
+
+  // 9) 宿主 repaint：滑块一动，数据表跟着换（编译时整张表算好存在 spec，宿主只换现成那段；
+  //    details 节点不动，展开态归浏览器）
+  const chartBlock2 = doc.createElement('div');
+  chartBlock2.className = 'ui-chart';
+  chartBlock2.dataset.uiChart = 'tbl1';
+  const svgTb = doc.createElement('svg'); svgTb.className = 'ui-chart-svg';
+  const readoutTb = doc.createElement('output'); readoutTb.className = 'ui-chart-snap'; readoutTb.textContent = 'n5';
+  const tableBodyTb = doc.createElement('div'); tableBodyTb.className = 'ui-chart-table-body';
+  tableBodyTb._innerHTML = '<table>n5</table>';
+  chartBlock2.append(svgTb, readoutTb, tableBodyTb);
+  domRoot.append(chartBlock2);
+  handleUiDeskEvent({ target: { dataset: { uiChartSnap: 'tbl1' }, value: '2' } });
+  check('滑到 n30 后数据表内容换成 n30 的那张（只换表体，披露节点不动）',
+    tableBodyTb._innerHTML.includes('n30') && tableBodyTb._innerHTML.includes('0.25'), tableBodyTb._innerHTML.slice(0, 300));
+  chartBlock2.remove();
+
+  // 10) handoff：交互 chart 把"滑到哪张快照"机械地拼成话递回对话（不自动发）
   const boxBefore46 = input46.value;
   ui46.writeUiState('clt1', 'chart', { snap: 'n30', uiKind: 'chart' }, { snaps: [{ name: 'n5' }, { name: 'n10' }, { name: 'n30' }], slider: '样本量', title: '样本量越大，均值分布越窄' });
   const r46h = handleUiDeskEvent({ target: { dataset: { uiHandoff: 'clt1' } } });
@@ -5623,7 +5684,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     input46.value === '我在图表「样本量越大，均值分布越窄」里把「样本量」滑到了 n30', input46.value);
   input46.value = boxBefore46;
 
-  // 9) 右栏回看卡：交互 chart 出现在「这局动过的界面」（与 hydrate 同一条筛子）
+  // 11) 右栏回看卡：交互 chart 出现在「这局动过的界面」（与 hydrate 同一条筛子）
   st46.notebook.progress.artifact_state = { 'ui:clt1': { uiKind: 'chart', snap: 'n30' } };
   renderPanel();
   const card46 = deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
