@@ -1668,6 +1668,36 @@ IUI 官方博文「How Intelligent UI works」（GPT-6 for everyone，2026-10-07
 零假绿。样式零新十六进制：披露与表格只借已量过的 token（`--accent-ink` 字、`--ink` 数值等宽、
 `--border-strong` 边框、底透明跟着 `--surface-2` 走）。详细判决在 `docs/iteration-2026-10-15.md`。
 
+### 选一个选择、看会发生什么：```ui 那一档加了 game（2026-10-17 第三十五轮）
+
+IUI 官方博文「Create interactive experiences just by asking」把工具三件套摆齐了：**calculators、
+bill splitters、and games**——"a game you can play in the conversation"。calculator 第二十七轮
+已借、bill splitter 两轮书面否决，**game 是组件库围栏那一轮最后一个没收口、也没有书面理由否决的
+头条机制**。旗舰学习演示蒙提霍尔给出可落地的形态。第三十五轮把那一格补上——内联围栏新增 `game` 档：
+
+- 围栏：`kind: game` + `id:`（必填）+ `try: 选项`（2–6 个、名字是身份、不能重复、≤20 字）+
+  `outcome: 选项 = 结果`（每个选项恰一条、名字与 try 一一对应、结果 ≤80 字）+ 可选 `title` / `handoff`。
+- 一排真实 `<button>` + 一个结果面板：学习者点一个选项，那个选择的结果就换上来（aria-pressed 报
+  激活、aria-live 把结果读给读屏）——"先试一步、看到结果，再和老师讨论为什么"。默认（没试过）
+  面板是中性引导，不替学习者声称试过哪个。
+- 状态 `{last, tried}` 沿 explore 的 {active, viewed} 一族：last 是"现在停在哪个结果"、tried 是
+  "试过哪些"——都是学情态，下一轮模型读得到；**结果只写现象**（"主持人打开另一扇门：门后是羊；
+  换到剩下的那扇门，是车"），不写判词；判分仍是模型的活（Invariant 4 一条不破）。
+- 与其它交互档同一套管道：点击 → 状态 + `artifact-message` 报回 → 右栏回看卡"试过 / 现在停在"；
+  handoff 把"我在「标题」里试了「选门2」"拼成话递回对话（填框不发）。
+- 降级逐条点名：无 id / 一个选项 / 七个选项 / 空名 / 名太长 / 名不合法 / 重名 / outcome 没写
+  等号 / 名字对不上 try / 结果为空 / 结果太长 / 同选项两条结果 / 有选项没配结果 / handoff 超
+  24 字 / game 里写 table / **try / outcome 写在其它八档**（与 table 同一把尺），全掉回原文。
+- 与 calculator / 带 slider 的 chart / explore 的分工：有公式、参数连续变化 → calculator；
+  形状随一个量变 → 带 slider 的 chart；离散的情形选择、结果是模型写的情形 → game；
+  只是换一面看介绍（没有后果）→ explore。
+
+行为 55 项加在 web-smoke §48，契约 374 项（data-\* 名单 14 → 17：`ui-game` / `ui-game-try` /
+`ui-try-name`；`UI_STATEFUL` 五档 → 六档），10 枚变异各验过红、零假绿。样式零新十六进制：
+按钮与面板沿 explore 一族，底色只借 `--surface-2`、激活只换文字与描边。顺手修正两处过期表述：
+硬规矩"七条"→"九条"（第三十三轮漏改）、`title` 行补 explore / game。详细判决在
+`docs/iteration-2026-10-17.md`。
+
 ## 已知边界
 
 - **没有音频旁白（TTS）。** 原版的 `narration.py` + 时间轴那一整套没搬，需要先做完整套件才能支持。

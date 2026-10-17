@@ -22,7 +22,7 @@
 import { escapeHtml } from './escape.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'explore', 'chart', 'suggest'];
+export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -40,7 +40,7 @@ export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'met
  * "滑到哪张快照"就是状态（没写 slider 的静态 chart 不进这一档，也不写 id）。
  * explore 第三十三轮："点开看了哪一面"就是状态（一个整体拆成几面，分段按钮逐面看）。
  */
-export const UI_STATEFUL = ['checklist', 'calculator', 'diagram', 'chart', 'explore'];
+export const UI_STATEFUL = ['checklist', 'calculator', 'diagram', 'chart', 'explore', 'game'];
 
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
@@ -213,6 +213,7 @@ function inlineSafe(text) {
 function compileCompare(fields, lines) {
   if (pick(fields, 'handoff').length) return { error: 'compare 这一档没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (gameWords(fields)) return { error: GAME_ONLY };
   const rows = pick(fields, 'row');
   if (rows.length < 2) return { error: '并排对照至少两行' };
   const grid = rows.map((r) => r.split('|').map((c) => c.trim()));
@@ -241,6 +242,7 @@ function compileCompare(fields, lines) {
 function compileSteps(fields, lines) {
   if (pick(fields, 'handoff').length) return { error: 'steps 这一档没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (gameWords(fields)) return { error: GAME_ONLY };
   const items = pick(fields, 'step');
   if (items.length < 1) return { error: '没有一行 step' };
   const title = pick(fields, 'title')[0] || '';
@@ -267,6 +269,7 @@ function compileChecklist(fields) {
   const id = pick(fields, 'id')[0];
   if (!id) return { error: '这份清单没有 id：勾选态没地方续' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (gameWords(fields)) return { error: GAME_ONLY };
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
   const items = pick(fields, 'item').map((s) => s.trim());
@@ -308,6 +311,7 @@ function compileCalculator(fields, lines, partial) {
   const id = pick(fields, 'id')[0];
   if (!id) return { error: '这个计算器没有 id：滑到的值没地方续' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (gameWords(fields)) return { error: GAME_ONLY };
   const params = [];
   for (const p of pick(fields, 'param')) {
     const parts = p.split('|').map((s) => s.trim());
@@ -450,6 +454,7 @@ function compileDiagram(fields) {
   const id = pick(fields, 'id')[0] || '';
   if (!id) return { error: '这个图没有 id：谁点了谁没有地方记' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (gameWords(fields)) return { error: GAME_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -634,10 +639,29 @@ const EXPLORE_MAX_TABS = 8;
 const EXPLORE_NAME_MAX = 20;
 const EXPLORE_NOTE_MAX = 80;
 
+/**
+ * game（第三十五轮，学 IUI 的"a game you can play in the conversation"——旗舰演示
+ * 蒙提霍尔那一手）：`try: 选项`（2–6 个）+ `outcome: 选项 = 结果`（每个选项恰一条）
+ * + `id:`。一排真实按钮 + 一个结果面板：学习者点一个选项，那个选择的结果换上来——
+ * 先试一步、看到结果，再和老师讨论为什么。结果只写现象（选了之后发生什么），
+ * 不写判词；状态只记 {last, tried}（试到哪、试过哪些，沿 explore 的 {active, viewed} 一族）。
+ */
+const GAME_MIN_TRIES = 2;
+const GAME_MAX_TRIES = 6;
+const GAME_TRY_MAX = 20;
+const GAME_OUTCOME_MAX = 80;
+
+/** game 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table 同一把尺）。 */
+function gameWords(fields) {
+  return pick(fields, 'try').length > 0 || pick(fields, 'outcome').length > 0;
+}
+const GAME_ONLY = 'try / outcome 只配带 id 的 game（选一个选项看会发生什么，别的档没有"试"这回事）';
+
 function compileExplore(fields) {
   const id = pick(fields, 'id')[0];
   if (!id) return { error: '这个探索没有 id：点开哪一面没有地方续' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (gameWords(fields)) return { error: GAME_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -690,6 +714,95 @@ function compileExplore(fields) {
 }
 
 /**
+ * game（第三十五轮，学 IUI 的 "Create interactive experiences just by asking: …
+ * a game you can play in the conversation"——旗舰学习演示蒙提霍尔那一手）：
+ * `try: 选项`（2–6 个、名字是身份、不能重复）+ `outcome: 选项 = 结果`（每个选项恰一条）
+ * + `id:`（必填）+ 可选 `title` / `handoff`。
+ *
+ * 它是"选一个选择、看会发生什么"的实验：一排真实按钮 + 一个结果面板，学习者点一个、
+ * 那个选择的结果就换上来。**结果只写现象**（选了之后发生什么：主持人打开 3 号门、换到
+ * 2 号门是车），不写判词（对 / 错 / 答对 / 得分）——判分是模型的活，界面里没有数值化学情
+ * （Invariant 4）。状态 {last, tried} 沿 explore 的 {active, viewed} 一族：last 是"现在
+ * 停在哪个结果"，tried 是"试过哪些"——都是学情态，下一轮模型读得到，判分仍不在这儿发生。
+ *
+ * 与 calculator / 带 slider 的 chart 的分工：有公式、参数连续变化 → calculator；
+ * 形状随一个量变 → 带 slider 的 chart；**选项是离散的情形选择、结果是模型写的情形** →
+ * game。与 explore 的分工：面没有后果、选择有结果 → explore 是换一面看介绍，game 是
+ * 试一步看会发生什么。
+ */
+function compileGame(fields) {
+  const id = pick(fields, 'id')[0];
+  if (!id) return { error: '这个游戏没有 id：试到哪一步没有地方续' };
+  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  const title = pick(fields, 'title')[0] || '';
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
+
+  const tries = [];
+  for (const raw of pick(fields, 'try')) {
+    const name = raw.trim();
+    if (!name) return { error: '有空的 try 名' };
+    if (name.length > GAME_TRY_MAX) return { error: `try 名太长了（≤${GAME_TRY_MAX} 字）` };
+    if (!UI_IDENT.test(name)) return { error: `「${name}」不合法（字母/汉字起头，中间不许空格与 * + |）` };
+    if (tries.some((t) => t.name === name)) return { error: `「${name}」写了两遍：同一个选择，结果却要跟着谁走` };
+    tries.push({ name });
+  }
+  if (tries.length < GAME_MIN_TRIES) return { error: `至少 ${GAME_MIN_TRIES} 个选项（一个没得选）` };
+  if (tries.length > GAME_MAX_TRIES) return { error: `选项太多了（最多 ${GAME_MAX_TRIES} 个，多了是菜单不是实验）` };
+
+  // outcome：每个选项恰一条，名字必须与 try 完全一致（身份是名字）。
+  const outcomes = {};
+  for (const raw of pick(fields, 'outcome')) {
+    const eq = raw.indexOf('=');
+    if (eq < 0) return { error: 'outcome 要写成「选项 = 结果」' };
+    const name = raw.slice(0, eq).trim();
+    const text = raw.slice(eq + 1).trim();
+    if (!name) return { error: 'outcome 的名字是空的' };
+    if (!text) return { error: `「${name}」的结果是空的` };
+    if (text.length > GAME_OUTCOME_MAX) return { error: `「${name}」的结果太长了（≤${GAME_OUTCOME_MAX} 字）` };
+    if (!tries.some((t) => t.name === name)) return { error: `outcome 的「${name}」不在 try 里（每个结果都要对得上一个选择）` };
+    if (outcomes[name]) return { error: `「${name}」写了两条结果：一个选择只有一个结果` };
+    outcomes[name] = text;
+  }
+  for (const t of tries) {
+    if (!outcomes[t.name]) return { error: `「${t.name}」没有配 outcome：选了没结果，点了没反应` };
+  }
+
+  // 状态从宿主侧续：上次试到谁，重画就把谁带回来；tried 是学情态，下一轮读给模型。
+  // spec 存 tries 与 title：repaint 与 handoff 都要在点击发生时取现成的那份，不重新解析围栏。
+  const stored = readUiState(id)?.state || {};
+  const last = stored.last || null;
+  const spec = { tries: tries.map((t) => ({ name: t.name, outcome: outcomes[t.name] })), title };
+  writeUiState(id, 'game', stored, spec);
+
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const groupAria = title
+    ? `游戏「${title}」：选一个选项，看会发生什么`
+    : '选一个选项，看会发生什么';
+  const tryEls = spec.tries
+    .map((t) => {
+      const on = t.name === last;
+      return (
+        `<button type="button" class="ui-game-try${on ? ' ui-game-active' : ''}" ` +
+        `data-ui-game-try="${escapeHtml(id)}" data-ui-try-name="${escapeHtml(t.name)}" ` +
+        `aria-pressed="${on ? 'true' : 'false'}">${cell(t.name)}</button>`
+      );
+    })
+    .join('');
+  const hit = last ? spec.tries.find((t) => t.name === last) : null;
+  const pane = hit
+    ? `<p class="ui-game-pane-name">${cell(hit.name)}</p>` +
+      `<p class="ui-game-pane-outcome">${cell(hit.outcome)}</p>`
+    : `<p class="ui-game-pane-hint">选一个选项，看会发生什么</p>`;
+  const body =
+    `<div class="ui-game" data-ui-game="${escapeHtml(id)}">` +
+    `<div class="ui-game-tries" role="group" aria-label="${escapeHtml(groupAria)}">${tryEls}</div>` +
+    `<div class="ui-game-pane" aria-live="polite">${pane}</div>` +
+    `</div>`;
+  return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'game' };
+}
+
+/**
  * suggest：`pick: 一句短话`（1–3 行）。回答末尾的"往哪走"分支条。
  *
  * 为什么它不进 UI_STATEFUL：点一条只是把那句话填进输入框，学习者没有在这一档里"留下"
@@ -710,6 +823,7 @@ function compileSuggest(fields) {
     return { error: 'suggest 这一档自己就是把话递回输入框的出口，不要再写 handoff' };
   }
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (gameWords(fields)) return { error: GAME_ONLY };
   const picks = pick(fields, 'pick').map((s) => s.trim()).filter(Boolean);
   if (!picks.length) return { error: '至少写一行 pick（一句想让学习者接着问的话）' };
   if (picks.length > SUGGEST_MAX) return { error: `最多 ${SUGGEST_MAX} 个分支（多了就是菜单，不是建议）` };
@@ -794,6 +908,7 @@ function compileChart(fields) {
   if (type !== 'bar' && type !== 'line') return { error: 'type 只认 bar 或 line' };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
+  if (gameWords(fields)) return { error: GAME_ONLY };
   if (pick(fields, 'slider').length) return compileInteractiveChart(fields, { type, title, handoff });
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (handoff.length) {
@@ -1048,7 +1163,7 @@ function chartSnapTable(snap, xLabels) {
   return `<table class="ui-chart-table-el">${head}<tbody>${row}</tbody></table>`;
 }
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame };
 
 /**
  * 编译器入口。partial = 这一段还在流里长（围栏未闭合）。

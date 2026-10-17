@@ -3008,6 +3008,14 @@ function handoffUiState(id) {
       : viewed.length
         ? `我在「${name}」里看过：${viewed[viewed.length - 1]}`
         : `我在「${name}」里还没有点开任何一面`;
+  } else if (kind === 'game') {
+    const last = rec.state?.last;
+    const tried = Object.keys(rec.state?.tried || {}).filter((k) => rec.state.tried[k]);
+    text = last
+      ? `我在「${name}」里试了「${last}」`
+      : tried.length
+        ? `我在「${name}」里试过：${tried[tried.length - 1]}`
+        : `我在「${name}」里还没有试过任何选项`;
   } else {
     return false;
   }
@@ -3109,6 +3117,25 @@ function handleUiDeskEvent(evt) {
     repaintUiExplore(exploreId);
     forwardArtifactMessage({ type: 'state', state }, uiStateKey(exploreId));
     return { handled: true, kind: 'explore', id: exploreId };
+  }
+
+  // game（第三十五轮，学 IUI 的"对话里能玩的游戏"——蒙提霍尔那一手）：点一个选项 =
+  // 学习者试这一步、看到那个选择的结果。last 是"现在停在哪个结果"，tried 是"试过哪些"——
+  // 都是学情态，下一轮模型读得到；判分一个字都不在这儿发生（结果是对象的情形，不是学情）。
+  const gameId = node.dataset?.uiGameTry;
+  if (gameId) {
+    const name = node.dataset?.uiTryName;
+    if (!name) return { handled: false };
+    const rec = readUiState(gameId);
+    if (!rec?.spec) return { handled: false };
+    if (!rec.spec.tries.some((t) => t.name === name)) return { handled: false };
+    const tried = { ...(rec.state?.tried || {}) };
+    tried[name] = true;
+    const state = { ...rec.state, last: name, tried, uiKind: 'game' };
+    setUiValues(gameId, 'game', state);
+    repaintUiGame(gameId);
+    forwardArtifactMessage({ type: 'state', state }, uiStateKey(gameId));
+    return { handled: true, kind: 'game', id: gameId };
   }
 
   // diagram 的节点是 <g> 不是 input：点击落在 rect/text 上，dataset 在 g 上，
@@ -3238,6 +3265,39 @@ function repaintUiExplore(id) {
         if (tab.note) pane.append(el('p', 'ui-explore-pane-note', tab.note));
       } else {
         pane.append(el('p', 'ui-explore-pane-hint', '点上面的部分，看看每一面在这件事里的角色'));
+      }
+    }
+  }
+}
+
+/**
+ * game（第三十五轮）：点选项不整块重画（与 explore 同一把尺——正文那一刷会跳滚动）。
+ * 只换按钮激活态（class + aria-pressed）与结果面板：面板内容从 spec.tries 里挑现成的
+ * （编译时一次算好，宿主不重新解析围栏——两处实现迟早漂）。
+ * id 是模型写的，不能拼进选择器（引号会注入）：按 class 找、再比对 dataset 值。
+ */
+function repaintUiGame(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return;
+  const last = rec.state?.last || null;
+  const blocks = [...(document.querySelectorAll?.('.ui-game') || [])].filter((n) => n.dataset?.uiGame === id);
+  for (const block of blocks) {
+    const buttons = [...(block.querySelectorAll?.('.ui-game-try') || [])];
+    for (const btn of buttons) {
+      const name = btn.dataset?.uiTryName;
+      const on = name === last;
+      btn.classList?.toggle?.('ui-game-active', on);
+      btn.setAttribute?.('aria-pressed', on ? 'true' : 'false');
+    }
+    const pane = block.querySelector?.('.ui-game-pane');
+    if (pane) {
+      pane.innerHTML = '';
+      const hit = last ? rec.spec.tries.find((t) => t.name === last) : null;
+      if (hit) {
+        pane.append(el('p', 'ui-game-pane-name', hit.name));
+        pane.append(el('p', 'ui-game-pane-outcome', hit.outcome));
+      } else {
+        pane.append(el('p', 'ui-game-pane-hint', '选一个选项，看会发生什么'));
       }
     }
   }
@@ -3618,7 +3678,7 @@ function renderLearnPanel(body) {
  * 勾了哪几项、参数滑到哪、图解里看过谁，都只在正文里一闪而过。这里把它们从
  * progress.artifact_state 的 ui:* 键里捞出来，排成一张只读回看卡（跨回合、跨刷新都在，
  * 因为盘上是权威；与 hydrateUiState 同一条筛子：前缀 + UI_STATEFUL）。
- * Invariant 4 边界：只出现象（勾了/滑到/看过/停在），不出数字、不出对错——已勾原文
+ * Invariant 4 边界：只出现象（勾了/滑到/看过/停在/试过），不出数字、不出对错——已勾原文
  * 照实列出，但绝不写"3/5"这种完成度；没有 ui:* 就不摆卡（没有就不打扰）。
  */
 function renderUiStatePanel(body) {
@@ -3628,7 +3688,7 @@ function renderUiStatePanel(body) {
   );
   if (!entries.length) return;
   const fit = (s) => { const t = String(s); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
-  const word = { checklist: '清单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索' };
+  const word = { checklist: '清单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏' };
   const card = el('div', 'ui-state-card');
   card.append(el('div', 'panel-section-title', '这局动过的界面'));
   for (const [key, s] of entries) {
@@ -3657,6 +3717,11 @@ function renderUiStatePanel(body) {
       if (viewed.length) card.append(el('div', 'state-note', `· 看过：${viewed.map(fit).join('、')}`));
       if (s.active) card.append(el('div', 'state-note', `· 现在停在：${fit(s.active)}`));
       if (!viewed.length && !s.active) card.append(el('div', 'state-note', '· 还没点过'));
+    } else if (s.uiKind === 'game') {
+      const tried = Object.keys(s.tried || {});
+      if (tried.length) card.append(el('div', 'state-note', `· 试过：${tried.map(fit).join('、')}`));
+      if (s.last) card.append(el('div', 'state-note', `· 现在停在：${fit(s.last)}`));
+      if (!tried.length && !s.last) card.append(el('div', 'state-note', '· 还没试过'));
     }
   }
   body.append(card);
@@ -5833,6 +5898,7 @@ export const __hooks = {
   repaintUiDiagram,
   repaintUiChart,
   repaintUiExplore,
+  repaintUiGame,
   reportUiDegraded,
   hydrateUiState,
   applyUiMode,

@@ -5835,6 +5835,188 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore47, errors.slice(errsBefore47).join(' | '));
 }
 
+// ─── 48. game：选一个选项、看会发生什么（第三十五轮，学 IUI 的
+// "a game you can play in the conversation"——旗舰学习演示蒙提霍尔那一手）。
+// game 是第六交互档：id 必填、try 2–6 个、每个 try 恰一条 outcome（名字一一对应）、
+// 状态 {last, tried} 落盘续回、handoff 拼句、右栏回看卡可见；结果只写现象、不写判词，
+// 界面里没有数值化学情（Invariant 4 一条不破）。
+{
+  console.log('\n48. game（选一个选项、看会发生什么：蒙提霍尔式交互实验）');
+  const errsBefore48 = errors.length;
+  const ui48 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { state: st48, handleUiDeskEvent, renderPanel } = appModule.__hooks;
+  const compile48 = (lines, partial) => ui48.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  ui48.resetUiState();
+  const input48 = doc.getElementById('input');
+  const mh = ['kind: game', 'id: mh1', 'title: 蒙提霍尔',
+    'try: 选门1',
+    'try: 选门2',
+    'outcome: 选门1 = 主持人打开另一扇门：门后是羊；换到剩下的那扇门，是车',
+    'outcome: 选门2 = 主持人打开另一扇门：门后是羊；换到剩下的那扇门，是羊',
+    'handoff: 把这个选择带回去问'];
+
+  // 1) 编译形状：一排选项按钮 + 结果面板 + 归属 id + 默认引导（没试过就照实说）
+  const c = compile48(mh).html;
+  check('两个选项按钮（真实 button + type=button，键盘天然可走）',
+    (c.match(/<button type="button" class="ui-game-try/g) || []).length === 2, c.slice(0, 400));
+  check('每个按钮带着归属 id 与那个选项的名字',
+    c.includes('data-ui-game-try="mh1"') && c.includes('data-ui-try-name="选门1"'), c.slice(0, 400));
+  check('整块带着归属 id（重画/续状态能找到这份实验）',
+    c.includes('<div class="ui-game" data-ui-game="mh1"'), c.slice(0, 200));
+  check('默认没有任何选项被激活（没试过就照实说，aria-pressed 全 false）',
+    !c.includes('ui-game-active') && c.includes('aria-pressed="false"'), c.slice(0, 400));
+  check('默认面板是中性引导（不替学习者声称他试过哪个）',
+    c.includes('ui-game-pane-hint') && c.includes('选一个选项'), c.slice(-300));
+  check('面板带 aria-live（点一下，读屏把那个选择的结果读出来）',
+    c.includes('class="ui-game-pane" aria-live="polite"'), c.slice(0, 300));
+  check('分组带读屏名（role=group + 标题）',
+    c.includes('role="group"') && c.includes('游戏「蒙提霍尔」：选一个选项'), c.slice(0, 300));
+  check('title 帽 + handoff 按钮（沿交互档的既有出口）',
+    c.includes('ui-cap') && c.includes('class="ui-handoff" data-ui-handoff="mh1"'), c.slice(-300));
+  check('编译输出没有判分词（Invariant 4：结果只写现象，没对错、没得分；选项名里的门号是现象不是学情）',
+    !/score|percent|mastery|correct|incorrect/i.test(c), c.slice(0, 400));
+  const mh2c = compile48(['kind: game', 'id: mh2', 'try: 门1', 'try: 门2',
+    'outcome: 门1 = 主持人打开 3 号门，换到 2 号门是车',
+    'outcome: 门2 = 主持人打开 3 号门，换到 1 号门是羊']);
+  check('结果里的数字照常进得去（门号是现象不是学情：数字的线画在学情那边）',
+    Boolean(ui48.readUiState('mh2')?.spec?.tries.find((t) => t.name === '门1')?.outcome.includes('打开 3 号门')),
+    JSON.stringify(ui48.readUiState('mh2')?.spec?.tries));
+  ui48.resetUiState();
+
+  // 2) 确定性：同一份输入两次编译一模一样（状态没动过，不许跳）
+  check('game 两次编译一模一样', compile48(mh).html === c, '');
+
+  // 3) 状态续回：上次试到选门2、试过选门1 和选门2，重画就都带回来
+  ui48.writeUiState('mh1', 'game', { last: '选门2', tried: { '选门1': true, '选门2': true }, uiKind: 'game' });
+  const c2 = compile48(mh).html;
+  check('重画续回上次试的那个选项（按钮激活 + aria-pressed=true）',
+    c2.includes('ui-game-active') && c2.includes('data-ui-try-name="选门2" aria-pressed="true"'), c2.slice(0, 400));
+  check('面板换回那个选择的名字与结果',
+    c2.includes('<p class="ui-game-pane-name">选门2</p>') && c2.includes('ui-game-pane-outcome'), c2.slice(-300));
+  check('其它选项没有被激活', c2.includes('data-ui-try-name="选门1" aria-pressed="false"'), c2.slice(0, 400));
+  ui48.writeUiState('mh1', 'game', { last: null, tried: {}, uiKind: 'game' });
+
+  // 4) 降级路径：不静默吞——逐条点名
+  const deg48 = (lines) => ui48.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  check('没有 id：掉回原文并点名', Boolean(deg48(['kind: game', 'try: 甲', 'try: 乙', 'outcome: 甲 = x', 'outcome: 乙 = y']).includes('id')), '');
+  check('只有一个选项没得选：掉回原文并点名', Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'outcome: 甲 = x']).includes('至少')), '');
+  const sevenTries48 = ['kind: game', 'id: a', ...Array.from({ length: 7 }, (_, i) => `try: 选${i}`), ...Array.from({ length: 7 }, (_, i) => `outcome: 选${i} = 第${i}种结果`)];
+  check('超过 6 个选项：掉回原文并点名', Boolean(deg48(sevenTries48).includes('最多')), '');
+  check('try 行写坏（空值）：掉回原文并点名', Boolean(deg48(['kind: game', 'id: a', 'try:  ', 'try: 乙', 'outcome: 乙 = y']).includes('字段: 值')), '');
+  check('try 名太长：掉回原文并点名',
+    Boolean(deg48(['kind: game', 'id: a', 'try: ' + '甲'.repeat(21), 'try: 乙', 'outcome: 乙 = y']).includes('太长')), '');
+  check('try 名不合法（中间有空格）：掉回原文并点名',
+    Boolean(deg48(['kind: game', 'id: a', 'try: 选 门1', 'try: 乙', 'outcome: 乙 = y']).includes('不合法')), '');
+  check('两个选项一模一样：掉回原文并点名',
+    Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 甲', 'outcome: 甲 = x']).includes('两遍')), '');
+  check('outcome 没有等号：掉回原文并点名', Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 没等号']).includes('「选项 = 结果」')), '');
+  check('outcome 的名字不在 try 里：掉回原文并点名',
+    Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 丙 = x']).includes('不在 try 里')), '');
+  check('outcome 的结果是空的：掉回原文并点名',
+    Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 甲 = ', 'outcome: 乙 = y']).includes('结果是空的')), '');
+  check('outcome 的结果太长：掉回原文并点名',
+    Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 甲 = ' + 'x'.repeat(81), 'outcome: 乙 = y']).includes('太长')), '');
+  check('同一选项写了两条结果：掉回原文并点名',
+    Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 甲 = x', 'outcome: 甲 = z', 'outcome: 乙 = y']).includes('两条结果')), '');
+  check('有选项没配 outcome：掉回原文并点名',
+    Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 甲 = x']).includes('没有配 outcome')), '');
+  check('game 里写 table：掉回原文并点名', Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 甲 = x', 'outcome: 乙 = y', 'table: 一张表']).includes('table 只配带 slider')), '');
+  check('handoff 超 24 字：掉回原文并点名',
+    Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 甲 = x', 'outcome: 乙 = y', 'handoff: ' + '发'.repeat(25)]).includes('24')), '');
+  check('try 写在 compare：掉回原文并点名',
+    Boolean(deg48(['kind: compare', 'row: 甲 | 乙', 'try: 丙']).includes('只配带 id 的 game')), '');
+  check('try 写在 steps：掉回原文并点名',
+    Boolean(deg48(['kind: steps', 'step: 一步', 'try: 丙']).includes('只配带 id 的 game')), '');
+  check('outcome 写在 checklist：掉回原文并点名',
+    Boolean(deg48(['kind: checklist', 'id: a', 'item: 一项', 'outcome: 甲 = x']).includes('只配带 id 的 game')), '');
+  check('outcome 写在 calculator：掉回原文并点名',
+    Boolean(deg48(['kind: calculator', 'id: a', 'param: 人数 | 5', 'formula: 总量 = 人数 * 2', 'outcome: 甲 = x']).includes('只配带 id 的 game')), '');
+  check('try 写在 diagram：掉回原文并点名',
+    Boolean(deg48(['kind: diagram', 'id: a', 'node: 甲 | x', 'node: 乙 | y', 'edge: 甲 -> 乙', 'try: 丙']).includes('只配带 id 的 game')), '');
+  check('try 写在 explore：掉回原文并点名',
+    Boolean(deg48(['kind: explore', 'id: a', 'tab: 甲 | x', 'tab: 乙 | y', 'try: 丙']).includes('只配带 id 的 game')), '');
+  check('outcome 写在 suggest：掉回原文并点名',
+    Boolean(deg48(['kind: suggest', 'pick: 接着问', 'outcome: 甲 = x']).includes('只配带 id 的 game')), '');
+  check('try 写在静态 chart：掉回原文并点名',
+    Boolean(deg48(['kind: chart', 'series: a = 1,2', 'try: 丙']).includes('只配带 id 的 game')), '');
+  check('try 写在带 slider 的 chart：掉回原文并点名',
+    Boolean(deg48(['kind: chart', 'series: a = 1,2', 'id: c1', 'slider: 样本量', 'snap: n5 = 1,2', 'snap: n30 = 3,4', 'try: 丙']).includes('只配带 id 的 game')), '');
+
+  // 5) 宿主接线：点一个选项 → last/tried 落对 + 报回（判分一个字都不发生）
+  st48.notebook = sampleNotebook();
+  st48.uiReported.clear();
+  const posts48 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const before48 = posts48();
+  compile48(mh); // 把 spec 写进 Map（宿主点击要靠 spec.tries 换面板）
+  const r48 = handleUiDeskEvent({ target: { dataset: { uiGameTry: 'mh1', uiTryName: '选门2' } } });
+  check('点一个选项被接住（返回是哪一档、哪份实验）',
+    r48.handled === true && r48.kind === 'game' && r48.id === 'mh1', JSON.stringify(r48));
+  const st48a = ui48.readUiState('mh1');
+  check('last 落到试的那个选项、tried 记下试过它',
+    st48a.state.last === '选门2' && st48a.state.tried['选门2'] === true, JSON.stringify(st48a.state));
+  check('状态走 artifact-message 报回（与其它交互档同一条通道）', posts48() === before48 + 1, `posts ${before48} → ${posts48()}`);
+  check('状态里没有判分的位置（报回来的只有试到哪/试过哪，没有对错分数）',
+    !/correct|incorrect|score|result/.test(JSON.stringify(st48a.state)), JSON.stringify(st48a.state));
+  const r48b = handleUiDeskEvent({ target: { dataset: { uiGameTry: 'nope', uiTryName: '选门2' } } });
+  check('不认得的 id 点不响（没 spec 就不知道有哪几个选项）', r48b.handled === false, JSON.stringify(r48b));
+  const r48c = handleUiDeskEvent({ target: { dataset: { uiGameTry: 'mh1', uiTryName: '选门1' } } });
+  check('再点另一选项：last 换过去、tried 追加', ui48.readUiState('mh1').state.last === '选门1'
+    && ui48.readUiState('mh1').state.tried['选门1'] === true, JSON.stringify(ui48.readUiState('mh1').state));
+  const r48d = handleUiDeskEvent({ target: { dataset: { uiGameTry: 'mh1', uiTryName: '没有这个选项' } } });
+  check('名字不在 spec 里的选项点不响', r48d.handled === false, JSON.stringify(r48d));
+
+  // 6) repaint：只换按钮态与面板（整块不重画；正文那一刷会跳滚动）
+  const gameBlock = doc.createElement('div');
+  gameBlock.className = 'ui-game';
+  gameBlock.dataset.uiGame = 'mh1';
+  const gbtn1 = doc.createElement('button'); gbtn1.className = 'ui-game-try'; gbtn1.dataset.uiTryName = '选门1';
+  const gbtn2 = doc.createElement('button'); gbtn2.className = 'ui-game-try'; gbtn2.dataset.uiTryName = '选门2';
+  const pane48 = doc.createElement('div'); pane48.className = 'ui-game-pane';
+  const hint48 = doc.createElement('p'); hint48.className = 'ui-game-pane-hint';
+  hint48.textContent = '选一个选项，看会发生什么';
+  pane48.append(hint48);
+  gameBlock.append(gbtn1, gbtn2, pane48);
+  domRoot.append(gameBlock);
+  handleUiDeskEvent({ target: { dataset: { uiGameTry: 'mh1', uiTryName: '选门2' } } });
+  check('repaint 把按钮激活态换过去（class + aria-pressed）',
+    gbtn2.classList.contains('ui-game-active') && gbtn2.attributes.get('aria-pressed') === 'true'
+    && !gbtn1.classList.contains('ui-game-active'), '');
+  check('repaint 只换面板内容（整块没被重画：块还在原处、按钮没被换掉）',
+    domRoot._kids.includes(gameBlock) && pane48._kids.length === 2 && pane48._kids[0]._text === '选门2', '');
+  check('面板内容来自 spec（选项名 + 结果，宿主编译时一次算好、点击时只挑）',
+    pane48._kids[0].className === 'ui-game-pane-name' && pane48._kids[1]?.className === 'ui-game-pane-outcome'
+    && pane48._kids[1]?._text.includes('主持人打开另一扇门'), '');
+  gameBlock.remove();
+
+  // 7) handoff：把"试到哪"机械地拼成话递回对话（不自动发）
+  const boxBefore48 = input48.value;
+  ui48.writeUiState('mh1', 'game', { last: '选门2', tried: { '选门1': true, '选门2': true }, uiKind: 'game' }, { tries: [{ name: '选门1', outcome: 'x' }, { name: '选门2', outcome: 'y' }], title: '蒙提霍尔' });
+  const r48h = handleUiDeskEvent({ target: { dataset: { uiHandoff: 'mh1' } } });
+  check('game 的 handoff 被接住（返回是哪个 id）',
+    r48h.handled === true && r48h.kind === 'handoff' && r48h.id === 'mh1', JSON.stringify(r48h));
+  check('拼句：我在「标题」里试了「选门2」（不露内部 id）',
+    input48.value === '我在「蒙提霍尔」里试了「选门2」', input48.value);
+  ui48.writeUiState('mh1', 'game', { last: null, tried: { '选门1': true }, uiKind: 'game' }, { tries: [{ name: '选门1', outcome: 'x' }], title: '蒙提霍尔' });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'mh1' } } });
+  check('没停在某个结果但试过：照实说试过最后那个', input48.value === '我在「蒙提霍尔」里试过：选门1', input48.value);
+  ui48.writeUiState('mh1', 'game', { last: null, tried: {}, uiKind: 'game' }, { tries: [{ name: '选门1', outcome: 'x' }], title: '蒙提霍尔' });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'mh1' } } });
+  check('什么都没试：照实说还没试过任何选项', input48.value === '我在「蒙提霍尔」里还没有试过任何选项', input48.value);
+  check('拼句里没有判分词（Invariant 4：话里不出对错/分数）',
+    !/score|percent|mastery|correct|incorrect/.test(input48.value), input48.value);
+  input48.value = boxBefore48;
+
+  // 8) 右栏回看卡：game 出现在「这局动过的界面」（与 hydrate 同一条筛子）
+  st48.notebook.progress.artifact_state = { 'ui:mh1': { uiKind: 'game', last: '选门2', tried: { '选门1': true, '选门2': true } } };
+  renderPanel();
+  const card48 = deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
+  const notes48 = card48 ? deepAll(card48, 'state-note').map((n) => n.textContent) : [];
+  check('右栏卡把 game 排进来（只出现象：试过 + 现在停在）',
+    notes48.includes('游戏「mh1」') && notes48.includes('· 试过：选门1、选门2') && notes48.includes('· 现在停在：选门2'), notes48.join(' / '));
+
+  check('这一节无异常', errors.length === errsBefore48, errors.slice(errsBefore48).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

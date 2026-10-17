@@ -1268,7 +1268,7 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
   // 3) data-* 那根线：编译器写进 HTML 的名字 ↔ 宿主读的名字（错一位就回收不上状态）
   const emittedAttrs = [...uiSrc.matchAll(/data-(ui-[a-z-]+)=/g)].map((m) => m[1]);
   check('编译器一共只写这几个 data-*（多一个就是多一条没人读的记号，契约测试会把它认成断线）',
-    [...emittedAttrs].sort().join(',') === 'ui-calc,ui-chart,ui-chart-snap,ui-check,ui-diagram,ui-explore,ui-explore-tab,ui-handoff,ui-item,ui-node,ui-param,ui-slider,ui-suggest,ui-tab-name',
+    [...emittedAttrs].sort().join(',') === 'ui-calc,ui-chart,ui-chart-snap,ui-check,ui-diagram,ui-explore,ui-explore-tab,ui-game,ui-game-try,ui-handoff,ui-item,ui-node,ui-param,ui-slider,ui-suggest,ui-tab-name,ui-try-name',
     [...new Set(emittedAttrs)].sort().join(','));
   for (const attr of new Set(emittedAttrs)) {
     const key = attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
@@ -1278,8 +1278,8 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
   }
   check('宿主报回的 id 前缀 = 编译器续状态用的那个键位（`ui:` 两边一份）',
     /const UI_PREFIX = 'ui:'/.test(hostSrc25), 'app.js 里 UI_PREFIX 变了形状');
-  check('只有该存的五档进 UI_STATEFUL（静态形状没有"学习者做过什么"这回事；diagram 第二十七轮升成交互档；chart 第三十二轮随 slider 升档：滑到哪张快照就是状态，静态 chart 不写 id 不存；explore 第三十三轮：点开看了哪一面就是状态）',
-    (stateful || []).join(',') === 'checklist,calculator,diagram,chart,explore', (stateful || []).join(','));
+  check('只有该存的六档进 UI_STATEFUL（静态形状没有"学习者做过什么"这回事；diagram 第二十七轮升成交互档；chart 第三十二轮随 slider 升档：滑到哪张快照就是状态，静态 chart 不写 id 不存；explore 第三十三轮：点开看了哪一面就是状态；game 第三十五轮：试到哪一步、试过哪些就是状态）',
+    (stateful || []).join(',') === 'checklist,calculator,diagram,chart,explore,game', (stateful || []).join(','));
 
   // 4) 降级回报那条闭环：宿主报的事件名 ↔ 提示里承诺的那句话
   check('宿主报的是 ui_degraded 事件', /name: 'ui_degraded'/.test(hostSrc25));
