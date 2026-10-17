@@ -814,10 +814,18 @@ html, body {
 
 /* deck（第三十七轮，学 IUI 的 "the model room to decide how the pieces fit together"）：
    一个界面由几块拼成。容器只做纵向堆叠与块间分隔（子块各自的样式照旧走自己那一档），
-   分隔线只借量过的 --border、间距沿用块内那尺，零新十六进制。 */
-.ui-deck { display: flex; flex-direction: column; gap: 12px; margin: 0 0 1em; min-width: 0; }
+   分隔线只借量过的 --border、间距沿用块内那尺，零新十六进制。
+   layout: columns（第三十八轮，学 IUI 官方博文 "A comparison might work best side by side"）：
+   两块左右并排、等宽，分隔线从横向改成竖向；窄屏（≤780，与全局同一断点）退回堆叠——
+   并排是"对比"的形状，手机上两块并排谁也看不清。 */
+.ui-deck, .ui-deck-columns { display: flex; flex-direction: column; gap: 12px; margin: 0 0 1em; min-width: 0; }
+.ui-deck-columns { flex-direction: row; }
 .ui-deck-part { min-width: 0; }
 .ui-deck-part + .ui-deck-part { border-top: 1px dashed var(--border); padding-top: 12px; }
+.ui-deck-columns > .ui-deck-part { flex: 1 1 0; min-width: 0; }
+.ui-deck-columns > .ui-deck-part + .ui-deck-part { border-top: 0; border-left: 1px dashed var(--border); padding-left: 12px; padding-top: 0; }
+/* 并排的窄屏退回堆叠在全局那条 @media (max-width: 780px) 里（deck 那一节往下约 150 行）——
+   测试按"第一个 780px 媒体块"取源码，新块不许排在它前面。 */
 
 /* 降级：原文看得见 + 一句为什么。它是这一档唯一的"失败可见"面，不许静默吞。 */
 .ui-degraded {
@@ -976,6 +984,9 @@ html, body {
    留着内联 width 会把顺排的一行压成 40% 宽的小条）。 */
 @media (max-width: 780px) {
   .artifact.staged { width: calc(100% + 26px); margin-left: -26px; }
+  /* deck 的并排（layout: columns）在窄屏退回堆叠：两块左右并排谁也看不清（第三十八轮） */
+  .ui-deck-columns { flex-direction: column; }
+  .ui-deck-columns > .ui-deck-part + .ui-deck-part { border-top: 1px dashed var(--border); border-left: 0; padding-top: 12px; padding-left: 0; }
 }
 
 /* 组合器 */

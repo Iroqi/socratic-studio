@@ -928,6 +928,12 @@ function compileWalkthrough(fields) {
  * 同样成立：拼出来的每一块还是词表里那一档，没有第三类新控件；状态续回（滑到哪 /
  * 勾了哪 / 走到哪）也照旧按块自己的 id。
  *
+ * layout（第三十八轮，学官方博文 "A comparison might work best side by side"——
+ * "The format depends on what you're asking"，布局也是"怎么拼"里模型可决定的维度）：
+ * 可选 `layout: columns` 把两块**左右并排**（对比的形状：改前 vs 改后、方案甲 vs 方案乙），
+ * 缺省 = 纵向堆叠（不写 layout 就是堆叠，**写别的值掉回原文**）。并排只配两块——
+ * 三块并排是装饰不是对比；布局是整块 deck 的事，写进子块（缩进）算写错了层。
+ *
  * 硬线：
  * - 每个 part 是已有十档里的一块：不能套 `deck`（嵌套会让"一块"说不清是哪一层）、
  *   不能放 `suggest`（它是回合收尾的分支条，不进组合）；
@@ -939,20 +945,26 @@ function compileWalkthrough(fields) {
  */
 const DECK_MIN_PARTS = 2;
 const DECK_MAX_PARTS = 3;
+/** 并排是"对比"的形状：两块左右、一块没得比、三块是装饰。 */
+const DECK_COLUMNS_PARTS = 2;
 const DECK_PARTS = UI_KINDS.filter((k) => k !== 'deck' && k !== 'suggest');
 const DECK_PARTS_TEXT = DECK_PARTS.join(' / ');
-const DECK_TOP_ONLY = 'deck 顶层只认 kind / title / part（它属于哪一块，就缩进到那一块的 part 下面）';
+const DECK_TOP_ONLY = 'deck 顶层只认 kind / title / layout / part（它属于哪一块，就缩进到那一块的 part 下面）';
 
 function compileDeck(fields, lines) {
   const parts = [];
   let current = null;
   let deckTitle = '';
+  let deckLayout = null;
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
     // 缩进两格 = 属于当前 part 的子块字段（去掉缩进后照旧是「字段: 值」）。
     if (/^\s{2,}/.test(raw)) {
       if (!current) return { error: `缩进的内容要跟在 part: 后面（${DECK_TOP_ONLY}）` };
+      if (/^layout\s*:/i.test(line)) {
+        return { error: '「layout」是 deck 顶层的字段（写在不缩进的那一行）——布局是整块 deck 的事，不是哪一块的字段' };
+      }
       current.body.push(raw.trimStart());
       continue;
     }
@@ -964,6 +976,14 @@ function compileDeck(fields, lines) {
     if (key === 'title') {
       if (deckTitle) return { error: 'title 写了两遍' };
       deckTitle = value;
+      continue;
+    }
+    if (key === 'layout') {
+      if (deckLayout) return { error: 'layout 写了两遍' };
+      if (value !== 'columns') {
+        return { error: 'layout 只认 columns（左右并排）；要纵向堆叠就不写 layout' };
+      }
+      deckLayout = value;
       continue;
     }
     if (key === 'part') {
@@ -978,6 +998,9 @@ function compileDeck(fields, lines) {
   }
   if (parts.length < DECK_MIN_PARTS) {
     return { error: `deck 至少 ${DECK_MIN_PARTS} 块（一个 part 只是给界面套了个壳）` };
+  }
+  if (deckLayout === 'columns' && parts.length !== DECK_COLUMNS_PARTS) {
+    return { error: 'layout: columns 只配两块（两块左右并排才是"对比"的形状；三块照旧纵向堆叠）' };
   }
 
   const cap = deckTitle ? `<p class="ui-cap">${cell(deckTitle)}</p>` : '';
@@ -1004,7 +1027,13 @@ function compileDeck(fields, lines) {
     if (r.error) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${r.error}` };
     blocks.push(`<div class="ui-deck-part">${r.html}</div>`);
   }
-  return { html: `${cap}<div class="ui-deck">${blocks.join('')}</div>`, shape: 'deck' };
+  // 并排 vs 堆叠是编译器层的事，宿主不需要知道"这一块在不在并排里"（与 deck 本身同一手）。
+  // 两个容器 class 都以字面量写进源码：契约那条"编译器吐的 class 都要有样式"靠这份
+  // 字面量认领，拼出来的 class 样式表里没有会当场变红。
+  const container = deckLayout === 'columns'
+    ? '<div class="ui-deck-columns">'
+    : '<div class="ui-deck">';
+  return { html: `${cap}${container}${blocks.join('')}</div>`, shape: 'deck' };
 }
 
 /**

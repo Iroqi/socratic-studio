@@ -6390,6 +6390,42 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('右栏卡把 deck 内两块子块都排进来（只出现象）',
     notes50.includes('计算器「shop1」') && notes50.includes('· 人数 = 8') && notes50.includes('清单「cook1」') && notes50.includes('· ✓ 腌羊腿'), notes50.join(' / '));
 
+  // 9) layout: columns——块间并排布局（第三十八轮，学 IUI 官方博文
+  // "A comparison might work best side by side"：布局也是"怎么拼"里模型可决定的维度，
+  // 第三十七轮遗留清单点名的 deck 下一步候选，一手来源在官方博文）。只配两块（对比的
+  // 形状）；缺省 = 纵向堆叠；写别的值 / 写两遍 / 配三块 / 写进子块，全掉回原文并点名。
+  const sideBySide = ['kind: deck', 'layout: columns', 'title: 改前 vs 改后',
+    'part: compare', '  row: 方案甲 | 方案乙', '  row: 快 | 慢',
+    'part: checklist', '  id: ck9', '  item: 核对甲', '  item: 核对乙'];
+  const c9 = compile50(sideBySide).html;
+  check('layout: columns 编出并排容器（.ui-deck-columns，两块各归各、顺序不变）',
+    c9.includes('class="ui-deck-columns"') && !c9.includes('<div class="ui-deck">') &&
+    (c9.match(/class="ui-deck-part"/g) || []).length === 2 &&
+    c9.indexOf('class="ui-compare"') < c9.indexOf('data-ui-check="ck9"'), c9.slice(0, 400));
+  check('layout 缺省 = 纵向堆叠（.ui-deck 照旧，不写 layout 就是堆叠）',
+    compile50(roast).html.includes('<div class="ui-deck">') && !compile50(roast).html.includes('ui-deck-columns'), '');
+  check('并排 deck 两次编译一模一样（布局是确定性的，流式重编不会跳）',
+    compile50(sideBySide).html === c9, '');
+  ui50.resetUiState();
+  const degCol = (lines) => ui50.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  check('layout: rows：掉回原文并点名（layout 只认 columns）',
+    Boolean(degCol(['kind: deck', 'layout: rows', 'part: compare', '  row: 甲 | 乙', 'part: checklist', '  id: c1', '  item: 一项']).includes('layout 只认 columns')), '');
+  check('layout: stack：掉回原文并点名（要堆叠就不写 layout，不许写没意义的词）',
+    Boolean(degCol(['kind: deck', 'layout: stack', 'part: compare', '  row: 甲 | 乙', 'part: checklist', '  id: c1', '  item: 一项']).includes('layout 只认 columns')), '');
+  check('layout: COLUMNS：掉回原文并点名（值与 type/head 同一把尺，大小写不猜）',
+    Boolean(degCol(['kind: deck', 'layout: COLUMNS', 'part: compare', '  row: 甲 | 乙', 'part: checklist', '  id: c1', '  item: 一项']).includes('layout 只认 columns')), '');
+  check('layout 写了两遍：掉回原文并点名',
+    Boolean(degCol(['kind: deck', 'layout: columns', 'layout: columns', 'part: compare', '  row: 甲 | 乙', 'part: checklist', '  id: c1', '  item: 一项']).includes('layout 写了两遍')), '');
+  check('layout: columns 配三块：掉回原文并点名（并排是两块对比的形状，三块并排是装饰）',
+    Boolean(degCol(['kind: deck', 'layout: columns', 'part: compare', '  row: 甲 | 乙', 'part: checklist', '  id: c1', '  item: 一项', 'part: steps', '  step: 先做这个']).includes('只配两块')), '');
+  check('layout 写在子块里（缩进）：掉回原文并点名（布局是整块 deck 的事）',
+    Boolean(degCol(['kind: deck', 'part: compare', '  layout: columns', '  row: 甲 | 乙', 'part: checklist', '  id: c1', '  item: 一项']).includes('写在不缩进的那一行')), '');
+  // 宿主透明：并排 deck 内的子块照旧按自己的 data-* 委托（宿主不知道也不关心 layout）
+  compile50(sideBySide); // spec 重新进 Map（上面 resetUiState 清过）
+  const r9 = handleUiDeskEvent({ target: { dataset: { uiCheck: 'ck9', uiItem: '核对甲' }, checked: true } });
+  check('并排 deck 内子块照旧被接住（按子块自己的 id，走同一条通道）',
+    r9.handled === true && r9.kind === 'checklist' && ui50.readUiState('ck9')?.state?.done?.['核对甲'] === true, JSON.stringify(r9));
+
   check('这一节无异常', errors.length === errsBefore50, errors.slice(errsBefore50).join(' | '));
 }
 
