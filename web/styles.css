@@ -812,6 +812,13 @@ html, body {
 .ui-walk-prev:disabled:hover,
 .ui-walk-next:disabled:hover { color: var(--ink-3); border-color: var(--border); }
 
+/* deck（第三十七轮，学 IUI 的 "the model room to decide how the pieces fit together"）：
+   一个界面由几块拼成。容器只做纵向堆叠与块间分隔（子块各自的样式照旧走自己那一档），
+   分隔线只借量过的 --border、间距沿用块内那尺，零新十六进制。 */
+.ui-deck { display: flex; flex-direction: column; gap: 12px; margin: 0 0 1em; min-width: 0; }
+.ui-deck-part { min-width: 0; }
+.ui-deck-part + .ui-deck-part { border-top: 1px dashed var(--border); padding-top: 12px; }
+
 /* 降级：原文看得见 + 一句为什么。它是这一档唯一的"失败可见"面，不许静默吞。 */
 .ui-degraded {
   margin: -0.4em 0 1em; font-size: 12px; color: var(--ink-3);

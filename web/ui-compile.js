@@ -22,7 +22,7 @@
 import { escapeHtml } from './escape.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game', 'walkthrough'];
+export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'deck'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -914,6 +914,99 @@ function compileWalkthrough(fields) {
   return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'walkthrough' };
 }
 
+// ── 组合 ────────────────────────────────────────────────────────────────
+/**
+ * deck（第三十七轮，学 IUI 官方博文 "leaving the model room to decide how the pieces
+ * fit together" 那一手——旗舰演示的周日烤羊排 = 购物计算器 + 时间线清单、七速自行车 =
+ * 探索的面 + 面与面的连，都是一条回答里**几块拼成一个界面**）：
+ * `part: 块档`（2–3 块）+ 缩进的子块字段 + 可选 `title`。
+ *
+ * 为什么要有这一档：十档每一档都是"一种形状"，但 IUI 的界面常常是"一个整体由几块拼成"——
+ * 每块各是一种形状、合起来才完整（怎么买 + 怎么做、是什么 + 怎么连）。deck 是那个
+ * "拼"的容器：每个 `part` 声明一块，缩进两格的子块字段照旧走下面十档的编译与状态，
+ * deck 自己不新造形状、不带状态。子块直接复用 COMPILERS——词汇表封闭这条原则对组合
+ * 同样成立：拼出来的每一块还是词表里那一档，没有第三类新控件；状态续回（滑到哪 /
+ * 勾了哪 / 走到哪）也照旧按块自己的 id。
+ *
+ * 硬线：
+ * - 每个 part 是已有十档里的一块：不能套 `deck`（嵌套会让"一块"说不清是哪一层）、
+ *   不能放 `suggest`（它是回合收尾的分支条，不进组合）；
+ * - part 下面的子块字段要**缩进**（不缩进就分不清哪一行属于哪一块），子块不带自己的
+ *   `kind`（part: 已经声明了，再写就是"kind 写了两遍"）；
+ * - 两块以上、三块以内：一块只是给界面套壳，四块以上是装饰不是组合；
+ * - 状态与 handoff 都跟着块走：deck 自己不带 id、不带 handoff；两个 part 用了同一个
+ *   id 会让状态互相覆盖，掉回原文并点名。
+ */
+const DECK_MIN_PARTS = 2;
+const DECK_MAX_PARTS = 3;
+const DECK_PARTS = UI_KINDS.filter((k) => k !== 'deck' && k !== 'suggest');
+const DECK_PARTS_TEXT = DECK_PARTS.join(' / ');
+const DECK_TOP_ONLY = 'deck 顶层只认 kind / title / part（它属于哪一块，就缩进到那一块的 part 下面）';
+
+function compileDeck(fields, lines) {
+  const parts = [];
+  let current = null;
+  let deckTitle = '';
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    // 缩进两格 = 属于当前 part 的子块字段（去掉缩进后照旧是「字段: 值」）。
+    if (/^\s{2,}/.test(raw)) {
+      if (!current) return { error: `缩进的内容要跟在 part: 后面（${DECK_TOP_ONLY}）` };
+      current.body.push(raw.trimStart());
+      continue;
+    }
+    const m = /^([A-Za-z_][\w-]*)\s*:\s*(\S.*)$/.exec(line);
+    if (!m) return { error: 'deck 顶层这一行不是「字段: 值」' };
+    const key = m[1].toLowerCase();
+    const value = m[2].trim();
+    if (key === 'kind') continue; // parseFence 已认过这一行（kind: deck 或写在别处的 kind）
+    if (key === 'title') {
+      if (deckTitle) return { error: 'title 写了两遍' };
+      deckTitle = value;
+      continue;
+    }
+    if (key === 'part') {
+      if (parts.length >= DECK_MAX_PARTS) {
+        return { error: `deck 最多 ${DECK_MAX_PARTS} 块（一个界面拆成三块以上，通常是装饰不是组合）` };
+      }
+      current = { kind: value, body: [] };
+      parts.push(current);
+      continue;
+    }
+    return { error: `「${key}」写错了层：${DECK_TOP_ONLY}` };
+  }
+  if (parts.length < DECK_MIN_PARTS) {
+    return { error: `deck 至少 ${DECK_MIN_PARTS} 块（一个 part 只是给界面套了个壳）` };
+  }
+
+  const cap = deckTitle ? `<p class="ui-cap">${cell(deckTitle)}</p>` : '';
+  const seenIds = new Set();
+  const blocks = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i];
+    if (!DECK_PARTS.includes(part.kind)) {
+      return { error: `「${part.kind}」不是可拼的块：deck 里能拼 ${DECK_PARTS_TEXT}，不能套 deck、不能放 suggest` };
+    }
+    if (!part.body.length) {
+      return { error: `第 ${i + 1} 块（${part.kind}）是空的：part 下面要跟这一块的字段（缩进两格）` };
+    }
+    // 子块不带自己的 kind：先合成 kind 行再走同一道 parseFence——body 里写了 kind
+    // 就是"kind 写了两遍"，与其它档同一把尺。
+    const child = parseFence(['kind: ' + part.kind, ...part.body]);
+    if (child.error) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${child.error}` };
+    const cid = pick(child.fields, 'id')[0];
+    if (cid) {
+      if (seenIds.has(cid)) return { error: `两个 part 用了同一个 id「${cid}」：状态会互相覆盖` };
+      seenIds.add(cid);
+    }
+    const r = COMPILERS[part.kind](child.fields, part.body);
+    if (r.error) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${r.error}` };
+    blocks.push(`<div class="ui-deck-part">${r.html}</div>`);
+  }
+  return { html: `${cap}<div class="ui-deck">${blocks.join('')}</div>`, shape: 'deck' };
+}
+
 /**
  * suggest：`pick: 一句短话`（1–3 行）。回答末尾的"往哪走"分支条。
  *
@@ -1277,7 +1370,7 @@ function chartSnapTable(snap, xLabels) {
   return `<table class="ui-chart-table-el">${head}<tbody>${row}</tbody></table>`;
 }
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, deck: compileDeck };
 
 /**
  * 编译器入口。partial = 这一段还在流里长（围栏未闭合）。
@@ -1304,7 +1397,8 @@ export function compileUiBlock(lines, partial) {
   }
   if (lines.length > MAX_ITEMS + 6) return fail('这一段太长了，回到正文来说');
   try {
-    const r = COMPILERS[kind](parsed.fields);
+    // deck 需要带缩进的原文行（part 结构只有行首空格分得清），其余档不读 lines。
+    const r = COMPILERS[kind](parsed.fields, lines);
     if (r.error) return fail(r.error);
     return { html: r.html, shape: r.shape };
   } catch {

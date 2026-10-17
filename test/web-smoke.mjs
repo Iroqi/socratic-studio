@@ -6220,6 +6220,179 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore49, errors.slice(errsBefore49).join(' | '));
 }
 
+// ─── 50. deck：一个界面由几块拼成（第三十七轮，学 IUI 的
+// "leaving the model room to decide how the pieces fit together"——旗舰演示的周日烤羊排 =
+// 购物计算器 + 时间线清单、七速自行车 = 探索的面 + 面与面的连，都是一条回答里几块拼成
+// 一个界面）。part: 块档（2–3 块）+ 缩进两格的子块字段，子块照旧走十档的编译与状态、
+// 不带自己的 kind；deck 自己不带 id / handoff；两个 part 同 id 掉回原文并点名。
+{
+  console.log('\n50. deck（一个界面由几块拼成：part 缩进子块，子块照旧走十档）');
+  const errsBefore50 = errors.length;
+  const ui50 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { state: st50, handleUiDeskEvent, renderPanel } = appModule.__hooks;
+  const compile50 = (lines, partial) => ui50.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  ui50.resetUiState();
+  const input50 = doc.getElementById('input');
+  const roast = [
+    'kind: deck', 'title: 你的晚餐计划',
+    'part: calculator',
+    '  id: shop1', '  title: 购物清单', '  param: 人数 | 5',
+    '  formula: 羊肉 = 人数 * 0.4', '  handoff: 把人数带回去问',
+    'part: checklist',
+    '  id: cook1', '  title: 备菜清单', '  item: 腌羊腿', '  item: 烤土豆',
+    '  handoff: 把勾好的带回去问',
+  ];
+
+  // 1) 编译形状：容器 + 两块按声明顺序 + title 帽 + 各块照旧
+  const c = compile50(roast).html;
+  check('deck 编出一个容器，两块子块按声明顺序排好',
+    c.includes('<div class="ui-deck">') && c.indexOf('data-ui-calc="shop1"') < c.indexOf('data-ui-check="cook1"'), c.slice(0, 400));
+  check('每块包在自己的 .ui-deck-part 里', (c.match(/class="ui-deck-part"/g) || []).length === 2, c.slice(0, 300));
+  check('deck 的 title 帽照旧（.ui-cap）', c.includes('<p class="ui-cap">你的晚餐计划</p>'), c.slice(0, 200));
+  check('第一块是 calculator（slider 在场、带自己的 id）',
+    c.includes('data-ui-slider="shop1"') && c.includes('data-ui-param="人数"') && c.includes('class="ui-out"'), c.slice(0, 600));
+  check('第二块是 checklist（勾选框在场、带自己的 id）',
+    c.includes('data-ui-check="cook1"') && c.includes('data-ui-item="腌羊腿"') && c.includes('data-ui-item="烤土豆"'), c.slice(-600));
+  check('块内的 handoff 跟着自己的块走（两个按钮、各带各的 id）',
+    (c.match(/class="ui-handoff" data-ui-handoff="(shop1|cook1)"/g) || []).length === 2, c.slice(-400));
+  check('两块各自进了 uiState（deck 自己不占 id）',
+    ui50.readUiState('shop1')?.kind === 'calculator' && ui50.readUiState('cook1')?.kind === 'checklist', JSON.stringify(ui50.uiStateIds()));
+  check('编译输出没有判分词（Invariant 4：deck 不新造学情）',
+    !/score|percent|mastery|correct|incorrect/i.test(c), c.slice(0, 400));
+  check('deck 两次编译一模一样（子块照旧确定性）', compile50(roast).html === c, '');
+  ui50.resetUiState();
+
+  // 2) 状态续回：两块的状态都续回来（滑块值 + 勾选）
+  ui50.writeUiState('shop1', 'calculator', { 人数: 8, uiKind: 'calculator' },
+    { params: [{ name: '人数', def: 5 }], formulas: [{ out: '羊肉', terms: [[{ p: '人数' }, { n: 0.4 }]] }], unit: '', title: '购物清单' });
+  ui50.writeUiState('cook1', 'checklist', { done: { 腌羊腿: true }, uiKind: 'checklist' }, { title: '备菜清单' });
+  const c2 = compile50(roast).html;
+  check('重编续回滑块值（人数回到 8）', c2.includes('value="8"'), c2.slice(0, 400));
+  check('重编续回勾选（腌羊腿 checked）', c2.includes('data-ui-item="腌羊腿" checked'), c2.slice(-400));
+  ui50.resetUiState();
+
+  // 3) 降级逐条点名（deck 专属 + 子块错误带块名；不静默吞）
+  const deg50 = (lines) => ui50.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  check('没有 part：掉回原文并点名', Boolean(deg50(['kind: deck', 'title: x']).includes('至少 2 块')), '');
+  check('只有一个 part：掉回原文并点名（一个 part 只是套壳）',
+    Boolean(deg50(['kind: deck', 'part: compare', '  row: 甲 | 乙', '  row: 丙 | 丁']).includes('至少 2 块')), '');
+  const four50 = ['kind: deck',
+    'part: checklist', '  id: c0', '  item: 项0',
+    'part: checklist', '  id: c1', '  item: 项1',
+    'part: checklist', '  id: c2', '  item: 项2',
+    'part: checklist', '  id: c3', '  item: 项3'];
+  check('四个 part：掉回原文并点名（四块是装饰不是组合）', Boolean(deg50(four50).includes('最多 3 块')), '');
+  check('part: deck：掉回原文并点名（不能套 deck）',
+    Boolean(deg50(['kind: deck', 'part: deck', '  part: compare', '    row: 甲 | 乙', 'part: compare', '  row: 甲 | 乙']).includes('不能套 deck')), '');
+  check('part: suggest：掉回原文并点名（suggest 是回合收尾不进组合）',
+    Boolean(deg50(['kind: deck', 'part: suggest', '  pick: 接着问', 'part: compare', '  row: 甲 | 乙']).includes('不能放 suggest')), '');
+  check('part 名字不在词表里：掉回原文并点名',
+    Boolean(deg50(['kind: deck', 'part: gamex', '  id: a', 'part: compare', '  row: 甲 | 乙']).includes('不是可拼的块')), '');
+  check('part 后面没有字段：掉回原文并点名',
+    Boolean(deg50(['kind: deck', 'part: calculator', 'part: compare', '  row: 甲 | 乙']).includes('是空的')), '');
+  const noId50 = ['kind: deck', 'part: calculator', '  param: 人数 | 5', '  formula: 总量 = 人数 * 2',
+    'part: checklist', '  id: c1', '  item: 一项'];
+  const dNoId50 = deg50(noId50);
+  check('子块自己的编译失败：整块掉回原文并点名是第几块、哪一档、为什么',
+    dNoId50.includes('第 1 块（calculator）没编出来') && dNoId50.includes('没有 id'), dNoId50);
+  check('两个 part 用同一个 id：掉回原文并点名（状态会互相覆盖）',
+    Boolean(deg50(['kind: deck', 'part: calculator', '  id: same', '  param: 人数 | 5', '  formula: 总量 = 人数 * 2',
+      'part: checklist', '  id: same', '  item: 一项']).includes('同一个 id')), '');
+  check('顶层写 id（没缩进）：掉回原文并点名（写错了层）',
+    Boolean(deg50(['kind: deck', 'id: shop1', 'part: calculator', '  param: 人数 | 5', '  formula: 总量 = 人数 * 2',
+      'part: checklist', '  id: c1', '  item: 一项']).includes('写错了层')), '');
+  check('顶层写 handoff：掉回原文并点名（递话跟着块走）',
+    Boolean(deg50(['kind: deck', 'handoff: 带回去', 'part: calculator', '  param: 人数 | 5', '  formula: 总量 = 人数 * 2',
+      'part: checklist', '  id: c1', '  item: 一项']).includes('写错了层')), '');
+  check('顶层写 table：掉回原文并点名（table 只配带 slider 的 chart，也不配 deck 顶层）',
+    Boolean(deg50(['kind: deck', 'table: 一张表', 'part: compare', '  row: 甲 | 乙']).includes('写错了层')), '');
+  check('缩进内容出现在第一个 part 之前：掉回原文并点名',
+    Boolean(deg50(['kind: deck', '  id: shop1', 'part: compare', '  row: 甲 | 乙']).includes('缩进的内容要跟在 part: 后面')), '');
+  check('子块里写自己的 kind：掉回原文并点名（part 已经声明了）',
+    Boolean(deg50(['kind: deck', 'part: calculator', '  kind: calculator', '  id: a', '  param: 人数 | 5',
+      '  formula: 总量 = 人数 * 2', 'part: checklist', '  id: c1', '  item: 一项']).includes('kind 写了两遍')), '');
+  const partial50 = compile50(['kind: deck', 'part: calcul'], true);
+  check('流里的半截 deck 只摆占位、不报降级（与其它档同一把尺）',
+    partial50.pending === true && !partial50.degraded, JSON.stringify(partial50));
+
+  // 4) 宿主接线：deck 内的子块照旧用各自的 data-* 委托（不新开通道）
+  st50.notebook = sampleNotebook();
+  st50.uiReported.clear();
+  const posts50 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const before50 = posts50();
+  compile50(roast); // 把 spec 写进 Map（宿主点击要靠 spec 换面板）
+  const r50s = handleUiDeskEvent({ target: { dataset: { uiSlider: 'shop1', uiParam: '人数' }, value: '8' } });
+  check('deck 内滑块照旧被接住（按子块自己的 id）',
+    r50s.handled === true && r50s.kind === 'calculator' && r50s.id === 'shop1', JSON.stringify(r50s));
+  check('deck 内子块状态照旧落 Map', ui50.readUiState('shop1')?.state?.人数 === 8, JSON.stringify(ui50.readUiState('shop1')?.state));
+  check('deck 内子块照旧走 artifact-message 同一条通道', posts50() === before50 + 1, `posts ${before50} → ${posts50()}`);
+  const r50c = handleUiDeskEvent({ target: { dataset: { uiCheck: 'cook1', uiItem: '腌羊腿' }, checked: true } });
+  check('deck 内勾选框照旧被接住',
+    r50c.handled === true && r50c.kind === 'checklist' && ui50.readUiState('cook1')?.state?.done?.['腌羊腿'] === true, JSON.stringify(r50c));
+  const r50g = handleUiDeskEvent({ target: { dataset: { uiGameTry: 'game1', uiTryName: '选门1' } } });
+  check('deck 外没编译过的 id 点不响（没 spec 就不知道）', r50g.handled === false, JSON.stringify(r50g));
+
+  // 5) 三块 deck 与跨档形状：game + calculator + checklist 同台；walkthrough + compare 同台
+  const three = ['kind: deck', 'title: 蒙提霍尔 + 用量',
+    'part: game',
+    '  id: mh1', '  title: 换不换', '  try: 选门1', '  try: 选门2',
+    '  outcome: 选门1 = 主持人打开另一扇门：换到剩下那扇是车',
+    '  outcome: 选门2 = 主持人打开另一扇门：换到剩下那扇是羊',
+    'part: calculator', '  id: shop2', '  param: 人数 | 5', '  formula: 羊肉 = 人数 * 0.4',
+    'part: checklist', '  id: cook2', '  item: 腌羊腿', '  item: 烤土豆'];
+  const c3 = compile50(three).html;
+  check('三块 deck 编得出来（game + calculator + checklist 各归各）',
+    c3.includes('data-ui-game-try="mh1"') && c3.includes('data-ui-slider="shop2"') && c3.includes('data-ui-check="cook2"'), c3.slice(0, 400));
+  const r50m = handleUiDeskEvent({ target: { dataset: { uiGameTry: 'mh1', uiTryName: '选门1' } } });
+  check('deck 内 game 照旧试了记 last/tried',
+    r50m.handled === true && ui50.readUiState('mh1')?.state?.last === '选门1', JSON.stringify(r50m));
+  const withWalk = ['kind: deck',
+    'part: walkthrough', '  id: eq2', '  move: 翻译成算式 = 5x + 3 = 17', '  move: 两边减去3 = 5x = 14',
+    'part: compare', '  row: 方案甲 | 方案乙', '  row: 快 | 慢'];
+  const c4 = compile50(withWalk).html;
+  check('walkthrough + compare 也拼得出来（静态块不用 id、交互块自带 id）',
+    c4.includes('data-ui-walk-next="eq2"') && c4.includes('class="ui-compare"'), c4.slice(0, 400));
+  const r50w = handleUiDeskEvent({ target: { dataset: { uiWalkNext: 'eq2' } } });
+  check('deck 内 walkthrough 照旧走「下一步」',
+    r50w.handled === true && ui50.readUiState('eq2')?.state?.last === '翻译成算式', JSON.stringify(r50w));
+
+  // 6) handoff：deck 内子块的 handoff 按钮照旧把状态拼成话递回（不自动发）
+  const boxBefore50 = input50.value;
+  ui50.writeUiState('shop1', 'calculator', { 人数: 8, uiKind: 'calculator' },
+    { params: [{ name: '人数', def: 5 }], formulas: [{ out: '羊肉', terms: [[{ p: '人数' }, { n: 0.4 }]] }], unit: '', title: '购物清单' });
+  const r50h = handleUiDeskEvent({ target: { dataset: { uiHandoff: 'shop1' } } });
+  check('deck 内 calculator 的 handoff 被接住',
+    r50h.handled === true && r50h.kind === 'handoff' && r50h.id === 'shop1', JSON.stringify(r50h));
+  check('拼句照旧（我在计算器「购物清单」里调到：人数=8）',
+    input50.value === '我在计算器「购物清单」里调到：人数=8', input50.value);
+  input50.value = boxBefore50;
+
+  // 7) repaint：deck 内子块照旧就地换输出（整块不重画）
+  const calcBox50 = doc.createElement('div'); calcBox50.className = 'ui-calc'; calcBox50.dataset.uiCalc = 'shop1';
+  const outP50 = doc.createElement('p'); outP50.className = 'ui-out';
+  const outV50 = doc.createElement('output'); outV50.className = 'ui-out-value';
+  outP50.append(outV50);
+  calcBox50.append(outP50);
+  domRoot.append(calcBox50);
+  handleUiDeskEvent({ target: { dataset: { uiSlider: 'shop1', uiParam: '人数' }, value: '8' } });
+  check('repaint 就地换掉输出值（8 × 0.4 = 3.2，编译时算好的公式）', outV50._text === '3.2', outV50._text);
+  check('repaint 只换输出（块还在原处）', domRoot._kids.includes(calcBox50), '');
+  calcBox50.remove();
+
+  // 8) 右栏回看卡：deck 内两块子块照旧各排各的（deck 自己不占位）
+  st50.notebook.progress.artifact_state = {
+    'ui:shop1': { uiKind: 'calculator', 人数: 8 },
+    'ui:cook1': { uiKind: 'checklist', done: { 腌羊腿: true } },
+  };
+  renderPanel();
+  const card50 = deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
+  const notes50 = card50 ? deepAll(card50, 'state-note').map((n) => n.textContent) : [];
+  check('右栏卡把 deck 内两块子块都排进来（只出现象）',
+    notes50.includes('计算器「shop1」') && notes50.includes('· 人数 = 8') && notes50.includes('清单「cook1」') && notes50.includes('· ✓ 腌羊腿'), notes50.join(' / '));
+
+  check('这一节无异常', errors.length === errsBefore50, errors.slice(errsBefore50).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);
