@@ -3016,6 +3016,14 @@ function handoffUiState(id) {
       : tried.length
         ? `我在「${name}」里试过：${tried[tried.length - 1]}`
         : `我在「${name}」里还没有试过任何选项`;
+  } else if (kind === 'walkthrough') {
+    const last = rec.state?.last;
+    const visited = Object.keys(rec.state?.visited || {}).filter((k) => rec.state.visited[k]);
+    text = last
+      ? `我在「${name}」里走到了「${last}」`
+      : visited.length
+        ? `我在「${name}」里走到过：${visited[visited.length - 1]}`
+        : `我在「${name}」里还没有开始走`;
   } else {
     return false;
   }
@@ -3137,6 +3145,16 @@ function handleUiDeskEvent(evt) {
     forwardArtifactMessage({ type: 'state', state }, uiStateKey(gameId));
     return { handled: true, kind: 'game', id: gameId };
   }
+
+  // walkthrough（第三十六轮，学 IUI 的 "work through a problem step by step"——一次只露
+  // 一步，点「下一步」把问题往下走、看到这一步之后到哪）：last 是"现在停在哪个 move"、
+  // visited 是"走到过哪些"（只增不减）——都是学情态，下一轮模型读得到；判分一个字都
+  // 不在这儿发生（状态是过程走到哪，不是学情）。disabled 的按钮根本不会走到这儿，
+  // 所以 next/prev 越界那一手是防御性的，正常路径到不了。
+  const walkNextId = node.dataset?.uiWalkNext;
+  if (walkNextId) return advanceUiWalk(walkNextId, 1);
+  const walkPrevId = node.dataset?.uiWalkPrev;
+  if (walkPrevId) return advanceUiWalk(walkPrevId, -1);
 
   // diagram 的节点是 <g> 不是 input：点击落在 rect/text 上，dataset 在 g 上，
   // 得靠 closest 找回节点与它所属的图。点击 = 切换高亮（再点同一节点取消），
@@ -3300,6 +3318,61 @@ function repaintUiGame(id) {
         pane.append(el('p', 'ui-game-pane-hint', '选一个选项，看会发生什么'));
       }
     }
+  }
+}
+
+/**
+ * walkthrough（第三十六轮）：点「下一步 / 上一步」= 学习者把问题往下 / 往上走一步。
+ * dir = +1 下一步（新露出的那一步记进 visited）、dir = -1 上一步（退回前一步，visited
+ * 不删——走到过就是走到过）。last 是"现在停在哪个 move"——都是学情态，下一轮模型读
+ * 得到；判分一个字都不在这儿发生（状态是过程走到哪，不是学情，Invariant 4 ③）。
+ * 越界（已在第一 / 最后一步）点不响：宿主按 spec.moves 的长度挡，不猜。
+ */
+function advanceUiWalk(id, dir) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return { handled: false };
+  const moves = rec.spec.moves || [];
+  const idx = rec.state?.last ? moves.findIndex((m) => m.name === rec.state.last) : -1;
+  const next = idx + dir;
+  if (next < 0 || next >= moves.length) return { handled: false };
+  const move = moves[next];
+  const visited = { ...(rec.state?.visited || {}) };
+  if (dir > 0) visited[move.name] = true;
+  const state = { ...rec.state, last: move.name, visited, uiKind: 'walkthrough' };
+  setUiValues(id, 'walkthrough', state);
+  repaintUiWalk(id);
+  forwardArtifactMessage({ type: 'state', state }, uiStateKey(id));
+  return { handled: true, kind: 'walkthrough', id };
+}
+
+/**
+ * 走查的换步不整块重画（正文那一刷会跳滚动，与 explore / game 同一把尺）：就地换面板
+ * 内容（从 spec.moves 里挑现成的，编译器只此一份、宿主不重算）与上一步/下一步的
+ * disabled 态（走到头「下一步」就点不动、在第一步「上一步」点不动）。id 是模型写的，
+ * 不能拼进选择器（引号会注入）：按 class 找、再比对 dataset 值。
+ */
+function repaintUiWalk(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return;
+  const moves = rec.spec.moves || [];
+  const idx = rec.state?.last ? moves.findIndex((m) => m.name === rec.state.last) : -1;
+  const hit = idx >= 0 ? moves[idx] : null;
+  const blocks = [...(document.querySelectorAll?.('.ui-walk') || [])].filter((n) => n.dataset?.uiWalk === id);
+  for (const block of blocks) {
+    const pane = block.querySelector?.('.ui-walk-pane');
+    if (pane) {
+      pane.innerHTML = '';
+      if (hit) {
+        pane.append(el('p', 'ui-walk-pane-name', hit.name));
+        pane.append(el('p', 'ui-walk-pane-state', hit.state));
+      } else {
+        pane.append(el('p', 'ui-walk-pane-hint', '点「下一步」，一步步走完这个问题'));
+      }
+    }
+    const prev = block.querySelector?.('.ui-walk-prev');
+    const next = block.querySelector?.('.ui-walk-next');
+    if (prev) prev.disabled = idx <= 0;
+    if (next) next.disabled = idx >= moves.length - 1;
   }
 }
 
@@ -3688,7 +3761,7 @@ function renderUiStatePanel(body) {
   );
   if (!entries.length) return;
   const fit = (s) => { const t = String(s); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
-  const word = { checklist: '清单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏' };
+  const word = { checklist: '清单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍' };
   const card = el('div', 'ui-state-card');
   card.append(el('div', 'panel-section-title', '这局动过的界面'));
   for (const [key, s] of entries) {
@@ -3722,6 +3795,11 @@ function renderUiStatePanel(body) {
       if (tried.length) card.append(el('div', 'state-note', `· 试过：${tried.map(fit).join('、')}`));
       if (s.last) card.append(el('div', 'state-note', `· 现在停在：${fit(s.last)}`));
       if (!tried.length && !s.last) card.append(el('div', 'state-note', '· 还没试过'));
+    } else if (s.uiKind === 'walkthrough') {
+      const visited = Object.keys(s.visited || {});
+      if (visited.length) card.append(el('div', 'state-note', `· 走到过：${visited.map(fit).join('、')}`));
+      if (s.last) card.append(el('div', 'state-note', `· 现在停在：${fit(s.last)}`));
+      if (!visited.length && !s.last) card.append(el('div', 'state-note', '· 还没开始走'));
     }
   }
   body.append(card);
@@ -5899,6 +5977,7 @@ export const __hooks = {
   repaintUiChart,
   repaintUiExplore,
   repaintUiGame,
+  repaintUiWalk,
   reportUiDegraded,
   hydrateUiState,
   applyUiMode,

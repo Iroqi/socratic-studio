@@ -22,7 +22,7 @@
 import { escapeHtml } from './escape.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game'];
+export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game', 'walkthrough'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -39,8 +39,9 @@ export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'met
  * 交互档：节点可点击，"他点了谁 / 看过谁"就是状态；chart 第三十二轮随 slider 升成交互档：
  * "滑到哪张快照"就是状态（没写 slider 的静态 chart 不进这一档，也不写 id）。
  * explore 第三十三轮："点开看了哪一面"就是状态（一个整体拆成几面，分段按钮逐面看）。
+ * walkthrough 第三十六轮："走到哪一步"就是状态（一次只露一步，逐步走完一个问题）。
  */
-export const UI_STATEFUL = ['checklist', 'calculator', 'diagram', 'chart', 'explore', 'game'];
+export const UI_STATEFUL = ['checklist', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough'];
 
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
@@ -214,6 +215,7 @@ function compileCompare(fields, lines) {
   if (pick(fields, 'handoff').length) return { error: 'compare 这一档没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
+  if (walkWords(fields)) return { error: WALK_ONLY };
   const rows = pick(fields, 'row');
   if (rows.length < 2) return { error: '并排对照至少两行' };
   const grid = rows.map((r) => r.split('|').map((c) => c.trim()));
@@ -243,6 +245,7 @@ function compileSteps(fields, lines) {
   if (pick(fields, 'handoff').length) return { error: 'steps 这一档没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
+  if (walkWords(fields)) return { error: WALK_ONLY };
   const items = pick(fields, 'step');
   if (items.length < 1) return { error: '没有一行 step' };
   const title = pick(fields, 'title')[0] || '';
@@ -270,6 +273,7 @@ function compileChecklist(fields) {
   if (!id) return { error: '这份清单没有 id：勾选态没地方续' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
+  if (walkWords(fields)) return { error: WALK_ONLY };
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
   const items = pick(fields, 'item').map((s) => s.trim());
@@ -312,6 +316,7 @@ function compileCalculator(fields, lines, partial) {
   if (!id) return { error: '这个计算器没有 id：滑到的值没地方续' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
+  if (walkWords(fields)) return { error: WALK_ONLY };
   const params = [];
   for (const p of pick(fields, 'param')) {
     const parts = p.split('|').map((s) => s.trim());
@@ -455,6 +460,7 @@ function compileDiagram(fields) {
   if (!id) return { error: '这个图没有 id：谁点了谁没有地方记' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
+  if (walkWords(fields)) return { error: WALK_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -657,11 +663,35 @@ function gameWords(fields) {
 }
 const GAME_ONLY = 'try / outcome 只配带 id 的 game（选一个选项看会发生什么，别的档没有"试"这回事）';
 
+/**
+ * walkthrough（第三十六轮，学 IUI 官方博文 "work through a problem step by step"——
+ * 学习三机制里最后一格：explore 是"探索怎么运作"、带 slider 的 chart 是"改一个输入看
+ * 会发生什么"，这一格是"**一步步走完一个问题**"）：`move: 这一步的动作 = 这一步之后到哪`
+ * （2–8 步）+ `id:`。一次只露一步，学习者点「下一步」往下走、点「上一步」退回来——
+ * 过程**渐进披露**，不是一次把整份清单倒出来（那正是 steps 的形状）。
+ *
+ * 硬线：每步只写"这一步之后到哪"（**状态 / 现象**，如 `5x = 14`），不写为什么——
+ * 解释留在对话里（制品只给现象、对话给解释是基线）。结果只写状态不写判词，
+ * 状态 {last, visited} 沿 explore 的 {active, viewed} 一族：last 是"现在停在哪个 move"、
+ * visited 是"走到过哪些"（只增不减，上一步不删）——都是学情态，判分仍是模型的活。
+ */
+const WALK_MIN_MOVES = 2;
+const WALK_MAX_MOVES = 8;
+const WALK_MOVE_MAX = 20;
+const WALK_STATE_MAX = 80;
+
+/** walkthrough 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
+function walkWords(fields) {
+  return pick(fields, 'move').length > 0;
+}
+const WALK_ONLY = 'move 只配带 id 的 walkthrough（这一步的动作 = 这一步之后到哪，别的档没有"走"这回事）';
+
 function compileExplore(fields) {
   const id = pick(fields, 'id')[0];
   if (!id) return { error: '这个探索没有 id：点开哪一面没有地方续' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
+  if (walkWords(fields)) return { error: WALK_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -734,6 +764,7 @@ function compileGame(fields) {
   const id = pick(fields, 'id')[0];
   if (!id) return { error: '这个游戏没有 id：试到哪一步没有地方续' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (walkWords(fields)) return { error: WALK_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -803,6 +834,87 @@ function compileGame(fields) {
 }
 
 /**
+ * walkthrough（第三十六轮，学 IUI 官方博文 "Learn complex topics more easily" 里三机制
+ * 的最后一格 "work through a problem step by step"——explore 是"探索怎么运作"、
+ * 带 slider 的 chart 是"改一个输入看会发生什么"，这一格是"**一步步走完一个问题**"）：
+ * `move: 这一步的动作 = 这一步之后到哪`（2–8 步、动作名是身份、不能重复）+ `id:`（必填）
+ * + 可选 `title` / `handoff`。
+ *
+ * 它补的是 steps 装不下的那一类内容：**一个过程走下来，中间态一个接一个**（解方程的
+ * 每一步把式子改成什么样、排查问题每查一步证据缩小到哪）。steps 是静态参考清单、一次
+ * 全给；walkthrough 是**渐进披露**——一次只露一步，学习者点「下一步」往下走、点
+ * 「上一步」退回来，节奏在他手里。硬线：每步只写"这一步之后到哪"（状态 / 现象，
+ * 如 `5x = 14`），**不写为什么**——解释留在对话里（制品只给现象、对话给解释是基线）。
+ *
+ * 状态 {last, visited} 沿 explore 的 {active, viewed} 一族：last 是"现在停在哪个 move"、
+ * visited 是"走到过哪些"（只增不减，上一步不删）——都是学情态，下一轮模型读得到，
+ * 判分仍不在这儿发生（状态是过程走到哪，不是学情；Invariant 4 一条不破）。
+ * 默认（没开始）面板是中性引导，不替学习者声称他已经走到哪一步。
+ *
+ * 与其它档的分工：静态有序清单一次全给 → steps；选一个选择看离散结果 → game；
+ * 换一面看介绍 → explore；**一步一步往下走、中间态逐个披露** → walkthrough。
+ */
+function compileWalkthrough(fields) {
+  const id = pick(fields, 'id')[0];
+  if (!id) return { error: '这个走查没有 id：走到哪一步没有地方续' };
+  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (gameWords(fields)) return { error: GAME_ONLY };
+  if (pick(fields, 'step').length) {
+    return { error: 'step 是 steps 档的字段：走查每步写「move: 这一步的动作 = 这一步之后到哪」' };
+  }
+  const title = pick(fields, 'title')[0] || '';
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
+
+  const moves = [];
+  for (const raw of pick(fields, 'move')) {
+    const eq = raw.indexOf('=');
+    if (eq < 0) return { error: 'move 要写成「这一步的动作 = 这一步之后到哪」' };
+    const name = raw.slice(0, eq).trim();
+    const state = raw.slice(eq + 1).trim();
+    if (!name) return { error: 'move 的名字是空的' };
+    if (name.length > WALK_MOVE_MAX) return { error: `move 名太长了（≤${WALK_MOVE_MAX} 字）` };
+    if (!UI_IDENT.test(name)) return { error: `「${name}」不合法（字母/汉字起头，中间不许空格与 * + |）` };
+    if (moves.some((m) => m.name === name)) return { error: `「${name}」写了两遍：两步做同一件事，走到哪一步就说不清了` };
+    if (!state) return { error: `「${name}」之后到哪是空的（每步都要写这一步走完到哪）` };
+    if (state.length > WALK_STATE_MAX) return { error: `「${name}」之后的状态太长了（≤${WALK_STATE_MAX} 字）` };
+    moves.push({ name, state });
+  }
+  if (moves.length < WALK_MIN_MOVES) return { error: `至少 ${WALK_MIN_MOVES} 步（一步没得走）` };
+  if (moves.length > WALK_MAX_MOVES) return { error: `步子太多了（最多 ${WALK_MAX_MOVES} 步，多了是清单不是走查）` };
+
+  // 状态从宿主侧续：上次走到谁，重画就把谁带回来；visited 是学情态，下一轮读给模型。
+  // spec 存 moves 与 title：repaint 与 handoff 都要在点击发生时取现成的那份，不重新解析围栏。
+  const stored = readUiState(id)?.state || {};
+  const last = stored.last || null;
+  const spec = { moves: moves.map((m) => ({ name: m.name, state: m.state })), title };
+  writeUiState(id, 'walkthrough', stored, spec);
+
+  const idx = last ? spec.moves.findIndex((m) => m.name === last) : -1;
+  const hit = idx >= 0 ? spec.moves[idx] : null;
+  const atStart = idx <= 0;
+  const atEnd = idx >= spec.moves.length - 1;
+
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const groupAria = title
+    ? `走查「${title}」：一次只露一步，点「下一步」往下走`
+    : '一次只露一步，点「下一步」往下走';
+  const pane = hit
+    ? `<p class="ui-walk-pane-name">${cell(hit.name)}</p>` +
+      `<p class="ui-walk-pane-state">${cell(hit.state)}</p>`
+    : `<p class="ui-walk-pane-hint">点「下一步」，一步步走完这个问题</p>`;
+  const body =
+    `<div class="ui-walk" data-ui-walk="${escapeHtml(id)}">` +
+    `<div class="ui-walk-stage" role="group" aria-label="${escapeHtml(groupAria)}">` +
+    `<div class="ui-walk-pane" aria-live="polite">${pane}</div>` +
+    `<div class="ui-walk-nav">` +
+    `<button type="button" class="ui-walk-prev" data-ui-walk-prev="${escapeHtml(id)}"${atStart ? ' disabled' : ''}>上一步</button>` +
+    `<button type="button" class="ui-walk-next" data-ui-walk-next="${escapeHtml(id)}"${atEnd ? ' disabled' : ''}>下一步</button>` +
+    `</div></div></div>`;
+  return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'walkthrough' };
+}
+
+/**
  * suggest：`pick: 一句短话`（1–3 行）。回答末尾的"往哪走"分支条。
  *
  * 为什么它不进 UI_STATEFUL：点一条只是把那句话填进输入框，学习者没有在这一档里"留下"
@@ -824,6 +936,7 @@ function compileSuggest(fields) {
   }
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
+  if (walkWords(fields)) return { error: WALK_ONLY };
   const picks = pick(fields, 'pick').map((s) => s.trim()).filter(Boolean);
   if (!picks.length) return { error: '至少写一行 pick（一句想让学习者接着问的话）' };
   if (picks.length > SUGGEST_MAX) return { error: `最多 ${SUGGEST_MAX} 个分支（多了就是菜单，不是建议）` };
@@ -909,6 +1022,7 @@ function compileChart(fields) {
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (gameWords(fields)) return { error: GAME_ONLY };
+  if (walkWords(fields)) return { error: WALK_ONLY };
   if (pick(fields, 'slider').length) return compileInteractiveChart(fields, { type, title, handoff });
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (handoff.length) {
@@ -1163,7 +1277,7 @@ function chartSnapTable(snap, xLabels) {
   return `<table class="ui-chart-table-el">${head}<tbody>${row}</tbody></table>`;
 }
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough };
 
 /**
  * 编译器入口。partial = 这一段还在流里长（围栏未闭合）。

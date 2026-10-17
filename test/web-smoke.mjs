@@ -6017,6 +6017,209 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore48, errors.slice(errsBefore48).join(' | '));
 }
 
+// ─── 49. walkthrough：一步步走完一个问题（第三十六轮，学 IUI 的
+// "work through a problem step by step"——学习三机制最后一格：explore 是探索怎么运作、
+// 带 slider 的 chart 是改一个输入看会发生什么，这一格是一次只露一步地走完一个过程）。
+// walkthrough 是第七交互档：id 必填、move 2–8 步（动作名是身份、不能重复、等号后写
+// "这一步之后到哪"）、状态 {last, visited} 落盘续回、上一步/下一步按钮、handoff 拼句、
+// 右栏回看卡可见；每步只写状态不写判词，界面里没有数值化学情（Invariant 4 一条不破）。
+{
+  console.log('\n49. walkthrough（一步步走完一个问题：一次只露一步，点「下一步」往下走）');
+  const errsBefore49 = errors.length;
+  const ui49 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { state: st49, handleUiDeskEvent, renderPanel } = appModule.__hooks;
+  const compile49 = (lines, partial) => ui49.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  ui49.resetUiState();
+  const input49 = doc.getElementById('input');
+  const eq = ['kind: walkthrough', 'id: eq1', 'title: 解一元一次方程',
+    'move: 翻译成算式 = 5x + 3 = 17',
+    'move: 两边减去3 = 5x = 14',
+    'move: 两边除以5 = x = 2.8',
+    'handoff: 把这个过程带回去问'];
+
+  // 1) 编译形状：上一步/下一步按钮 + 面板 + 归属 id + 默认引导（没开始就照实说）
+  const c = compile49(eq).html;
+  check('上一步/下一步两个按钮（真实 button + type=button，键盘天然可走）',
+    (c.match(/<button type="button" class="ui-walk-(prev|next)/g) || []).length === 2, c.slice(0, 400));
+  check('每个按钮带着归属 id 与方向',
+    c.includes('data-ui-walk-prev="eq1"') && c.includes('data-ui-walk-next="eq1"'), c.slice(0, 400));
+  check('整块带着归属 id（重画/续状态能找到这份走查）',
+    c.includes('<div class="ui-walk" data-ui-walk="eq1"'), c.slice(0, 200));
+  check('默认没有露出任何一步（没开始就照实说，只有中性引导）',
+    !c.includes('ui-walk-pane-name') && c.includes('ui-walk-pane-hint') && c.includes('点「下一步」'), c.slice(-300));
+  check('面板带 aria-live（点一下，读屏把新露出的那一步读出来）',
+    c.includes('class="ui-walk-pane" aria-live="polite"'), c.slice(0, 300));
+  check('分组带读屏名（role=group + 标题）',
+    c.includes('role="group"') && c.includes('走查「解一元一次方程」：一次只露一步'), c.slice(0, 300));
+  check('title 帽 + handoff 按钮（沿交互档的既有出口）',
+    c.includes('ui-cap') && c.includes('class="ui-handoff" data-ui-handoff="eq1"'), c.slice(-300));
+  check('默认态：上一步 disabled、下一步可用（还没开始，退无可退）',
+    c.includes('class="ui-walk-prev" data-ui-walk-prev="eq1" disabled') && !c.includes('class="ui-walk-next" data-ui-walk-next="eq1" disabled'), c.slice(0, 500));
+  check('编译输出没有判分词（Invariant 4：每步只写状态，没对错、没得分；等式里的数字是现象不是学情）',
+    !/score|percent|mastery|correct|incorrect/i.test(c), c.slice(0, 400));
+  check('等号后的状态照常进得去（5x = 14 是这一步之后到哪，不是学情）',
+    Boolean(ui49.readUiState('eq1')?.spec?.moves.find((m) => m.name === '两边减去3')?.state.includes('5x = 14')),
+    JSON.stringify(ui49.readUiState('eq1')?.spec?.moves));
+  ui49.resetUiState();
+
+  // 2) 确定性：同一份输入两次编译一模一样（状态没动过，不许跳）
+  check('walkthrough 两次编译一模一样', compile49(eq).html === c, '');
+
+  // 3) 状态续回：上次走到「两边减去3」、走到过前三步，重画就都带回来
+  ui49.writeUiState('eq1', 'walkthrough', { last: '两边减去3', visited: { '翻译成算式': true, '两边减去3': true }, uiKind: 'walkthrough' });
+  const c2 = compile49(eq).html;
+  check('重画续回上次停的那一步（名字与状态都回来）',
+    c2.includes('<p class="ui-walk-pane-name">两边减去3</p>') && c2.includes('<p class="ui-walk-pane-state">5x = 14</p>'), c2.slice(-400));
+  check('停在中途：上一步与下一步都可用', !c2.includes('ui-walk-prev" data-ui-walk-prev="eq1" disabled') && !c2.includes('ui-walk-next" data-ui-walk-next="eq1" disabled'), c2.slice(0, 500));
+  ui49.writeUiState('eq1', 'walkthrough', { last: '两边除以5', visited: { '翻译成算式': true, '两边减去3': true, '两边除以5': true }, uiKind: 'walkthrough' });
+  const c3 = compile49(eq).html;
+  check('停到最后一步：「下一步」点不动了（走完了，退路仍在）',
+    c3.includes('class="ui-walk-next" data-ui-walk-next="eq1" disabled') && !c3.includes('class="ui-walk-prev" data-ui-walk-prev="eq1" disabled'), c3.slice(0, 500));
+  ui49.writeUiState('eq1', 'walkthrough', { last: null, visited: {}, uiKind: 'walkthrough' });
+
+  // 4) 降级路径：不静默吞——逐条点名
+  const deg49 = (lines) => ui49.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  check('没有 id：掉回原文并点名', Boolean(deg49(['kind: walkthrough', 'move: 甲 = x', 'move: 乙 = y']).includes('id')), '');
+  check('只有一步没得走：掉回原文并点名',
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'move: 甲 = x']).includes('至少')), '');
+  const nineMoves49 = ['kind: walkthrough', 'id: a', ...Array.from({ length: 9 }, (_, i) => `move: 步${i} = 到${i}`)];
+  check('超过 8 步：掉回原文并点名', Boolean(deg49(nineMoves49).includes('最多')), '');
+  check('move 没有等号：掉回原文并点名',
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'move: 甲 x', 'move: 乙 = y']).includes('这一步的动作 = 这一步之后到哪')), '');
+  check('move 的名字是空的：掉回原文并点名',
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'move:  = x', 'move: 乙 = y']).includes('名字是空的')), '');
+  check('move 名太长：掉回原文并点名',
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'move: ' + '甲'.repeat(21) + ' = x', 'move: 乙 = y']).includes('太长')), '');
+  check('move 名不合法（中间有空格）：掉回原文并点名',
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'move: 两 边减 = x', 'move: 乙 = y']).includes('不合法')), '');
+  check('两步做同一件事：掉回原文并点名',
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'move: 甲 = x', 'move: 甲 = z']).includes('两遍')), '');
+  check('这一步之后到哪是空的：掉回原文并点名',
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'move: 甲 = ', 'move: 乙 = y']).includes('之后到哪是空的')), '');
+  check('这一步之后到哪太长：掉回原文并点名',
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'move: 甲 = ' + 'x'.repeat(81), 'move: 乙 = y']).includes('太长')), '');
+  check('walkthrough 里写 step（steps 档的字段）：掉回原文并点名',
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'step: 一步', 'move: 乙 = y']).includes('step 是 steps 档的字段')), '');
+  check('walkthrough 里写 table：掉回原文并点名',
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'move: 甲 = x', 'move: 乙 = y', 'table: 一张表']).includes('table 只配带 slider')), '');
+  check('walkthrough 里写 try：掉回原文并点名',
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'move: 甲 = x', 'move: 乙 = y', 'try: 丙']).includes('只配带 id 的 game')), '');
+  check('handoff 超 24 字：掉回原文并点名',
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'move: 甲 = x', 'move: 乙 = y', 'handoff: ' + '发'.repeat(25)]).includes('24')), '');
+  check('move 写在 compare：掉回原文并点名',
+    Boolean(deg49(['kind: compare', 'row: 甲 | 乙', 'move: 丙 = x']).includes('只配带 id 的 walkthrough')), '');
+  check('move 写在 steps：掉回原文并点名',
+    Boolean(deg49(['kind: steps', 'step: 一步', 'move: 丙 = x']).includes('只配带 id 的 walkthrough')), '');
+  check('move 写在 checklist：掉回原文并点名',
+    Boolean(deg49(['kind: checklist', 'id: a', 'item: 一项', 'move: 丙 = x']).includes('只配带 id 的 walkthrough')), '');
+  check('move 写在 calculator：掉回原文并点名',
+    Boolean(deg49(['kind: calculator', 'id: a', 'param: 人数 | 5', 'formula: 总量 = 人数 * 2', 'move: 丙 = x']).includes('只配带 id 的 walkthrough')), '');
+  check('move 写在 diagram：掉回原文并点名',
+    Boolean(deg49(['kind: diagram', 'id: a', 'node: 甲 | x', 'node: 乙 | y', 'edge: 甲 -> 乙', 'move: 丙 = x']).includes('只配带 id 的 walkthrough')), '');
+  check('move 写在 explore：掉回原文并点名',
+    Boolean(deg49(['kind: explore', 'id: a', 'tab: 甲 | x', 'tab: 乙 | y', 'move: 丙 = x']).includes('只配带 id 的 walkthrough')), '');
+  check('move 写在静态 chart：掉回原文并点名',
+    Boolean(deg49(['kind: chart', 'series: a = 1,2', 'move: 丙 = x']).includes('只配带 id 的 walkthrough')), '');
+  check('move 写在带 slider 的 chart：掉回原文并点名',
+    Boolean(deg49(['kind: chart', 'series: a = 1,2', 'id: c1', 'slider: 样本量', 'snap: n5 = 1,2', 'snap: n30 = 3,4', 'move: 丙 = x']).includes('只配带 id 的 walkthrough')), '');
+  check('move 写在 suggest：掉回原文并点名',
+    Boolean(deg49(['kind: suggest', 'pick: 接着问', 'move: 丙 = x']).includes('只配带 id 的 walkthrough')), '');
+  check('move 写在 game：掉回原文并点名',
+    Boolean(deg49(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 甲 = x', 'outcome: 乙 = y', 'move: 丙 = z']).includes('只配带 id 的 walkthrough')), '');
+
+  // 5) 宿主接线：点「下一步」→ last/visited 落对 + 报回（判分一个字都不发生）
+  st49.notebook = sampleNotebook();
+  st49.uiReported.clear();
+  const posts49 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const before49 = posts49();
+  compile49(eq); // 把 spec 写进 Map（宿主点击要靠 spec.moves 换面板）
+  const r49 = handleUiDeskEvent({ target: { dataset: { uiWalkNext: 'eq1' } } });
+  check('点「下一步」被接住（返回是哪一档、哪份走查）',
+    r49.handled === true && r49.kind === 'walkthrough' && r49.id === 'eq1', JSON.stringify(r49));
+  const st49a = ui49.readUiState('eq1');
+  check('last 落到第一步、visited 记下走到过它',
+    st49a.state.last === '翻译成算式' && st49a.state.visited['翻译成算式'] === true, JSON.stringify(st49a.state));
+  check('状态走 artifact-message 报回（与其它交互档同一条通道）', posts49() === before49 + 1, `posts ${before49} → ${posts49()}`);
+  check('状态里没有判分的位置（报回来的只有走到哪/走到过哪，没有对错分数）',
+    !/correct|incorrect|score|result/.test(JSON.stringify(st49a.state)), JSON.stringify(st49a.state));
+  handleUiDeskEvent({ target: { dataset: { uiWalkNext: 'eq1' } } });
+  const st49b = ui49.readUiState('eq1');
+  check('再点「下一步」：走到第二步、visited 追加',
+    st49b.state.last === '两边减去3' && st49b.state.visited['翻译成算式'] === true && st49b.state.visited['两边减去3'] === true, JSON.stringify(st49b.state));
+  const r49p = handleUiDeskEvent({ target: { dataset: { uiWalkPrev: 'eq1' } } });
+  check('点「上一步」：退到第一步、visited 不删（走到过就是走到过）',
+    r49p.handled === true && ui49.readUiState('eq1').state.last === '翻译成算式'
+    && ui49.readUiState('eq1').state.visited['两边减去3'] === true, JSON.stringify(ui49.readUiState('eq1').state));
+  handleUiDeskEvent({ target: { dataset: { uiWalkPrev: 'eq1' } } });
+  check('已在第一步再点「上一步」：点不响（宿主按长度挡，不猜）',
+    ui49.readUiState('eq1').state.last === '翻译成算式', JSON.stringify(ui49.readUiState('eq1').state));
+  ui49.writeUiState('eq1', 'walkthrough', { last: '两边除以5', visited: { '翻译成算式': true, '两边减去3': true, '两边除以5': true }, uiKind: 'walkthrough' }, { moves: [{ name: '翻译成算式', state: 'a' }, { name: '两边减去3', state: 'b' }, { name: '两边除以5', state: 'c' }] });
+  const r49e = handleUiDeskEvent({ target: { dataset: { uiWalkNext: 'eq1' } } });
+  check('已到最后一步再点「下一步」：点不响（走完了，没有下一步）', r49e.handled === false, JSON.stringify(r49e));
+  const r49n = handleUiDeskEvent({ target: { dataset: { uiWalkNext: 'nope' } } });
+  check('不认得的 id 点不响（没 spec 就不知道有哪几步）', r49n.handled === false, JSON.stringify(r49n));
+  compile49(eq); // 恢复 eq1 的 spec（上一条测试覆盖过它）
+
+  // 6) repaint：只换面板与按钮态（整块不重画；正文那一刷会跳滚动）
+  ui49.resetUiState();
+  compile49(eq); // 从未开始的状态起步（上一步测试把状态停到了最后一步）
+  const walkBlock = doc.createElement('div');
+  walkBlock.className = 'ui-walk';
+  walkBlock.dataset.uiWalk = 'eq1';
+  const pane49 = doc.createElement('div'); pane49.className = 'ui-walk-pane';
+  const hint49 = doc.createElement('p'); hint49.className = 'ui-walk-pane-hint';
+  hint49.textContent = '点「下一步」，一步步走完这个问题';
+  pane49.append(hint49);
+  const prev49 = doc.createElement('button'); prev49.className = 'ui-walk-prev'; prev49.disabled = true;
+  const next49 = doc.createElement('button'); next49.className = 'ui-walk-next';
+  walkBlock.append(pane49, prev49, next49);
+  domRoot.append(walkBlock);
+  handleUiDeskEvent({ target: { dataset: { uiWalkNext: 'eq1' } } });
+  check('repaint 把面板换成第一步（名字 + 这一步之后到哪）',
+    pane49._kids.length === 2 && pane49._kids[0]._text === '翻译成算式'
+    && pane49._kids[0].className === 'ui-walk-pane-name' && pane49._kids[1]?.className === 'ui-walk-pane-state'
+    && pane49._kids[1]?._text.includes('5x + 3 = 17'), '');
+  check('在第一步：「上一步」仍禁用（开始之前退无可退）、「下一步」可用',
+    prev49.disabled === true && next49.disabled === false, `prev=${prev49.disabled} next=${next49.disabled}`);
+  check('repaint 只换面板内容（整块没被重画：块还在原处、按钮没被换掉）',
+    domRoot._kids.includes(walkBlock), '');
+  handleUiDeskEvent({ target: { dataset: { uiWalkNext: 'eq1' } } });
+  check('走到第二步：「上一步」解除禁用（能退回去）、「下一步」仍可用',
+    prev49.disabled === false && next49.disabled === false, `prev=${prev49.disabled} next=${next49.disabled}`);
+  handleUiDeskEvent({ target: { dataset: { uiWalkNext: 'eq1' } } });
+  check('走到最后一步：「下一步」禁用、退路还在',
+    next49.disabled === true && prev49.disabled === false, `prev=${prev49.disabled} next=${next49.disabled}`);
+  walkBlock.remove();
+
+  // 7) handoff：把"走到哪"机械地拼成话递回对话（不自动发）
+  const boxBefore49 = input49.value;
+  ui49.writeUiState('eq1', 'walkthrough', { last: '两边除以5', visited: { '翻译成算式': true, '两边减去3': true, '两边除以5': true }, uiKind: 'walkthrough' }, { moves: [{ name: '翻译成算式', state: 'x' }, { name: '两边减去3', state: 'y' }, { name: '两边除以5', state: 'z' }], title: '解一元一次方程' });
+  const r49h = handleUiDeskEvent({ target: { dataset: { uiHandoff: 'eq1' } } });
+  check('walkthrough 的 handoff 被接住（返回是哪个 id）',
+    r49h.handled === true && r49h.kind === 'handoff' && r49h.id === 'eq1', JSON.stringify(r49h));
+  check('拼句：我在「标题」里走到了「两边除以5」（不露内部 id）',
+    input49.value === '我在「解一元一次方程」里走到了「两边除以5」', input49.value);
+  ui49.writeUiState('eq1', 'walkthrough', { last: null, visited: { '翻译成算式': true }, uiKind: 'walkthrough' }, { moves: [{ name: '翻译成算式', state: 'x' }], title: '解一元一次方程' });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'eq1' } } });
+  check('没停在某一步但走到过：照实说走到过最后那个', input49.value === '我在「解一元一次方程」里走到过：翻译成算式', input49.value);
+  ui49.writeUiState('eq1', 'walkthrough', { last: null, visited: {}, uiKind: 'walkthrough' }, { moves: [{ name: '翻译成算式', state: 'x' }], title: '解一元一次方程' });
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'eq1' } } });
+  check('什么都没走：照实说还没有开始走', input49.value === '我在「解一元一次方程」里还没有开始走', input49.value);
+  check('拼句里没有判分词（Invariant 4：话里不出对错/分数）',
+    !/score|percent|mastery|correct|incorrect/.test(input49.value), input49.value);
+  input49.value = boxBefore49;
+
+  // 8) 右栏回看卡：walkthrough 出现在「这局动过的界面」（与 hydrate 同一条筛子）
+  st49.notebook.progress.artifact_state = { 'ui:eq1': { uiKind: 'walkthrough', last: '两边除以5', visited: { '翻译成算式': true, '两边减去3': true, '两边除以5': true } } };
+  renderPanel();
+  const card49 = deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
+  const notes49 = card49 ? deepAll(card49, 'state-note').map((n) => n.textContent) : [];
+  check('右栏卡把 walkthrough 排进来（只出现象：走到过 + 现在停在）',
+    notes49.includes('走一遍「eq1」') && notes49.includes('· 走到过：翻译成算式、两边减去3、两边除以5') && notes49.includes('· 现在停在：两边除以5'), notes49.join(' / '));
+
+  check('这一节无异常', errors.length === errsBefore49, errors.slice(errsBefore49).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

@@ -1698,6 +1698,37 @@ bill splitters、and games**——"a game you can play in the conversation"。ca
 硬规矩"七条"→"九条"（第三十三轮漏改）、`title` 行补 explore / game。详细判决在
 `docs/iteration-2026-10-17.md`。
 
+### 一步步走完一个问题：```ui 那一档加了 walkthrough（2026-10-17b 第三十六轮）
+
+IUI 官方博文 "Learn complex topics more easily" 把学习体验的三种形态摆齐了：**explore how
+something works、change an input to see what happens、work through a problem step by step**。
+前两格（explore / diagram、calculator / 带 slider 的 chart）已借，第三十六轮把最后一格补上——
+内联围栏新增 `walkthrough` 档，学的是**渐进披露**那一手：
+
+- 围栏：`kind: walkthrough` + `id:`（必填）+ `move: 这一步的动作 = 这一步之后到哪`
+  （2–8 步、动作名是身份、不能重复、≤20 字；等号后 ≤80 字）+ 可选 `title` / `handoff`。
+- 一个面板 + 上一步/下一步两个真实 `<button>`：**一次只露一步**，点「下一步」往下走、
+  点「上一步」退回来——节奏在学习者手里。默认（没开始）面板是中性引导，不替学习者声称他
+  已经走到哪一步；第一步「上一步」禁用（开始之前退无可退）、最后一步「下一步」禁用（走完了，
+  退路仍在）；aria-live 把新露出的那一步读给读屏。
+- **硬线：每步只写"这一步之后到哪"（状态 / 现象，如 `5x = 14`），不写为什么**——解释留在
+  对话里（制品给现象、对话给解释是基线）。状态 `{last, visited}` 沿 explore 的
+  {active, viewed} 一族：last 是"现在停在哪个 move"、visited 是"走到过哪些"（只增不减，
+  上一步不删）——都是学情态，下一轮模型读得到；判分仍是模型的活（Invariant 4 一条不破）。
+- 与其它档的分工：静态有序清单一次全给 → `steps`；选一个选择看离散结果 → `game`；
+  只是换一面看介绍（没有后果）→ `explore`；**一步一步往下走、中间态逐个披露** → `walkthrough`。
+- 降级逐条点名：无 id / 一步 / 九步 / move 没写等号 / 空名 / 名太长 / 名不合法 / 重名 /
+  状态为空 / 状态太长 / handoff 超 24 字 / walkthrough 里写 table / walkthrough 里写 try /
+  **walkthrough 里写 step**（steps 档的字段）/ **move 写在其它九档**（与 table / game
+  同一把尺），全掉回原文。
+
+行为 59 项加在 web-smoke §49，契约 387 项（data-\* 名单 17 → 20：`ui-walk` / `ui-walk-prev` /
+`ui-walk-next`；`UI_STATEFUL` 六档 → 七档），10 枚变异各验过红、零假绿（M8 越界闸以崩溃式
+验红：拆掉后第 1 步点上一步直接 TypeError，守卫该拦的点当场崩）。样式零新十六进制：面板与
+按钮沿 explore / game 一族，底色只借 `--surface-2`、disabled 只降一级墨色。至此 IUI 官方
+博文点名的对话内组件全部处置完毕：十档 + table 视图，学习三机制与工具三件套（calculators /
+bill splitters / games）全部借出或书面否决。详细判决在 `docs/iteration-2026-10-17b.md`。
+
 ## 已知边界
 
 - **没有音频旁白（TTS）。** 原版的 `narration.py` + 时间轴那一整套没搬，需要先做完整套件才能支持。

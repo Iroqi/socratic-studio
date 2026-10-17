@@ -783,6 +783,35 @@ html, body {
 .ui-game-pane-outcome { margin: 0; font-size: 12.5px; color: var(--ink-2); }
 .ui-game-pane-hint { margin: 0; font-size: 12.5px; color: var(--ink-3); }
 
+/* walkthrough（第三十六轮，学 IUI 的 "work through a problem step by step"）：
+   一步步走完一个问题，一次只露一步。面板沿 explore / game 那一族——底色只借量过的
+   --surface-2，导航按钮沿 .ui-game-try 那尺：hover 只换文字与描边、不引新背景，
+   disabled 态只降一级墨色，零新十六进制。 */
+.ui-walk { margin: 0 0 1em; }
+.ui-walk-stage { margin: 0; }
+.ui-walk-pane {
+  padding: 10px 12px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.ui-walk-pane-name { margin: 0 0 2px; font-size: 13.5px; font-weight: 620; color: var(--ink); }
+.ui-walk-pane-state { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+.ui-walk-pane-hint { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+.ui-walk-nav { display: flex; gap: 6px; margin: 8px 0 0; }
+.ui-walk-prev,
+.ui-walk-next {
+  padding: 5px 11px; background: var(--surface-2); color: var(--ink-2);
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  font-size: 12.5px; cursor: pointer;
+}
+.ui-walk-prev:hover,
+.ui-walk-next:hover { color: var(--ink); border-color: var(--ink-2); }
+.ui-walk-prev:focus-visible,
+.ui-walk-next:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-walk-prev:disabled,
+.ui-walk-next:disabled { color: var(--ink-3); border-color: var(--border); cursor: default; }
+.ui-walk-prev:disabled:hover,
+.ui-walk-next:disabled:hover { color: var(--ink-3); border-color: var(--border); }
+
 /* 降级：原文看得见 + 一句为什么。它是这一档唯一的"失败可见"面，不许静默吞。 */
 .ui-degraded {
   margin: -0.4em 0 1em; font-size: 12px; color: var(--ink-3);
