@@ -83,11 +83,22 @@ html, body {
   line-height: 1.72;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* 第四十一轮：横向溢出兜底。任何比视口宽的隐性内容（长 URL、超宽卡片、扩展注入）
+     都不该把整页推成可横滚——横滚状态下主区内容会整段"看起来偏右"。
+     本地 1280/1454 视口全量验证过：正常渲染下页面本就不横滚，此规则零副作用。 */
+  overflow-x: hidden;
 }
 
 .hidden { display: none !important; }
 
 .layout { display: grid; grid-template-columns: 216px minmax(0, 1fr); }
+
+/* 第四十一轮：舞台、台面流与输入区各自压住 min-width，杜绝 flex 链式撑宽——
+   .stage/.thread 是纵向 flex 链上的子项，默认 min-width:auto，内容一旦超宽会把
+   父链一路顶宽，居中容器（thread-inner/composer-wrap）的 margin auto 参照随之偏移。 */
+.stage,
+.thread,
+.composer-wrap { min-width: 0; }
 
 /* ───────────── 左导航栏：点击式 ───────────── */
 .rail {
