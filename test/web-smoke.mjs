@@ -697,6 +697,31 @@ check('重命名保存真的打了 PATCH（带新标题）', requests.slice(reqB
 check('重命名成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已重命名为「闭包与作用域」')));
 check('启动过程无异常', errors.length === 0, errors.join(' | '));
 
+// ── 第四十轮：导航栏升"窗口卡片" + 重命名卡片窗口（外观迭代，骨架不变） ──
+{
+  // 在这里直接读文件：模块级的 cssText / idxHtml 在 1572 行之后才初始化（TDZ）
+  const cssText40 = fs.readFileSync(path.join(webDir, 'styles.css'), 'utf8');
+  const idxHtml40 = fs.readFileSync(path.join(webDir, 'index.html'), 'utf8');
+  // 品牌锁标：mark + 名称 + 副标题（原来是只有名字的裸一行）
+  check('品牌有副标题行（mark + 名称 + 副标题的三段锁标）',
+    idxHtml40.includes('brand-mark') && idxHtml40.includes('brand-name') && idxHtml40.includes('brand-sub'), '缺 brand-sub');
+  // 会话条目是卡片：悬停抬升（细边框 + 阴影）不是裸行变色
+  check('会话条目卡片化：悬停有边框与阴影（不再是裸行）',
+    /\.nb-item:hover \{[\s\S]*?border-color: var\(--border\)[\s\S]*?box-shadow: var\(--shadow\)/.test(cssText40), 'hover 无抬升');
+  check('当前项有左侧 accent 竖条（一眼看出开的是哪本）',
+    /\.nb-item\.active \{[\s\S]*?border-left: 3px solid var\(--accent\)/.test(cssText40), 'active 无竖条');
+  check('元信息做成小胶囊（概念数/轮对话这类内容计数可给视觉权重，学情指标仍只写字）',
+    /\.nb-item-meta span \{[\s\S]*?border-radius: 999px/.test(cssText40), 'meta 非胶囊');
+  const renBtn2 = doc.getElementById('notebookList').findByClass('nb-item-rename')[0];
+  if (renBtn2) {
+    renBtn2.onclick();
+    const modalEl = doc.getElementById('simpleModal');
+    check('重命名走卡片窗口：弹窗带 rename-card 类', (modalEl.className || '').includes('rename-card'), modalEl.className);
+    check('输入框是 rename-input（大号主焦点），仍是 body 第一个孩子', doc.getElementById('simpleModalBody').children[0]?.className?.includes('rename-input'), doc.getElementById('simpleModalBody').children[0]?.className || '');
+    doc.getElementById('closeSimple')?.onclick?.();
+  }
+}
+
 // --- 导演台：中间列只有一条流，一切内容按「场」分组落在同一条流里 ---
 console.log('1b. 刷新回放：讲解、题目、道具、讲义落在同一条流里');
 const desk = () => doc.getElementById('deskInner');

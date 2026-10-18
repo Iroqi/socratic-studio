@@ -410,16 +410,21 @@ function renderNotebookList() {
 
 /**
  * 重命名：小弹窗 + 输入框。空名不保存；保存后刷新列表，若正开着这本就连带刷新内容。
+ * 第四十轮起走"卡片窗口"观感（modalClass=rename-card）：同一个骨架，输入框专属样式
+ * 由 .rename-card .rename-input 提供，测试桩认的结构（body[0]=输入、foot[1]=保存）不动。
  */
 async function renameNotebook(nb) {
   const input = el('input');
   input.type = 'text';
   input.value = nb.title || '';
   input.maxLength = 120;
+  input.className = 'rename-input';
+  input.setAttribute('placeholder', '给这本学习起个名字…');
   openSimpleModal({
-    title: '重命名',
+    title: '重命名学习',
     body: input,
     confirmText: '保存',
+    modalClass: 'rename-card',
     onConfirm: async () => {
       const title = input.value.trim();
       if (!title) return;
@@ -4091,9 +4096,14 @@ function announce(text) {
   if (a) a.textContent = text;
 }
 
-function openSimpleModal({ title, body, confirmText = '确定', cancelText = '取消', danger = false, onConfirm }) {
+function openSimpleModal({ title, body, confirmText = '确定', cancelText = '取消', danger = false, modalClass = '', onConfirm }) {
   modalLastFocus = document.activeElement || null;
   $('simpleModalTitle').textContent = title || '标题';
+  // 卡片化的附加类（第四十轮）：弹窗仍走同一套骨架，视觉由类切换——
+  // 测试桩认的是骨架结构（body[0] 是输入、foot[1] 是确认键），不是外观。
+  const modalEl = $('simpleModal');
+  modalEl.classList.remove('modal-card');
+  if (modalClass) modalEl.classList.add(modalClass);
   const bodyEl = $('simpleModalBody');
   bodyEl.innerHTML = '';
   if (typeof body === 'string') {
