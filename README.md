@@ -1779,6 +1779,23 @@ decide how the pieces fit together"**——旗舰演示全都是"一个界面由
   缺省堆叠 / 确定性 / 降级逐条：值错、写两遍、配三块、写进子块 / 宿主透明），8 枚变异各验过
   红、零假绿。详细判决在 `docs/iteration-2026-10-17d.md`。
 
+### 所有交互方式统一为 Intelligent UI：右栏砍除融入、ask/canvas 入档、IUI 默认信封（2026-10-18 第三十九轮）
+
+第三十八轮的遗留清单与本轮用户拍板的架构大调整合流：**IUI 从"一种界面语法"升为默认交互方式**——
+"每条响应都自带设计基础"（官方博文 "The library gives each response a familiar design foundation"）。
+
+- **右侧侧边栏砍掉**：保留 GATE 入口 / UI 状态回看 / 后台任务计数 / 素材列表，融入台面顶部的
+  **现状条**（`#deskState`）；概念图、事件、决策、备注、复盘、整本备份（导出/导入/体检/小结/zip）
+  直接砍。`.layout` 三列改两列，窄屏覆盖层与 `panel-collapsed` 连根拔。
+- **ask 融入 IUI**：新增 ```ui `question` 档。模型在正文围栏里声明题卡（选项 `label — desc`），
+  平台编译成卡并**阻塞收答**（提交/跳过初始禁用，服务端 ask 事件到达才放活）；`ask_user_question`
+  不再暴露给模型（buildTools 20→19），`TOOL_NAMES.ASK`/`execAsk` 保留供旧回放/清障。
+- **canvas 融入 IUI**：新增 ```ui `canvas` 档——模型在围栏里声明整页制品，走现有 artifact 通道。
+- **IUI 默认信封**：模型不写围栏时，纯文字自动包成 `.ui-text` 文本块再上台（plain 模式不包）。
+  正文 = 文本块、收答 = question 档、整页制品 = canvas 档、右栏现状 = 现状条。
+- 全量 `npm run test:all` = **2661 项 / 6 套件全绿**（run 695 / runtime-unit 92 / contract 391 /
+  web-smoke 1191 / http 249 / artifact-evidence 43）。详细判决在 `docs/iteration-2026-10-18.md`。
+
 ## 已知边界
 
 - **没有音频旁白（TTS）。** 原版的 `narration.py` + 时间轴那一整套没搬，需要先做完整套件才能支持。
