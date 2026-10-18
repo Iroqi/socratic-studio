@@ -4089,6 +4089,28 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('闭合了才有权判失败：同一份内容按"写坏了"处理',
     Boolean(badFinal.degraded) && !badFinal.pending, JSON.stringify(badFinal).slice(0, 160));
 
+  // 6a) 第四十二轮：渐进式渲染——未闭合时已写出的部分先长出来
+  // （IUI 编译器"界面随生成渐进出现，不等整个响应"的那一路，见 OpenAI GPT-6 博文）
+  ui.resetUiState();
+  const progChk = ui.compileUiBlock(['kind: checklist', 'item: 先洗', 'item: 再切'], true);
+  check('流里清单缺 id：已写出的项照样长出来（不摆整块占位）',
+    progChk.pending === true && progChk.html.includes('ui-check') && !progChk.html.includes('ui-skeleton'), progChk.html.slice(0, 220));
+  check('渐进帧的清单框禁用（id 没到、勾选态没地方续，勾了也会被下一帧冲掉——不许骗人勾）',
+    progChk.html.includes('disabled'), progChk.html.slice(0, 220));
+  const progFin = ui.compileUiBlock(['kind: checklist', 'item: 先洗'], false);
+  check('同一份内容闭合（终态）仍按写坏了处理：缺 id 当场降级',
+    Boolean(progFin.degraded) && progFin.degraded.includes('没有 id'), progFin.degraded);
+  const progStp = ui.compileUiBlock(['kind: steps', 'step: 开炉', 'step: | 要等它热透'], true);
+  check('流里有一行只写到"step: | 为什么"：跳过未完成行，已写步骤照常上台',
+    progStp.pending === true && progStp.html.includes('开炉') && !progStp.html.includes('热透') && progStp.html.includes('ui-steps'), progStp.html.slice(0, 220));
+  const progStpFin = ui.compileUiBlock(['kind: steps', 'step: | 要等它热透'], false);
+  check('同样的空行终态是硬错（渐进是流里的宽容，不是终态的松绑）',
+    Boolean(progStpFin.degraded) && progStpFin.degraded.includes('有一步是空的'), progStpFin.degraded);
+  const progMd = md39.renderMarkdown('```ui\nkind: checklist\nitem: 备份数据\nitem: 关掉服务\n', { partial: true });
+  check('渲染器那一路同样渐进：流里清单已写项上台、无占位',
+    progMd.includes('ui-check') && !progMd.includes('ui-skeleton'), progMd.slice(0, 200));
+  ui.resetUiState();
+
   // 6b) 收尾那一刷：settled 之后不许还摆着"正在长"
   // 流式那一路 rAF 会把这块刷成占位并清掉 dirty；turn_end 那一刷若只看 dirty 就什么都
   // 不重画——占位会一直挂到页面关掉，那是"再也不会长了"被说成"还在长"。

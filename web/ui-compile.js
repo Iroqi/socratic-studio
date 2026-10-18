@@ -243,7 +243,7 @@ function compileCompare(fields, lines) {
 }
 
 /** steps：`step: 这一步 | 为什么在这一步`（第二段可省）。有序列表 + `<ol>`，读屏天然带序号。 */
-function compileSteps(fields, lines) {
+function compileSteps(fields, lines, partial) {
   if (pick(fields, 'handoff').length) return { error: 'steps 这一档没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
@@ -260,7 +260,14 @@ function compileSteps(fields, lines) {
     const why = rest.filter(Boolean).join(' ');
     return `<li><span class="ui-step-name">${cell(first)}</span>${why ? `<span class="ui-step-why">${cell(why)}</span>` : ''}</li>`;
   });
-  if (lis.some((x) => x === null)) return { error: '有一步是空的' };
+  if (lis.some((x) => x === null)) {
+    // 流里有一行只写到「step: | 为什么」（冒号后名字还没落）——这一行先不长，
+    // 已写出的步骤照常上台；终态再撞就是真写坏了，当场报错不骗人。
+    if (!partial) return { error: '有一步是空的' };
+    const keep = lis.filter((x) => x !== null);
+    if (!keep.length) return { error: '没有一行 step' };
+    return { html: `${cap}<ol class="ui-steps">${keep.join('')}</ol>`, shape: 'steps', pending: true };
+  }
   return { html: `${cap}<ol class="ui-steps">${lis.join('')}</ol>`, shape: 'steps' };
 }
 
@@ -272,9 +279,22 @@ function compileSteps(fields, lines) {
  * "第三格勾过"赌成"第三格还是那句话"。原文当键还有一层好处——读回给模型的
  * `artifact_state` 直接是 `done={"先洗":true}`，那是人话，不用它再翻一遍渲染顺序。
  */
-function compileChecklist(fields) {
+function compileChecklist(fields, lines, partial) {
   const id = pick(fields, 'id')[0];
-  if (!id) return { error: '这份清单没有 id：勾选态没地方续' };
+  const items = pick(fields, 'item').map((s) => s.trim());
+  if (!items.length) return { error: '一行 item 都没有' };
+  const title = pick(fields, 'title')[0] || '';
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  // 流里没闭合且 id 还没写出来：这一帧先把已写出的项长出来（临时 DOM，不写状态）。
+  // 勾选态续在 id 上，id 未到就没处写 UiState——所以这一帧的框不挂 data-ui-check；
+  // 闭合后带 id 的完整版重画同一批项，视觉不动，只是补上状态落点。终态缺 id 仍是硬错。
+  if (!id) {
+    if (!partial) return { error: '这份清单没有 id：勾选态没地方续' };
+    const boxes = items
+      .map((s) => `<label class="ui-check"><input type="checkbox" disabled /><span>${cell(s)}</span></label>`)
+      .join('');
+    return { html: `${cap}<div class="ui-checklist">${boxes}</div>`, shape: 'checklist', pending: true };
+  }
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
@@ -282,13 +302,9 @@ function compileChecklist(fields) {
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
-  const items = pick(fields, 'item').map((s) => s.trim());
-  if (!items.length) return { error: '一行 item 都没有' };
   if (items.some((s) => !s)) return { error: '有一行是空的' };
   if (new Set(items).size !== items.length) return { error: '两行一模一样，勾选态分不清是哪一行' };
   const done = readUiState(id)?.state?.done || {};
-  const title = pick(fields, 'title')[0] || '';
-  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
   // spec 从这一轮起也存 title：handoff 点击时要拼"我在清单「标题」里勾了…"，
   // 那时只剩 Map 可查（DOM 每帧被重画，title 不在 data-* 里）。
   writeUiState(id, 'checklist', { uiKind: 'checklist', done }, { title });
@@ -1608,9 +1624,11 @@ export function compileUiBlock(lines, partial) {
   if (lines.length > MAX_ITEMS + 6) return fail('这一段太长了，回到正文来说');
   try {
     // deck 需要带缩进的原文行（part 结构只有行首空格分得清），其余档不读 lines。
-    const r = COMPILERS[kind](parsed.fields, lines);
+    // partial 传给各档：流里没闭合时，可渐进档（checklist/steps）渲染已写出的部分，
+    // 而不是整块摆"正在长"的占位——这正是 IUI 编译器"界面随生成渐进出现"的那一路。
+    const r = COMPILERS[kind](parsed.fields, lines, partial);
     if (r.error) return fail(r.error);
-    return { html: r.html, shape: r.shape };
+    return { html: r.html, shape: r.shape, pending: r.pending || undefined };
   } catch {
     return fail('编译时没兜住，原文照旧');
   }
