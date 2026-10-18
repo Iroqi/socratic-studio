@@ -18,7 +18,7 @@ process.env.SOCRATIC_DATA_DIR = tmpRoot;
 const { createModels, fauxProvider, fauxAssistantMessage, fauxText, fauxToolCall, validateToolCall } =
   await import('@earendil-works/pi-ai');
 const { validateGraph, topoSortConcepts, GraphValidationError } = await import('../server/graph.mjs');
-const { checkTransition, runTurn, buildTools, TOOL_NAMES, seedArtifacts, normalizeAskOptions, unwrapStructuredArgs, historyToModelMessages, carryOverConcept, TeachingSession } =
+const { checkTransition, runTurn, buildTools, TOOL_NAMES, seedArtifacts, normalizeAskOptions, unwrapStructuredArgs, historyToModelMessages, carryOverConcept, TeachingSession, fenceQuestionArgs } =
   await import('../server/agent.mjs');
 const store = await import('../server/store.mjs');
 const { crc32 } = await import('../server/zip.mjs');
@@ -176,17 +176,20 @@ faux.setResponses([
   ),
   fauxAssistantMessage(
     [
-      fauxText('先别查——你猜外层函数已经 return 之后，里层还能不能读到外层当时的变量？'),
-      fauxToolCall(TOOL_NAMES.ASK, {
-        id: 'closures:q_outer_var',
-        concept_id: 'closures',
-        header: '探针',
-        question: '外层函数已经 return 了，里层函数还能读到外层当时的变量吗？',
-        options: [
-          { label: '能读到', description: '里层还握着那个变量' },
-          { label: '读不到', description: '外层一结束变量就没了' },
-        ],
-      }),
+      // 第三十九轮：ask 融入 IUI，提问不再走 ask_user_question 工具——模型在正文里
+      // 写 ```ui 的 question 档，平台编译成题卡并阻塞收答。这条路径要真走通：
+      // 围栏在流里先长卡，服务端随后合成 toolCall(ask_user_question) 回放对。
+      fauxText(`先别查——你猜外层函数已经 return 之后，里层还能不能读到外层当时的变量？
+
+\`\`\`ui
+kind: question
+id: closures:q_outer_var
+conceptId: closures
+header: 探针
+question: 外层函数已经 return 了，里层函数还能读到外层当时的变量吗？
+option: 能读到 — 里层还握着那个变量
+option: 读不到 — 外层一结束变量就没了
+\`\`\``),
     ],
     { stopReason: 'toolUse' },
   ),
@@ -890,7 +893,7 @@ check('分身那一份不许冒充台面：不带讲稿槽那句（它没有 cur
 
 section('7. 工具 schema');
 const tools = buildTools();
-check('工具数量与设计一致（18 个教学工具 + jev_judge 判定外包）', tools.length === 20, String(tools.length));
+check('工具数量与设计一致（第三十九轮起 ask_user_question 不再暴露给模型，18 教学 + jev_judge）', tools.length === 19, String(tools.length));
 check('每个工具都有 TypeBox schema', tools.every((t) => t.parameters && typeof t.parameters === 'object'));
 check('工具名唯一', new Set(tools.map((t) => t.name)).size === tools.length);
 check(
@@ -898,64 +901,25 @@ check(
   tools.some((t) => t.name === TOOL_NAMES.READ_ARTIFACT),
 );
 
-// ask 的选项：模型经常裸写字符串（`options: ["能读到","读不到"]`），而参数校验发生在
-// 我们的 execAsk **之前**（pi-ai 的 validateToolCall），所以只认对象时的表现是
-// "每发起一次提问组件都先红一次、第二次才对"——白烧一个来回，会话里还留一张红卡。
-// 这两种写法都必须过校验，往下游统一成 {label, description}。
-const askTool = tools.find((t) => t.name === TOOL_NAMES.ASK);
-const validateAsk = (options) => {
-  try {
-    return {
-      ok: true,
-      args: validateToolCall([askTool], {
-        name: TOOL_NAMES.ASK,
-        arguments: { id: 'closures:q_validate', concept_id: 'closures', question: '外层 return 后还能读到那个变量吗？', options },
-      }),
-    };
-  } catch (e) {
-    return { ok: false, error: String(e.message || e) };
-  }
-};
-const stringOpts = validateAsk(['能读到', '读不到']);
-check('字符串选项也过得了参数校验', stringOpts.ok, stringOpts.error || '');
-const mixedOpts = validateAsk([{ label: '能读到', description: '握着那个变量' }, '读不到']);
-check('对象写法照旧过得了校验（混着写也算）', mixedOpts.ok, mixedOpts.error || '');
-// concept_id 是必填：必填由 provider 的参数校验保证，比在提示词里叮嘱一句可靠
-let missingConcept = true;
-try {
-  validateToolCall([askTool], { name: TOOL_NAMES.ASK, arguments: { id: 'q_no_concept', question: '这一格属于哪个概念？' } });
-} catch {
-  missingConcept = false;
-}
-check('缺 concept_id 过不了参数校验', missingConcept === false);
+// 第三十九轮：提问校验从 ask_user_question 工具的 schema 挪进 ```ui question 档的解析
+// （fenceQuestionArgs）。模型不再有 ask_user_question 可调，提问只经围栏声明；
+// 校验失败的形态从"工具调用红一次"变成"编译不成 question 档"——语义同款，语法换壳。
+const qFence = (lines) => fenceQuestionArgs(lines.split('\n'));
+const stringFence = qFence('kind: question\nid: closures:q_validate\nconceptId: closures\nquestion: 外层 return 后还能读到那个变量吗？\noption: 能读到 — 里层还握着那个变量\noption: 读不到 — 外层一结束变量就没了');
+check('裸字符串选项也过得了编译（两个 option: 行成两个选项）', Boolean(stringFence) && stringFence.options.length === 2, JSON.stringify(stringFence));
+check('fence 出去的就是 {label, description}', JSON.stringify(stringFence.options) === '[{"label":"能读到","description":"里层还握着那个变量"},{"label":"读不到","description":"外层一结束变量就没了"}]', JSON.stringify(stringFence.options));
+const mixedFence = qFence('kind: question\nid: q-mixed\nconceptId: closures\nquestion: 混着写也算？\noption: 甲 — 带说明\noption: 乙');
+check('带说明与不带说明的 option 行混着写都过编译', Boolean(mixedFence) && mixedFence.options.length === 2 && mixedFence.options[1].description === null, JSON.stringify(mixedFence));
 check(
-  '两种写法出去的都是 {label, description}',
-  JSON.stringify(normalizeAskOptions(mixedOpts.ok ? mixedOpts.args.options : null)) ===
-    '[{"label":"能读到","description":"握着那个变量"},{"label":"读不到"}]',
-  JSON.stringify(normalizeAskOptions(mixedOpts.ok ? mixedOpts.args.options : null)),
-);
-check(
-  '空标签的选项丢掉，不给前端渲染出一条空白行',
+  '空标签的选项丢掉，不给前端渲染出一条空白行（execAsk 回放路径的归一兜底）',
   JSON.stringify(normalizeAskOptions(['', '   ', { label: ' 甲 ' }, { label: '' }])) === '[{"label":"甲"}]',
   JSON.stringify(normalizeAskOptions(['', '   ', { label: ' 甲 ' }, { label: '' }])),
 );
 check('没给选项（开放式提问）归一成空数组', JSON.stringify(normalizeAskOptions(undefined)) === '[]');
-
-// id 只是"这张卡对应哪个等待中的提问"的传输把手，答完就没用了；真正承重的是 concept_id
-// （学习者一答，应用凭它把那一格从 Unknown 记成 Seen）。以前 schema 把 id 判成必填，
-// 模型漏填一次就是一次红卡——而 execAsk 本来就会自己补号，等于校验层挡了代码能补的东西。
-let missingIdErr = '';
-let missingIdOk = true;
-try {
-  validateToolCall([askTool], {
-    name: TOOL_NAMES.ASK,
-    arguments: { concept_id: 'none', header: '学习范围', question: '学习范围确认：按这个顺序推进吗？', options: ['就按这个顺序来'] },
-  });
-} catch (e) {
-  missingIdOk = false;
-  missingIdErr = String(e.message || e);
-}
-check('缺 id 也过得了参数校验（不许再为它烧一张红卡）', missingIdOk === true, missingIdErr);
+// 编译红卡的形态：缺 id / 缺 question / kind 不是 question，一律解析不出参数
+check('fence 缺 id 编译不成 question（id 是围栏的必填把手）', fenceQuestionArgs('kind: question\nconceptId: closures\nquestion: 没写 id\noption: 甲'.split('\n')) === null);
+check('fence 缺 question 编译不成 question', fenceQuestionArgs('kind: question\nid: q-x\noption: 甲'.split('\n')) === null);
+check('kind 不是 question 不解析', fenceQuestionArgs('kind: checklist\nid: q-x\nquestion: 这不归 question 管'.split('\n')) === null);
 
 // 缺 id 时补出来的号必须真能用。两问同步连着发（真回合里同一毫秒连发两次完全可能）：
 // 把手一旦撞车，第一张卡就永远等不到作答。
@@ -1197,7 +1161,7 @@ for (const ghost of ['命令执行工具', 'str_replace', 'pdf 技能', '语音�
 section('7c. 制品通用通道：state / event / 下行指令 / 跨轮续玩');
 
 check('下行指令工具在场', buildTools().some((t) => t.name === 'push_artifact_command'));
-check('工具数变为 20（+jev_judge）', buildTools().length === 20, String(buildTools().length));
+check('工具数变为 19（第三十九轮起 ask_user_question 不进 buildTools，保留 TOOL_NAMES.ASK 供回放合成）', buildTools().length === 19, String(buildTools().length));
 check('异步制备制品工具在场', buildTools().some((t) => t.name === 'prepare_artifact'));
 check('结构化笔记工具在场', buildTools().some((t) => t.name === 'compile_notes'));
 check('present_plan 在场', buildTools().some((t) => t.name === 'present_plan'));
@@ -1402,10 +1366,11 @@ check('list_background_tasks 列出两种任务', (() => {
 check('读不存在的任务报错不抛', session.execReadBackground({ task_id: 'nope' }).ok === false);
 check('停一个不存在的任务报错不抛', session.execStopBackground({ task_id: 'nope' }).ok === false);
 // 停掉一个真在跑的任务：让分身去问一个没人答的问题，它就永远卡在 running，
-// 这样才能确定"停"发生在它完成之前。
+// 这样才能确定"停"发生在它完成之前。第三十九轮起提问走 ```ui question 档，
+// 后台任务同样走围栏——它一阻塞收答就挂在 running 上，直到被停。
 faux.setResponses([
   fauxAssistantMessage(
-    [fauxToolCall('ask_user_question', { id: 'q-hang', concept_id: 'none', question: '卡住了吗？', options: [{ label: '是' }, { label: '否' }] })],
+    [fauxText('卡住了吗？\n\n```ui\nkind: question\nid: q-hang\nconceptId: none\nquestion: 卡住了吗？\noption: 是 — 卡着\noption: 否 — 没卡\n```')],
     { stopReason: 'toolUse' },
   ),
 ]);

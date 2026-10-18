@@ -21,6 +21,7 @@ import {
   removeProp,
 } from './scene.mjs';
 import { injectArtifactRuntime, injectArtifactCsp, ARTIFACT_CONTRACT_NOTE } from './artifact.mjs';
+import { compileUiBlock } from '../web/ui-compile.js';
 
 /**
  * 从制品 HTML 里抽出题目坐标，供证据读回时对账。
@@ -88,23 +89,6 @@ function evidenceNote(items) {  const total = items.reduce((n, a) => n + a.evide
 
 // ---------------------------------------------------------------- 工具定义
 
-const ASK_OPTION = Type.Object({
-  label: Type.String({ description: '选项上显示的短标签' }),
-  description: Type.Optional(Type.String({ description: '一句话说明这个选项的含义或影响' })),
-});
-
-/**
- * 选项两种写法都收：`{"label":"能读到"}` 或直接 `"能读到"`。
- * 只认对象的话，模型每次裸写字符串就会被 pi-ai 的参数校验打回
- * （`options.0 must be object`），表现是"每道 ask 都要先红一次才成功"——
- * 白烧一个来回，还在会话里留一张红卡。校验发生在 execTool 之前，所以宽在 schema 里，
- * 归一在下面 `normalizeAskOptions()`，往下游（前端 / chat.json）出去的永远是 `{label}`。
- */
-const ASK_OPTION_INPUT = Type.Union([
-  Type.String({ description: '选项标签，等价于 {"label": "…"}' }),
-  ASK_OPTION,
-]);
-
 /** 把模型给的选项归一成 `{label, description}`；空标签的那条直接丢。 */
 export function normalizeAskOptions(raw) {
   return (Array.isArray(raw) ? raw : [])
@@ -141,26 +125,6 @@ export function unwrapStructuredArgs(name, rawArgs) {
   }
   return out;
 }
-
-const ASK_QUESTION = Type.Object({
-  id: Type.Optional(Type.String({
-    description:
-      '可选的稳定 id，把教学坐标编进来，例如 "closures:q_var_capture"。不填应用自己补一个。',
-  })),
-  concept_id: Type.String({
-    description:
-      '这道题在探哪个概念，填 Learning Graph 里的 concept id。不属于任何概念的事务性提问（门禁确认、"先讲哪个"）填 "none"。',
-  }),
-  header: Type.Optional(Type.String({ description: '短标题，如「确认」「探针」「判据」' })),
-  question: Type.String({ description: '要问学习者的问题本身' }),
-  options: Type.Optional(
-    Type.Array(ASK_OPTION_INPUT, {
-      description: '可枚举时给选项；每项写成 {"label": "…", "description": "…"}，也可以直接给一个字符串标签。开放式提问就不要给',
-    }),
-  ),
-  multi_select: Type.Optional(Type.Boolean({ description: 'true 表示可多选。默认 false' })),
-  allow_text: Type.Optional(Type.Boolean({ description: 'true 表示另附一个自由文本输入框。默认 true' })),
-});
 
 const PROGRESS_UPDATE = Type.Object({
   concept_id: Type.String({ description: 'Learning Graph 里的 concept id' }),
@@ -290,12 +254,10 @@ export function carryOverConcept(prevGraph, concept) {
 
 export function buildTools() {
   return [
-    {
-      name: TOOL_NAMES.ASK,
-      description:
-        '向学习者提一个需要他回答的问题，并等待他作答。答案可枚举的提问（探针/预测/练习/门禁确认）用它收答，不要在正文里写 A/B/C。开放式提问（要他说出推理过程）给 question、不给 options。表达不了的结构（排序、分桶、拖拽建构）不要硬塞成选项——退回让他用自己的话产出。你会阻塞到学习者作答为止。',
-      parameters: ASK_QUESTION,
-    },
+    // ask_user_question 在第三十九轮被 ```ui 的 question 档取代：要收答就在围栏里写一道
+    // question（服务端照旧阻塞、照旧把作答作为工具结果交回来）。工具不再放进模型可见的
+    // 工具集——但 TOOL_NAMES.ASK 保留：historyToModelMessages 要按这个名字合成回放消息，
+    // 围栏收答也要按这个名字把作答接回模型。
     {
       name: TOOL_NAMES.SAVE_GRAPH,
       description:
@@ -694,11 +656,6 @@ export class TeachingSession {
     // id 只是"这张卡对应哪个等待中的提问"的传输把手，答完就没用了；教学坐标承重的是
     // concept_id。所以模型没填就自己补一个，而不是让参数校验把这一发问卡挡成红卡。
     const id = String(args.id || '').trim() || `q-${Date.now().toString(36)}-${(this.askSeq += 1)}`;
-    const q = new PendingQuestion();
-    this.pending.set(id, q);
-    this.askedQuestions.push(id);
-    // 落盘副本：题目以前只走 SSE，刷新页面就消失——题面是学习的核心内容，
-    // 必须和制品一样随消息持久化。同一对象引用，作答后 answer 字段就位。
     const record = {
       questionId: id,
       header: args.header ?? null,
@@ -711,6 +668,21 @@ export class TeachingSession {
       askedAt: Date.now(),
       answer: null,
     };
+    return this.blockAndRecordAsk(record);
+  }
+
+  /**
+   * 收答核心（第三十九轮起，ask 工具与 ```ui 的 question 档共用）：落记录、阻塞回合、
+   * 作答回传、首次接触记 Seen、SSE 播报。question 档把「要问什么」从工具参数挪进围栏，
+   * 这一半（怎么收、收了记在哪）原封不动——语义不搬家，搬的是声明的位置。
+   */
+  async blockAndRecordAsk(record) {
+    const id = record.questionId;
+    const q = new PendingQuestion();
+    this.pending.set(id, q);
+    this.askedQuestions.push(id);
+    // 落盘副本：题目以前只走 SSE，刷新页面就消失——题面是学习的核心内容，
+    // 必须和制品一样随消息持久化。同一对象引用，作答后 answer 字段就位。
     this.roundQuestions.push(record);
     this.emit({
       type: 'ask',
@@ -738,7 +710,7 @@ export class TeachingSession {
         answeredAt: Date.now(),
       };
       const rendered = answerText(payload);
-      const auto = this.markFirstContact(args.concept_id, record, rendered);
+      const auto = this.markFirstContact(record.conceptId, record, rendered);
       this.emit({
         type: 'answer',
         questionId: id,
@@ -898,21 +870,35 @@ export class TeachingSession {
   }
 
   async execShareArtifact(args) {
-    const kind = args.kind || 'illustration';
-    let html = injectArtifactRuntime(args.html);
+    return this.deliverArtifactHtml({
+      title: args.title,
+      html: args.html,
+      description: args.description ?? null,
+      kind: args.kind || 'illustration',
+      initial_state: args.initial_state ?? null,
+    });
+  }
+
+  /**
+   * 制品上台核心（第三十九轮起，share_artifact 工具与 ```ui 的 canvas 档共用）：注入运行时
+   * 与 CSP、落盘、摆台、挂回放记录、发 artifact 事件。canvas 档把「交一件制品」从工具参数
+   * 挪进围栏，这一半（怎么存、怎么上台、怎么回报）原封不动。
+   */
+  async deliverArtifactHtml({ title, html, description = null, kind = 'illustration', initial_state = null }) {
+    let out = injectArtifactRuntime(html);
     // 续玩：把上轮状态作为初始快照注入，制品里 getState() 拿得到
-    if (args.initial_state) html = injectInitialState(html, args.initial_state);
+    if (initial_state) out = injectInitialState(out, initial_state);
     // CSP 最后注入：三处注入都插在 <head> 之后，"最后一个插的最靠最前"——
     // meta 必须落在运行时那个内联 <script> 之前，否则脚本先执行、策略后生效。
-    html = injectArtifactCsp(html);
+    out = injectArtifactCsp(out);
     // 道具一律落盘。以前有两支：带 persist 才写文件，否则发一个 `inline-N` 的合成 id，
     // 整份 HTML 只嵌在 chat.json 里——实测那件 23,135 字符的「正则试错场」就是这样，
     // artifacts/ 目录空着。没有地址的道具寻不了址、续不了玩、撤不下来，
     // "跨段场景延续"在数据层就不成立。可丢弃是学习者那一侧的手势（扔掉），不是"不存"。
     const { saveArtifact } = await import('./store.mjs');
     const stored = saveArtifact(this.notebook.id, {
-      title: args.title,
-      html,
+      title,
+      html: out,
       kind,
     });
     this.artifacts.push(stored);
@@ -926,10 +912,10 @@ export class TeachingSession {
       saveSceneState(this.notebook.id, this.scene);
       this.emit({ type: 'scene', scene: this.scene.current, log: this.scene.log });
     }
-    const questions = extractQuestionIds(html);
+    const questions = extractQuestionIds(out);
     this.liveArtifacts.set(artifactId, {
       id: artifactId,
-      title: args.title,
+      title,
       kind,
       questions,
       evidence: [],
@@ -942,21 +928,21 @@ export class TeachingSession {
     // 这是"canvas 并没有出现"那个现象的根因，所以每份都记。
     this.roundArtifacts.push({
       id: artifactId,
-      title: args.title,
-      description: args.description ?? null,
+      title,
+      description,
       kind,
-      html,
+      html: out,
     });
     this.emit({
       type: 'artifact',
       artifact: {
         id: artifactId,
-        title: args.title,
-        description: args.description ?? null,
+        title,
+        description,
         kind,
-        html,
+        html: out,
         rel: stored.rel,
-        expectsEvidence: questions.length > 0 || Boolean(args.initial_state),
+        expectsEvidence: questions.length > 0 || Boolean(initial_state),
       },
     });
     return {
@@ -1740,6 +1726,107 @@ export function historyToModelMessages(history, model) {
  * read_artifact_evidence）会返回整份 Graph 或上一个回合的产出，原样推给浏览器
  * 能把 SSE 撑爆。这里只做长度上限，不改变语义。
  */
+
+// ─────────────── ```ui 围栏的提取与鉴权（第三十九轮）─────────────────
+// 服务端只认两种围栏声明：question（阻塞收答）与 canvas（整页制品）。与前端用同一把尺
+// （compileUiBlock）：编译不出来就不收——前端降级了（卡/降级提示），服务端就不该阻塞或
+// 上台，否则会出现"卡在台上但没人收"或"收了但卡是坏的"。
+
+function extractUiFences(text) {
+  const out = [];
+  const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
+  let i = 0;
+  while (i < lines.length) {
+    const m = /^\s*(```|~~~)\s*ui\s*$/.exec(lines[i]);
+    if (!m) {
+      i += 1;
+      continue;
+    }
+    const marker = m[1];
+    const buf = [];
+    i += 1;
+    while (i < lines.length && !new RegExp(`^\\s*${marker}\\s*$`).test(lines[i])) {
+      buf.push(lines[i]);
+      i += 1;
+    }
+    const closed = i < lines.length;
+    i += 1;
+    if (closed) out.push({ lines: buf });
+  }
+  return out;
+}
+
+function fenceKind(lines) {
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = /^kind\s*:\s*([A-Za-z_][\w-]*)\s*$/.exec(line);
+    return m ? m[1].toLowerCase() : null;
+  }
+  return null;
+}
+
+/**
+ * question 围栏 → 与 ask_user_question 同构的 args。字段名、上限、选项归一都与编译器
+ * 逐一对应——漂了就会"前端出卡、服务端没人接"。有效性由调用方先用 compileUiBlock 把关
+ * （只有编译器说它编译成了 question，这里才解析参数）。
+ */
+export function fenceQuestionArgs(lines) {
+  const fields = [];
+  let kind = null;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = /^([A-Za-z_][\w-]*)\s*:\s*(\S.*)$/.exec(line);
+    if (!m) return null;
+    const key = m[1].toLowerCase();
+    const value = m[2].trim();
+    if (key === 'kind') {
+      if (kind) return null;
+      kind = value.toLowerCase();
+      if (kind !== 'question') return null;
+      continue;
+    }
+    fields.push([key, value]);
+  }
+  if (kind !== 'question') return null;
+  const get = (k) => fields.filter(([a]) => a === k).map(([, v]) => v);
+  const ids = get('id');
+  const questions = get('question');
+  if (ids.length !== 1 || questions.length !== 1) return null;
+  const id = ids[0].trim();
+  if (!id || id.length > 80) return null;
+  const question = questions[0].trim();
+  if (!question || question.length > 240) return null;
+  const header = get('header')[0]?.trim() || '';
+  const conceptId = get('conceptid')[0]?.trim() || '';
+  const multis = get('multiselect');
+  if (multis.length > 1) return null;
+  const multiSelect = multis.length ? multis[0] === 'true' : false;
+  const allowTexts = get('allowtext');
+  if (allowTexts.length > 1) return null;
+  const allowText = allowTexts.length ? allowTexts[0] !== 'false' : true;
+  const options = get('option')
+    .map((s) => {
+      const [label, ...rest] = s.split(' — ');
+      return { label: label.trim(), description: rest.join(' — ').trim() || null };
+    })
+    .filter((o) => o.label);
+  if (options.length > 8) return null;
+  if (options.some((o) => o.label.length > 60)) return null;
+  if (new Set(options.map((o) => o.label)).size !== options.length) return null;
+  const known = new Set(['id', 'question', 'header', 'option', 'multiselect', 'allowtext', 'conceptid']);
+  if (fields.some(([k]) => !known.has(k))) return null;
+  return { id, header, question, conceptId, options, multiSelect, allowText };
+}
+
+/** canvas 围栏 → { title, html }。直接走编译器（它才是 canvas 格式的唯一定义）。 */
+function fenceCanvasMeta(lines) {
+  const r = compileUiBlock(lines, false);
+  if (r.shape !== 'canvas' || !r.canvas) return null;
+  return { title: r.canvas.title, html: r.canvas.html };
+}
+
 function trimResult(result, limit = 20000) {
   let text;
   try {
@@ -1953,6 +2040,61 @@ export async function runTurn({
       onPersist?.(session);
     }
 
+    // 第三十九轮：```ui 围栏里的 question / canvas 是工具调用的界面版——
+    // 语义同款，语法换壳。question = 阻塞收答（ask 那套原样走），canvas = 制品上台
+    // （share_artifact 那套原样走）。校验与前端共用一个编译器：它说编不出来，这里就不收。
+    let fenceAskFired = false;
+    const fenceText = stepMessage?.content ?? '';
+    if (fenceText) {
+      for (const fence of extractUiFences(fenceText)) {
+        const kind = fenceKind(fence.lines);
+        if (kind === 'question') {
+          const r = compileUiBlock(fence.lines, false);
+          if (r.shape !== 'question') continue;
+          const args = fenceQuestionArgs(fence.lines);
+          if (!args) continue;
+          fenceAskFired = true;
+          const record = {
+            questionId: args.id,
+            header: args.header || null,
+            question: args.question,
+            conceptId: args.conceptId || null,
+            options: args.options,
+            multiSelect: args.multiSelect,
+            allowText: args.allowText,
+            askedAt: Date.now(),
+            answer: null,
+          };
+          const answerTextOut = await session.blockAndRecordAsk(record);
+          // 把这次收答接回模型：合成一条 ask_user_question 的 toolCall + toolResult 对。
+          // 刷新回放时 historyToModelMessages 也合成同形状的对（m.questions），两只手要一样。
+          const callArgs = { id: args.id, question: args.question };
+          if (args.header) callArgs.header = args.header;
+          if (args.conceptId) callArgs.concept_id = args.conceptId;
+          if (args.options.length) callArgs.options = args.options.map((o) => o.label);
+          if (args.multiSelect) callArgs.multi_select = true;
+          messages.push({
+            role: 'assistant',
+            content: [{ type: 'toolCall', id: args.id, name: TOOL_NAMES.ASK, arguments: callArgs }],
+            stopReason: 'toolUse',
+            timestamp: Date.now(),
+          });
+          messages.push({
+            role: 'toolResult',
+            toolCallId: args.id,
+            toolName: TOOL_NAMES.ASK,
+            content: [{ type: 'text', text: answerTextOut }],
+            isError: false,
+            timestamp: Date.now(),
+          });
+        } else if (kind === 'canvas') {
+          const meta = fenceCanvasMeta(fence.lines);
+          if (!meta) continue;
+          await session.deliverArtifactHtml({ title: meta.title, html: meta.html, kind: 'illustration' });
+        }
+      }
+    }
+
     // 这一步产出的制品挂到消息上，刷新页面后 renderThread 才能把它放回来。
     // 这一步没有文字时挂到上一条 assistant 消息——与 SSE 里的视觉顺序一致
     // （制品总是追加在当时已渲染出的正文之后）。一条都没有就造一条空壳：
@@ -1992,7 +2134,9 @@ export async function runTurn({
     if (host) onPersistMessage?.(host);
 
     // 没有工具调用 = 模型这一轮说完了。正常收尾，不报错。
-    if (toolCalls.length === 0) break;
+    // 围栏里出过 question 不算说完了：作答已经作为 toolResult 接回模型，下一 step 要
+    // 看到模型对作答的回应（跟工具调用走完要接着走是同一件事）。
+    if (toolCalls.length === 0 && !fenceAskFired) break;
 
     // 有工具调用 → 继续下一 step，把 toolResult 交回模型
   }

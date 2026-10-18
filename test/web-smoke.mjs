@@ -260,6 +260,22 @@ class Node {
     }
     return null;
   }
+  closest(sel) {
+    // 真实 DOM 的标准方法：委托处理器（ask/手递/图）靠它从叶子找回宿主卡。
+    // 桩照真形状给，不许没有（没有的话那些分支在桩里恒 null，等于替应用撒谎）。
+    let n = this;
+    while (n) {
+      if (sel.startsWith('.')) {
+        if (String(n.className || '').split(/\s+/).includes(sel.slice(1))) return n;
+      } else if (sel.startsWith('#')) {
+        if (n.id === sel.slice(1)) return n;
+      } else if ((n.tagName || '').toLowerCase() === sel.toLowerCase()) {
+        return n;
+      }
+      n = n.parentNode;
+    }
+    return null;
+  }
 }
 
 class TextNode {
@@ -717,191 +733,83 @@ check('三页没有了：中间列只有 #deskStream 这一条流',
   'DOM id 实测');
 check('题目不再单独占一页', !doc.getElementById('stage-ask') && !doc.getElementById('tab-chat'));
 
-console.log('\n2. 右栏面板');
-const panelBody = doc.getElementById('panelBody');
-check('概念结构已渲染', panelBody.children.length > 0);
-doc.getElementById('panelBody').innerHTML = '';
-for (const tab of doc.querySelectorAll('.tab[data-tab]')) {
-  if (tab.dataset.tab === 'learn') {
-    tab.onclick({ target: tab });
-  }
-}
-await new Promise((r) => setTimeout(r, 20));
-check('切到「学习」不报错', errors.length === 0, errors.join(' | '));
-check('「学习」页签有内容', doc.getElementById('panelBody').children.length > 0);
+console.log('\n2. 台面顶部现状条（右栏并入会话界面）');
+// 右栏砍掉之后（第三十九轮），台面顶部的 #deskState 收下全部原右栏信息：
+// 待确认的结构改动（GATE 入口）置顶，下面折进「这一局的现状」（这局动过的界面 / 后台任务 / 素材文件）。
+const deskState = doc.getElementById('deskState');
+const deskGate = () => deepAll(deskState, 'desk-gate')[0];
+const deskBody = () => deepAll(deskState, 'desk-state-body')[0];
+const deskTitles = () => deepAll(deskState, 'panel-section-title').map((t) => t.textContent);
+check('开本后什么都没有时现状条整条隐藏（空条是噪声，不许常年占一行）',
+  deskState.classList.contains('hidden'), deskState?.className);
+check('没有待确认改动时 GATE 整节隐藏', deskGate()?.classList.contains('hidden') === true, deskGate()?.className);
+check('现状条不再有页签（页签是右栏的骨架，随栏一起砍）', !doc.getElementById('panelBody') && !doc.querySelectorAll('.tab[data-tab]').length, '页签还在');
 
-// 地图 + 轨迹合并成一个「学习」页签：真重叠只有「现在的位置」那段汇总
-const panelTitles = () => deepAll(doc.getElementById('panelBody'), 'panel-section-title').map((t) => t.textContent);
-const titlesNow = panelTitles();
-check('合并页里概念结构排在第一位', titlesNow.indexOf('讲解顺序（按依赖排）') === 0, titlesNow.join(' | '));
-check('待办不再单列一节（和讲解顺序是同一件事）', !titlesNow.some((t) => t.includes('本轮待办')), titlesNow.join(' | '));
-check('事件/备注 → 后台任务按顺序排在下面',
-  titlesNow.includes('后台任务') && titlesNow.indexOf('讲解顺序（按依赖排）') < titlesNow.indexOf('后台任务'),
-  titlesNow.join(' | '));
-check('重复的「现在的位置」汇总删掉了（和概念卡的状态词是同一份数据）',
-  !titlesNow.some((t) => t.includes('现在的位置')), titlesNow.join(' | '));
-check('右栏只剩两个页签：学习 / 素材',
-  ['learn', 'files'].every((k) => Boolean(tabByName(k))) && !tabByName('map') && !tabByName('track'),
-  doc.querySelectorAll('.tab').map((t) => t.dataset.tab).join(','));
-
-// 待确认的结构改动是右栏唯一有副作用的入口：合并后必须置顶 + 页签角标，否则等于埋进长列表
-const patchBadge = doc.getElementById('learnTabBadge');
-check('没有待确认改动时角标不亮', patchBadge?.classList.contains('hidden') === true, patchBadge?.textContent);
-// appModule 在 543 行已加载；下面这些 const 解构在更靠后的节里，这里直接取钩子，别踩 TDZ
+// GATE：待确认的结构改动是唯一有副作用的界面入口，必须置顶，不能埋在长列表里等人翻到
 const early = appModule.__hooks;
 early.state.notebook.patches.patches.push({
   id: 'patch-x', operation: 'ADD', target: 'variable-scope', reason: '这一节还缺一个前置', confidence: 'medium',
 });
-early.renderPanel();
-check('待确认的结构改动排在合并页最上面', panelTitles()[0] === '待你确认的结构改动', panelTitles().join(' | '));
-check('接受/不用两个按钮就在那张卡上', deepAll(panelBody, 'patch-card').length === 1
-  && deepAll(panelBody, 'patch-actions').length === 1);
-check('页签角标显出待确认件数', patchBadge.textContent === '1' && !patchBadge.classList.contains('hidden'), patchBadge.textContent);
+early.renderDeskState();
+check('有改动后现状条亮出来', !deskState.classList.contains('hidden'), deskState?.className);
+check('待确认的结构改动排在最上面', deskTitles()[0] === '待你确认的结构改动', deskTitles().join(' | '));
+check('接受/不用两个按钮就在那张卡上', deepAll(deskGate(), 'patch-card').length === 1
+  && deepAll(deskGate(), 'patch-actions').length === 1);
 early.state.notebook.patches.patches = [];
-early.renderPanel();
-check('确认完角标就灭', patchBadge.textContent === '' && patchBadge.classList.contains('hidden'), patchBadge.textContent);
-check('右栏这一节无异常', errors.length === 0, errors.join(' | '));
+early.renderDeskState();
+check('确认完 GATE 整节就隐藏', deskGate()?.classList.contains('hidden') === true, deskGate()?.className);
+check('现状条这一节无异常', errors.length === 0, errors.join(' | '));
 
-// 整本备份：学习记录能离开这台机器（入口在「学习」页签底部，导出走真实接口）
-// 注意：backup-row 在面板里不止一行（「回看」也复用这个类），按内容定位到真·备份行
-const backupRow = deepAll(doc.getElementById('panelBody'), 'backup-row')
-  .find((r) => Array.from(r.children).some((b) => b.textContent === '导出整本'));
-const backupBtns = backupRow ? Array.from(backupRow.children).map((b) => b.textContent) : [];
-check('「学习」页签底部有整本备份入口', backupBtns.includes('导出整本') && backupBtns.includes('导入整本') && backupBtns.includes('体检数据'), backupBtns.join('/'));
-const backupHint = deepAll(doc.getElementById('panelBody'), 'backup-hint').find((h) => h.textContent.includes('JSON'));
-check('备份入口带一句说明（不裸放几个键）', Boolean(backupHint), backupHint?.textContent);
-responses.set('GET /api/notebooks/nb-test/export', () =>
-  json({ format: 'socratic-studio-notebook', version: 1, exportedAt: 't', files: {}, uploads: [], artifacts: [] }));
-const reqBeforeExport = requests.length;
-const exportBtn = Array.from(backupRow.children).find((b) => b.textContent === '导出整本');
-exportBtn.onclick();
-await new Promise((r) => setTimeout(r, 20));
-check('点「导出整本」真的打了导出接口', requests.slice(reqBeforeExport).some((k) => k === 'GET /api/notebooks/nb-test/export'), requests.slice(reqBeforeExport).join(','));
-check('导出成功有提示（整本备份）', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出整本备份')));
+// 现状条 = 这局动过的界面 / 后台任务 / 素材文件（右栏被砍后这些信息长在对话里）
+const deskBodyEl = () => deepAll(deskState, 'desk-state-body')[0];
+early.state.notebook.progress.artifact_state = { 'ui:勾过一遍': { uiKind: 'checklist', done: {} } };
+early.renderDeskState();
+const deskTitlesNow = deskTitles();
+check('现状条有「这局动过的界面」一节', deskTitlesNow.includes('这局动过的界面'), deskTitlesNow.join(' | '));
+check('界面回看列出那张卡（只出现象，不出现数字）',
+  deepAll(deskBodyEl(), 'ui-state-card').length === 1
+  && (deepAll(deskBodyEl(), 'ui-state-card')[0]?.textContent || '').includes('还没勾'),
+  deepAll(deskBodyEl(), 'ui-state-card')[0]?.textContent);
+early.state.notebook.progress.artifact_state = {};
+early.state.tasks = [{ id: 't-1', status: 'running', title: '整理长素材' }];
+early.renderDeskState();
+check('后台任务在跑时这一节在列（计数只出现象、不出现进度）',
+  deskTitles().some((t) => t.includes('后台任务') && t.includes('1 个在跑')), deskTitles().join(' | '));
+early.state.tasks = [];
+early.renderDeskState();
+check('没有后台任务时不摆空节', !deskTitles().some((t) => t.includes('后台任务')), deskTitles().join(' | '));
 
-/*
- * 备份受阻时不许压成一句"导出失败"（第二十三轮）：服务端在家底有缺口时回 409 + blockers。
- * 桩里的 error 那句话**故意不含任何文件名**，也不提"体检"——于是"要点名是哪份数据坏了、
- * 要指出去哪一步"这两条只有去读结构化的 blockers 清单才做得到。
- * 修复前这里只有 `导出失败：${err.message}`：拿着清单却只念那句话，等于清单白给。
- */
-responses.set('GET /api/notebooks/nb-test/export', () =>
-  new Response(JSON.stringify({ error: '这本学习现在有缺口，备份还没做', blockers: ['learning-graph.json（坏 JSON）', '制品 art-9（缺 index.html）', 'chat.json（坏 JSON）', 'notes.json（坏 JSON）'] }),
-    { status: 409, headers: { 'Content-Type': 'application/json' } }));
-const reqBeforeBlocked = requests.length;
-exportBtn.onclick();
-await new Promise((r) => setTimeout(r, 20));
-check('备份受阻真的又打了一次导出接口（不是本地猜的状态）',
-  requests.slice(reqBeforeBlocked).some((k) => k === 'GET /api/notebooks/nb-test/export'), requests.slice(reqBeforeBlocked).join(','));
-const blockedToast = Array.from(doc.getElementById('toasts').children).find((t) => t.textContent.includes('没能备份'));
-check('受阻的提示点名是哪份数据坏了（清单是结构化字段，不是从那句话里抠）',
-  Boolean(blockedToast) && blockedToast.textContent.includes('learning-graph.json') && blockedToast.textContent.includes('art-9'),
-  blockedToast?.textContent);
-check('受阻的提示给出去哪一步（先体检取证，再备份）',
-  Boolean(blockedToast) && blockedToast.textContent.includes('体检'), blockedToast?.textContent);
-check('缺口多过三处就省略并说清还有（不把长清单整条糊在屏幕上）',
-  Boolean(blockedToast) && blockedToast.textContent.includes('…') && !blockedToast.textContent.includes('notes.json'),
-  blockedToast?.textContent);
-// 反向：服务端没给清单（别的失败）时仍走原来那句话，不硬编"没能备份"
-responses.set('GET /api/notebooks/nb-test/export', () =>
-  new Response(JSON.stringify({ error: '学习不存在' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
-exportBtn.onclick();
-await new Promise((r) => setTimeout(r, 20));
-const plainFailToast = Array.from(doc.getElementById('toasts').children).find((t) => t.textContent.includes('导出失败：学习不存在'));
-check('没有缺口清单的失败仍是原来那句（受阻文案不抢别人的话）',
-  Boolean(plainFailToast) && !plainFailToast.textContent.includes('没能备份'), plainFailToast?.textContent);
-check('导出受阻这一段无异常', errors.length === 0, errors.join(' | '));
-
-// 数据体检：只读报告，出现损坏/孤儿时如实说，没问题就说没问题
-responses.set('GET /api/health', () =>
-  json({ ok: true, dataDir: '/tmp/x', notebooks: 3, corruptFiles: [], orphanArtifacts: [], missingHtml: [] }));
-const reqBeforeHealth = requests.length;
-const healthBtn = Array.from(backupRow.children).find((b) => b.textContent === '体检数据');
-healthBtn.onclick();
-await new Promise((r) => setTimeout(r, 20));
-check('点「体检数据」真的打了体检接口', requests.slice(reqBeforeHealth).some((k) => k === 'GET /api/health'), requests.slice(reqBeforeHealth).join(','));
-const healthResult = deepAll(doc.getElementById('panelBody'), 'health-result')[0];
-check('体检结果如实显示（3 本学习，一切正常）', !healthResult.classList.contains('hidden') && healthResult.textContent.includes('3 本学习') && healthResult.textContent.includes('一切正常'), healthResult.textContent);
-responses.set('GET /api/health', () =>
-  json({ ok: false, dataDir: '/tmp/x', notebooks: 2, corruptFiles: ['nb-a/notes.json'], orphanArtifacts: [{ notebook: 'nb-b', id: 'art-1' }], missingHtml: [] }));
-healthBtn.onclick();
-await new Promise((r) => setTimeout(r, 20));
-check('体检发现问题会点名（损坏文件 + 孤儿制品）', healthResult.textContent.includes('损坏文件 1 处') && healthResult.textContent.includes('孤儿制品 1 件'), healthResult.textContent);
-
-// 处置台：体检只报告、动手要稳可逆——孤儿制品送进隔离区（只搬走不删除），随时可放回
-responses.set('POST /api/health/quarantine', () => json({ moved: [{ kind: 'orphan', notebook: 'nb-b', id: 'art-1', from: 'notebooks/nb-b/artifacts/art-1', to: 'quarantine/1-nb-b-art-1' }] }));
-const quarBtn = deepAll(healthResult, 'btn').find((b) => b.textContent.includes('送进隔离区'));
-check('体检点名孤儿后给出处置键（送进隔离区，不删除）', Boolean(quarBtn), quarBtn?.textContent);
-const reqBeforeQuar = requests.length;
-quarBtn.onclick();
-await new Promise((r) => setTimeout(r, 20));
-check('点处置键真的打了隔离接口', requests.slice(reqBeforeQuar).includes('POST /api/health/quarantine'), requests.slice(reqBeforeQuar).join(','));
-check('处置成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('送进隔离区')));
-responses.set('GET /api/health', () =>
-  json({ ok: true, dataDir: '/tmp/x', notebooks: 2, corruptFiles: [], orphanArtifacts: [], missingHtml: [], quarantined: 1 }));
-healthBtn.onclick();
-await new Promise((r) => setTimeout(r, 20));
-const restoreBtn = deepAll(healthResult, 'btn').find((b) => b.textContent.includes('从隔离区放回'));
-check('隔离区里有东西时给出放回键', Boolean(restoreBtn), restoreBtn?.textContent);
-responses.set('POST /api/health/restore', () => json({ restored: [{ kind: 'orphan', notebook: 'nb-b', id: 'art-1' }], kept: [] }));
-const reqBeforeRestore = requests.length;
-restoreBtn.onclick();
-await new Promise((r) => setTimeout(r, 20));
-check('点放回真的打了放回接口', requests.slice(reqBeforeRestore).includes('POST /api/health/restore'), requests.slice(reqBeforeRestore).join(','));
-check('右栏备份这一节无异常', errors.length === 0, errors.join(' | '));
-
-// 回看与全部制品的渲染检查在面板这一节做（不点按钮、不改 chat）；按钮的点击验证放到
-// 文件末尾——它会把一句用户消息真的送进 /turn，放在这里会多出一拍，扰乱回放计数。
-const learnTitlesNow = deepAll(doc.getElementById('panelBody'), 'panel-section-title').map((t) => t.textContent);
-check('「学习」页有「回看」一节', learnTitlesNow.includes('回看'), learnTitlesNow.join(' | '));
-const reviewRow = deepAll(doc.getElementById('panelBody'), 'backup-row').find((r) => Array.from(r.children).some((b) => b.textContent === '回顾已学'));
-check('回看节里有「回顾已学」按钮', Boolean(reviewRow));
-
-// 全部制品：素材页从「扔掉的道具」扩成「全部制品」——在台上的标「在台上」，已收起的给「放回台面」
-early.state.panelTab = 'files';
-early.renderPanel();
-const filesTitles = deepAll(doc.getElementById('panelBody'), 'panel-section-title').map((t) => t.textContent);
-check('素材页有「全部制品」一节', filesTitles.includes('全部制品'), filesTitles.join(' | '));
-check('没有制品时摆一句说明（不裸放一个空节）', deepAll(doc.getElementById('panelBody'), 'empty-note').some((n) => n.textContent.includes('还没有制品')));
-// 确定性样本：在台上 / 已收起两行都列出来，且手势面各守各的
+// 全部制品：素材文件一节从「扔掉的道具」扩成「全部制品」——在台上的标「在台上」，已收起的给「放回台面」
+const filesTitles = deskTitles();
+check('没有素材也没有制品时「素材文件」整节不摆（空节是噪声）',
+  !filesTitles.includes('全部制品') && !filesTitles.includes('上传的素材'), filesTitles.join(' | '));
+early.state.notebook.uploads = [{ id: 'u0', name: '讲义.md', kind: 'text', rel: 'uploads/讲义.md', bytes: 12 }];
+early.renderDeskState();
+check('有素材时「全部制品」一节出现，没制品就摆一句说明（不裸放一个空节）',
+  deskTitles().includes('全部制品') && deepAll(deskBodyEl(), 'empty-note').some((n) => n.textContent.includes('还没有制品')),
+  deskTitles().join(' | '));
+early.state.notebook.uploads = [];
 early.state.notebook.artifacts = [
   { id: 'live-1', title: '在台上的那件', kind: 'game', rel: 'artifacts/live-1/index.html' },
   { id: 'ret-1', title: '收起的那件', kind: 'interactive', rel: 'artifacts/ret-1/index.html', retiredAt: '2026-01-01T00:00:00.000Z' },
 ];
-early.renderPanel();
-const fileRows = deepAll(doc.getElementById('panelBody'), 'file-item');
+early.renderDeskState();
+const fileRows = deepAll(deskBodyEl(), 'file-item');
 const liveRow = fileRows.find((n) => n.textContent.includes('在台上的那件'));
 const retRow = fileRows.find((n) => n.textContent.includes('收起的那件'));
-// 素材页的手势面（2026-10-06 第九轮起）：下载是**只读**的带走动作，不改任何状态，
-// 所以和「放回台面」（唯一改状态的手势）不冲突；在台上的也有一颗「下载」。
-// 钉的仍是同一句话：不许出现**状态改动**的手势面堆叠。
 check('在台上的制品标「在台上」、只给「下载」一颗键', Boolean(liveRow) && liveRow.textContent.includes('在台上') && liveRow.findByClass('btn').map((b) => b.textContent).join(',') === '下载', liveRow?.textContent);
 check('已收起的制品给「放回台面」「下载」两颗键', Boolean(retRow) && retRow.findByClass('btn').map((b) => b.textContent).join(',') === '放回台面,下载', retRow?.textContent);
-// 还原样本与页签，别把后面的流程带偏
 early.state.notebook.artifacts = [];
-early.state.panelTab = 'learn';
-early.renderPanel();
-check('右栏回看/制品这一节无异常', errors.length === 0, errors.join(' | '));
+early.renderDeskState();
+check('现状条这一节无异常', errors.length === 0, errors.join(' | '));
 
-// 概念结构图：依赖骨架一眼可见，且图里没有任何数字（Invariant 4 违规指纹 ① 不沾边）
-const graphSvg = deepAll(doc.getElementById('panelBody'), 'concept-graph')[0];
-check('讲解顺序里画出了概念结构图', Boolean(graphSvg), graphSvg?.tagName);
-const graphNodes = deepAll(graphSvg, 'graph-node');
-const graphEdges = deepAll(graphSvg, 'graph-edge');
-check('节点数 = 概念数（2）', graphNodes.length === 2, String(graphNodes.length));
-check('连线数 = 依赖数（作用域 → 闭包）', graphEdges.length === 1, String(graphEdges.length));
-check('图里没有任何数字（结构图不是进度可视化）', !/\d/.test(graphSvg.textContent), graphSvg.textContent);
-check('节点带概念 id（取景/联调用）', graphNodes[0].getAttribute('data-concept-id') === 'variable-scope');
-// 节点点击 = 取景，和列表卡同一套交互（setCamera 会重渲染整栏，所以每次点完重新查 DOM）
-graphNodes[1].onclick();
-check('点图上的节点进入取景', early.state.camera?.conceptId === 'closures', early.state.camera?.conceptId);
-const svgAfterFocus = deepAll(doc.getElementById('panelBody'), 'concept-graph')[0];
-const framedNode = deepAll(svgAfterFocus, 'framed');
-check('取景中的节点带 framed 高亮', framedNode.length === 1 && framedNode[0].getAttribute('data-concept-id') === 'closures', String(framedNode.length));
-const closuresNode = deepAll(svgAfterFocus, 'graph-node').find((n) => n.getAttribute('data-concept-id') === 'closures');
-closuresNode.onclick();
-check('再点一次松开取景', early.state.camera === null, String(early.state.camera?.conceptId));
-check('右栏结构图这一节无异常', errors.length === 0, errors.join(' | '));
+// 被砍掉的右栏内容不许偷偷留在 DOM 里：整本备份（导出/导入/体检/小结）与概念图入口随右栏移除
+check('右栏面板本体已经不在 DOM 里', !doc.getElementById('panel') && !doc.getElementById('togglePanel'), '面板节点还在');
+check('整本备份的入口不再出现在界面里（导出/导入/体检/小结是砍掉清单的一员）',
+  !deepAll(deskState, 'btn').some((b) => ['导出整本', '导入整本', '体检数据', '小结'].includes(b.textContent)),
+  deepAll(deskState, 'btn').map((b) => b.textContent).join(','));
+check('概念图入口不再出现在界面里（图与取景随右栏一起砍）', !deepAll(deskState, 'concept-graph').length);
+check('备份/体检/概念图这一节无异常', errors.length === 0, errors.join(' | '));
 
 console.log('\n3. 走一轮对话（SSE 回放）');
 const input = doc.getElementById('input');
@@ -1019,8 +927,9 @@ const contMd = renderMarkdown('```dialogue\n甲：第一句。\n还是我，接�
 check('没有冒号的行接在前一位嘴里（不新开气泡）',
   (contMd.match(/class="scene-line"/g) || []).length === 2 && contMd.includes('还是我，接着说'), contMd);
 // 单声道不是对话：宁可退回代码块让原文看得见，也不静默把独白装成演出
+// （第三十九轮起正文默认包 IUI 文本块，断言认信封里的代码块，不认信封外的裸标签）
 check('只有一名角色就不演了（退回代码块，原文看得见）',
-  /^<pre><code class="lang-dialogue">/.test(renderMarkdown('```dialogue\n甲：一句独白。\n```')),
+  /<div class="ui-text"><pre><code class="lang-dialogue">/.test(renderMarkdown('```dialogue\n甲：一句独白。\n```')),
   renderMarkdown('```dialogue\n甲：一句独白。\n```'));
 // 「注意：这里有个坑」这类正文行不是说话人——标签超长或带句末标点就不认
 check('正文里的「注意：…」不会被当成说话人',
@@ -1190,52 +1099,19 @@ check('第一下就真删（一次点击确认）', deleteCount() === before + 1
 check('删除后弹层关闭', doc.getElementById('simpleModal').classList.contains('hidden'));
 check('删除过程无异常', errors.length === 0, errors.join(' | '));
 
-console.log('\n9. DSH 移植功能：待办 / 计划 / 后台任务 / 交付物卡片');
-function tabByName(name) {
-  return doc.querySelectorAll('.tab').find((t) => t.dataset.tab === name);
-}
+console.log('\n9. DSH 移植功能：计划 / 后台任务 / 素材（右栏并入现状条后）');
 // app.js 是带副作用的模块，通过测试钩子拿内部函数（见 app.js 末尾）
-const { state, renderPanel, renderPlanCard, markPlanDecided, updateMentionPopup, applyMention, mentionKeydown, closeMentionPopup, mention } = appModule.__hooks;
+const { state, renderDeskState, renderPlanCard, markPlanDecided, updateMentionPopup, applyMention, mentionKeydown, closeMentionPopup, mention } = appModule.__hooks;
 
 // 第 8 节的删除测试把当前学习关掉了（这正是真实行为），先把状态恢复成"打开着一个学习"
 state.notebooks = sampleList();
 state.notebook = sampleNotebook();
 state.todos = [];
 state.tasks = [];
+renderDeskState();
 
-// --- 9a 待办压进「讲解顺序」那一节 ---
-tabByName('learn')?.click?.();
-await new Promise((r) => setTimeout(r, 30));
-const panelKids = () => Array.from(doc.getElementById('panelBody').children);
-const orderTitleIdx = () => panelKids().findIndex((n) => n.textContent === '讲解顺序（按依赖排）');
-check('本轮待办不再单列成一节', !panelKids().some((n) => (n.textContent || '').startsWith('本轮待办')));
-check('没有待办时这一节里不摆空条', orderTitleIdx() >= 0 && !deepAll(domRoot, 'todo-bar').length);
-
-state.todos = [
-  { id: 'a', content: '建概念结构', status: 'completed' },
-  { id: 'b', content: '出探针', status: 'in_progress' },
-  { id: 'c', content: '复盘', status: 'pending' },
-];
-renderPanel();
-const todoChips = deepAll(domRoot, 'todo-chip');
-check('待办三项都渲染', todoChips.length === 3, `${todoChips.length} 项`);
-check('完成的项有 completed 样式', todoChips.some((i) => i.classList.contains('completed')));
-check('进行中的项有 in_progress 样式', todoChips.some((i) => i.classList.contains('in_progress')));
-check('进度条贴在讲解顺序标题的正下方',
-  panelKids()[orderTitleIdx() + 1]?.classList?.contains('todo-bar'), panelKids()[orderTitleIdx()]?.textContent);
-check('完成度写在条上（1/3）',
-  deepAll(domRoot, 'todo-bar-count').some((n) => /1\/3/.test(n.textContent)),
-  deepAll(domRoot, 'todo-bar-count').map((n) => n.textContent).join(' | '));
-
-// 概念结构还没建的回合（谈目标那一轮就可以列待办）：条必须照样出得来，不能跟着图一起消失
-const savedGraph = state.notebook.graph;
-state.notebook.graph = null;
-state.todos = [{ id: 'x', content: '谈学习目标', status: 'in_progress' }];
-renderPanel();
-check('没有概念结构时进度条照样显示', deepAll(domRoot, 'todo-bar').length === 1, `${deepAll(domRoot, 'todo-bar').length} 条`);
-check('没有概念结构时仍有那句说明',
-  deepAll(domRoot, 'empty-note').some((n) => (n.textContent || '').includes('概念结构还没有建立')));
-state.notebook.graph = savedGraph;
+// --- 9a 待办随「讲解顺序」一起随右栏砍掉：todo-bar 不再出现在任何入口里 ---
+check('待办条不再出现在界面里（「讲解顺序」随概念图一起砍了）', !deepAll(domRoot, 'todo-bar').length && !deepAll(domRoot, 'todo-chip').length);
 
 // --- 9b 计划卡 ---
 const planCard = renderPlanCard({
@@ -1243,7 +1119,7 @@ const planCard = renderPlanCard({
   plan: '## 本回合打算\n\n1. 先建两个概念\n2. 出一个预测探针\n\n⛔ 等你确认',
 });
 // 真实流程里卡片是插进对话正文的，这里也插进去，markPlanDecided 才找得到它
-doc.getElementById('panelBody').append(planCard);
+desk().append(planCard);
 check('计划卡渲染出来', Boolean(planCard) && planCard.classList.contains('plan-card'));
 check('计划正文渲染成 Markdown', deepAll(planCard, 'plan-body')[0]?.innerHTML.includes('<h2>'));
 check('计划卡有批准按钮', deepAll(planCard, 'btn-primary').length >= 1);
@@ -1264,11 +1140,9 @@ deepAll(planCard2, 'btn-ghost')[0]?.click?.();
 await new Promise((r) => setTimeout(r, 60));
 check('没写意见时不发 /plan', requests.filter((r) => r.endsWith('/plan')).length === beforePlan);
 
-// --- 9c 后台任务段（合并页最后一段）---
-tabByName('learn')?.click?.();
-await new Promise((r) => setTimeout(r, 30));
-check('后台任务段在合并页里', deepAll(domRoot, 'panel-section-title').some((t) => t.textContent.includes('后台任务')));
-check('空任务有说明文案', deepAll(domRoot, 'empty-note').length >= 1);
+// --- 9c 后台任务段（现状条里）---
+renderDeskState();
+check('没有任务时不摆后台任务空节', !deepAll(deskBody(), 'panel-section-title').some((t) => t.textContent.includes('后台任务')));
 // 灌一个进行中的任务（走真实 EventSource 路径，不只是直接改 state）
 check('订阅了后台任务流', esInstances.length >= 1 && String(esInstances[0].url).includes('/task-stream'));
 esInstances[0]?.emit({ type: 'task_start', task: { id: 'job-1', kind: 'background', title: '预生成三道题', status: 'running', notebookId: 'nb-test' } });
@@ -1282,13 +1156,12 @@ check('完成后任务卡片还在', deepAll(domRoot, 'task-item').length === 1)
 check('完成后徽章变"完成"', deepAll(domRoot, 'task-badge')[0]?.textContent === '完成');
 check('任务输出可见', deepAll(domRoot, 'task-out')[0]?.textContent.includes('三道题草稿'));
 check('完成后不再显示在跑计数', (doc.getElementById('taskCount')?.textContent || '') === '');
+state.tasks = [];
 
-// --- 9d 交付物卡片 ---
-tabByName('files')?.click?.();
+// --- 9d 素材文件（现状条「素材文件」一节）---
 state.notebook.artifacts = [];
-renderPanel();
-const cards = deepAll(domRoot, 'file-item');
-check('素材页签渲染上传的素材', cards.length >= 0);
+state.notebook.uploads = [];
+renderDeskState();
 
 /*
  * 素材图标跟着 kind 三档走（第二十三轮）：修复前只有 `image ? 🖼 : 📄` 两档，
@@ -1300,8 +1173,8 @@ state.notebook.uploads = [
   { id: 'u2', name: '截图.png', kind: 'image', rel: 'uploads/截图.png', bytes: 34 },
   { id: 'u3', name: '论文.pdf', kind: 'binary', rel: 'uploads/论文.pdf', bytes: 56 },
 ];
-renderPanel();
-const iconRows = deepAll(domRoot, 'file-item');
+renderDeskState();
+const iconRows = deepAll(deskBody(), 'file-item');
 // 表情是代理对：不带 u 标志的字符类会拆成半个码点去匹配（"看着对、永不命中"的那种写法）
 const ICONS = ['🖼', '📄', '📦'];
 const iconOf = (name) => {
@@ -1315,8 +1188,7 @@ check('三档三种说法：文本📄、图片走缩略图、二进制📦（�
 check('图片那一行仍然走真缩略图（不是补个表情）',
   Boolean(iconRows.find((r) => r.textContent.includes('截图.png') && deepAll(r, 'file-thumb').length === 1)));
 state.notebook.uploads = [];
-renderPanel();
-// 制品不再堆在右栏素材页，统一进画布区（分页重构后的路由）
+renderDeskState();
 check('这一轮无异常', errors.length === 0, errors.join(' | '));
 
 // --- 9e @ 引用素材 ---
@@ -1674,19 +1546,18 @@ console.log('\n13. 六条整改：窄边栏 / 直建会话 / 道具适配 / 一�
 const cssText = fs.readFileSync(path.join(webDir, 'styles.css'), 'utf8');
 const idxHtml = fs.readFileSync(path.join(webDir, 'index.html'), 'utf8');
 check('左栏收窄到 216px', cssText.includes('grid-template-columns: 216px'));
-check('右栏收窄到 312px', cssText.includes('216px minmax(0, 1fr) 312px'));
+check('右栏收窄成两列（右栏 312px 那列随栏一起删）', cssText.includes('216px minmax(0, 1fr)') && !cssText.includes('216px minmax(0, 1fr) 312px'));
 // 拍轨吃掉的那一列要算得出来：台面 700 - 左右内边距 2×26 = 648 内容宽；
 // 轨 44 + 间距 16 = 60 ⇒ 正文 588 ≈ 39 个汉字一行。轨一宽，正文就掉到下一档行宽。
 const beatGrid = /\.beat \{ display: grid; grid-template-columns: (\d+)px minmax\(0, 1fr\); column-gap: (\d+)px/.exec(cssText);
 check('拍轨 + 间距不超过 60px（正文那一列还得有 588px）',
   Boolean(beatGrid) && Number(beatGrid[1]) + Number(beatGrid[2]) <= 60,
   beatGrid ? `轨 ${beatGrid[1]} + 距 ${beatGrid[2]} = ${Number(beatGrid[1]) + Number(beatGrid[2])}` : '没找到 .beat 的栅格定义');
-// 534px 实测：≤1180 那条 MQ 把右栏变成 position:fixed 覆盖层，而它默认是摊开的，
-// 于是会话卡片第二颗按钮的中心 elementFromPoint 落在 panel-body 上——学习者点不到自己的按钮。
-// 修法只有"窄屏默认收起"这一种符合"不许打断学习者"的选项，所以钉这一段初始化在不在。
-check('窄屏一开就收起右栏（覆盖层不许默认盖住会话列的按钮）',
-  /matchMedia\?\.\('\(max-width: 1180px\)'\)\.matches[\s\S]{0,160}classList\.add\('panel-collapsed'\)/.test(appSrc.replace(/\n\s*/g, ' ')),
-  '没找到窄屏默认收起的初始化');
+// 右栏整体砍掉（第三十九轮）：没有覆盖层，也就没有"窄屏默认收起"这回事——
+// 相关机械（panel-collapsed / 1180px 覆盖层）必须连根拔掉，不许留半套。
+check('右栏的窄屏覆盖层机械随栏一起拔干净',
+  !/panel-collapsed|matchMedia\?\.\('\(max-width: 1180px\)'\)/.test(appSrc) && !cssText.includes('panel-collapsed'),
+  '还留着 panel-collapsed 或窄屏 MQ');
 check('顶栏已合并进导航栏（无独立 topbar 容器）', !cssText.includes('.topbar {'));
 check('导航栏里有控制区', idxHtml.includes('rail-controls'));
 // (2) 新建会话不再弹窗
@@ -1716,9 +1587,15 @@ check('开局引导住在这条流里', idxHtml.includes('id="emptyState"') && i
   && idxHtml.indexOf('id="emptyState"') < idxHtml.indexOf('class="composer-wrap"'));
 check('思考与工具详情不再有展开件（CSS 也没留）',
   !cssText.includes('thinking-fold') && !cssText.includes('.tool-card-body') && !cssText.includes('tool-caret'));
-// (6) 右栏合并
-check('右栏只剩 2 个页签', doc.querySelectorAll('.tab').length === 2, `${doc.querySelectorAll('.tab').length} 个`);
-check('右栏页签是学习/素材', ['learn', 'files'].every((k) => Boolean(tabByName(k))) && !tabByName('map') && !tabByName('track'));
+// (6) 右栏砍除：页签一个都不许留，信息进台面顶部的现状条
+check('右栏页签全部删干净', doc.querySelectorAll('.tab[data-tab]').length === 0, `${doc.querySelectorAll('.tab').length} 个`);
+check('index.html 里没有面板本体（#panel / #togglePanel / #learnTabBadge）',
+  !idxHtml.includes('id="panelBody"') && !idxHtml.includes('id="togglePanel"') && !idxHtml.includes('learnTabBadge'),
+  'index.html 实测');
+check('现状条长在台面顶部（消息流之上、输入框之下）',
+  idxHtml.indexOf('id="deskState"') < idxHtml.indexOf('id="deskInner"')
+  && idxHtml.indexOf('id="deskState"') < idxHtml.indexOf('class="composer-wrap"'),
+  'index.html 实测');
 check('六条整改无异常', errors.length === 0, errors.join(' | '));
 
 // --- 14 草稿会话（像通用 agent：侧栏先占位，切走就丢，发消息才转正） ---
@@ -2595,71 +2472,26 @@ check('规则不再许诺"继承宿主主题"（iframe 里读不到，那句是�
   !/继承宿主主题|让图继承主题/.test(artifactRule));
 check('规则改说宿主的白纸', /白纸/.test(artifactRule));
 
-// --- 取景：右栏的相机跟着这一拍走 ---
-// 治的是"套了学习外皮的原样聊天"：题卡一出口，右栏必须当场框住它在问的那个概念，
-// 而不是让学习者自己在一列卡片里找"这道题跟哪儿有关"。
-// 2026-10-04：取景条那一行文字撤了（它把下面那张卡片的原名重说一遍，两个控件又能由点卡片完成）。
-// 这一节因此同时钉两头：框住/压暗的行为还在，那条文字行和它的样式一律不许回来。
-console.log('\n19. 取景（右栏相机）');
+// --- 取景：概念图随右栏砍掉，但镜头状态机留着（回放时哪道题在问，IUI 侧还要读它） ---
+// 右栏概念卡（含 framed/dimmed 与取景条）是第三十九轮砍掉清单的一员：卡和条都不许回来；
+// setCamera/releaseCamera 仍被 renderThread 用来记住"哪道没答的题正在问"，状态要活着。
+console.log('\n19. 取景状态机（概念图已砍，镜头状态留作 IUI 的坐标）');
 const cam = appModule.__hooks;
-const conceptCards = () => deepAll(domRoot, 'concept');
-const camBars = () => deepAll(domRoot, 'camera-bar');
-const camNames = () => conceptCards().map((c) => (c.classList.contains('framed') ? 'F' : c.classList.contains('dimmed') ? 'd' : '-')).join('');
+check('取景条和它的样式一律不许回来（卡都砍了，条更没地方站）',
+  !/renderCameraBar|camera-bar|camera-align|camera-why|camera-release|CAMERA_WHY/.test(appSrc)
+  && !/\.camera-[a-z]/.test(cssText), '源码/CSS 实测');
+check('概念卡（framed/dimmed）的渲染出口随右栏一起砍干净',
+  !/classList\.contains\('framed'\)|'concept-graph'|conceptGraphSvg|svgEl\(/.test(appSrc), '源码实测');
 
 state.notebooks = sampleList();
 state.notebook = sampleNotebook();
-state.todos = [];
 state.turn = null;
-// 前面某节把右栏收起来了（那正是要测的行为），这一节要自己把面板摊开才有卡片可框
-document.querySelector('.layout')?.classList.remove('panel-collapsed');
-tabByName('learn')?.click?.();
-await new Promise((r) => setTimeout(r, 30));
 cam.releaseCamera();
-renderPanel();
-check('取景只剩卡片上的框与压暗，那一行文字（含它的样式）不许回来',
-  camBars().length === 0
-  && !/renderCameraBar|camera-bar|camera-align|camera-why|camera-release|CAMERA_WHY/.test(appSrc)
-  && !/\.camera-[a-z]/.test(cssText),
-  `${camBars().length} 条`);
-check('没取景时一张卡都不压暗', camNames() === '--', camNames());
-
-// 服务端现在把教学坐标一起推下来了（agent.mjs execAsk 的 emit 带 conceptId）——
-// 这条断言钉的就是这个字段没在 SSE 里丢掉。回合必须是真的在跑（handleTurnEvent 没活回合就早退）。
-state.turn = { blocks: [], flow: null };
-state.turn.flow = cam.appendChatTurn(null, { role: 'assistant', __live: true, timestamp: Date.now() });
-cam.handleTurnEvent({
-  type: 'ask', questionId: 'closures:q_cam', header: '探针',
-  question: '外层函数 return 之后，里层还能读到它的变量吗？',
-  conceptId: 'closures',
-  options: [{ label: '能读到' }, { label: '读不到' }],
-  multiSelect: false, allowText: true,
-});
-check('提问这一拍右栏框住了它在问的概念', camNames() === 'dF', camNames());
-
-// 范围确认那一道不属于任何概念（服务端规则要求 concept_id 填 none）：不许把镜头甩走
-cam.handleTurnEvent({
-  type: 'ask', questionId: 'scope:q_cam', header: '范围',
-  question: '就按这个顺序讲？', conceptId: 'none',
-  options: [{ label: '就按这个顺序' }], multiSelect: false, allowText: true,
-});
-check('范围确认（concept_id=none）不改镜头', camNames() === 'dF', camNames());
 check('none 不是一张卡：setCamera 直接拒', cam.setCamera('none') === false);
 check('图上没有的 id 也拒', cam.setCamera('not-a-concept') === false);
+check('合法 id 接受（框住那题在问的概念）', cam.setCamera('variable-scope') === true && cam.state.camera?.conceptId === 'variable-scope');
 
-cam.setCamera('variable-scope');
-check('点卡片能自己框（其余压暗）', camNames() === 'Fd', camNames());
-conceptCards()[1].click();
-check('再点另一张就换框', camNames() === 'dF', camNames());
-conceptCards()[1].click();
-check('点回同一张就是退出取景（退出键没了，但这一脚一直有）', camNames() === '--', camNames());
-
-// 答完这题镜头不甩走：老师接着讲的就是这一步，撤框等于把刚建立起来的坐标清掉
-cam.setCamera('closures');
-cam.handleTurnEvent({ type: 'answer', questionId: 'closures:q_cam', selected: ['能读到'], text: '它记住了那个绑定', skipped: false });
-check('答完这题框还留着（没有"在问它/在讲它"那行字要改口了）', camNames() === 'dF', camNames());
-cam.setCamera('variable-scope');
-check('记账那一拍也能自己移镜头', camNames() === 'Fd', camNames());
-// 刷新回来：那道还没答的题必须把镜头一起带回来，否则取景断在刷新这一步
+// 回放取景：刷新回来，那道还没答的题必须把镜头一起带回来
 const nbCam = sampleNotebook();
 nbCam.chat.messages = [
   { role: 'user', content: '教我闭包', attachments: [], timestamp: 0 },
@@ -2674,33 +2506,18 @@ cam.releaseCamera();
 state.notebook = nbCam;
 state.turn = null;
 cam.renderThread();
-check('刷回来时那道没答的题把镜头带回来', camNames() === 'dF', camNames());
+check('刷回来时那道没答的题把镜头带回来（状态留着，IUI 读得到）',
+  cam.state.camera?.conceptId === 'closures', JSON.stringify(cam.state.camera));
 nbCam.chat.messages[1].questions[1].answer = { selected: ['能读到'], text: '', skipped: false, answeredAt: 5 };
 cam.releaseCamera();
 cam.renderThread();
-check('整列都答过了就不许留个镜头挂着', !camNames().includes('F'), camNames());
+check('整列都答过了就不许留个镜头挂着', cam.state.camera === null, JSON.stringify(cam.state.camera));
 cam.setCamera('variable-scope');
-
-// 结构被改（patch 合入 / 重新建图）之后，旧 id 不许继续顶着取景框
 const framedNow = cam.state.camera.conceptId;
 state.notebook.graph.concepts = state.notebook.graph.concepts.filter((c) => c.id !== framedNow);
-renderPanel();
-check('被框的概念从图上没了就当场松镜头（不靠一行文字告诉学习者它没了）',
-  !camNames().includes('F') && cam.state.camera === null, `${camNames()} | ${JSON.stringify(cam.state.camera)}`);
+cam.renderDeskState();
+check('被框的概念从图上没了就当场松镜头', cam.state.camera === null, JSON.stringify(cam.state.camera));
 cam.setCamera('closures');
-
-// 压暗这一手是量出来的：opacity 0.5 时 .concept 的 12.5px 摘要是 2.92:1（AA 要 4.5）
-const camCss = /^\.concept\.dimmed \{([^}]*)\}/m.exec(cssText)?.[1] || '';
-check('压暗不许用 opacity（量出来跌破 AA），要沉背景',
-  !/opacity/.test(camCss) && /--bg-panel/.test(camCss), camCss.replace(/\s+/g, ' ').trim());
-
-// 整份结构被清空的那一拍：同样静默松开，会话列里那一行说明已经撤了，不许留任何过期状态
-state.notebook.graph.concepts = [];
-renderPanel();
-check('空结构里静默松开镜头，不摆任何解释文字',
-  cam.state.camera === null && camBars().length === 0
-  && !deepAll(domRoot, 'panel-body').some((n) => /已经不在这份结构里了/.test(n.textContent || '')),
-  JSON.stringify(cam.state.camera));
 
 // --- 演出块真的能落进会话流（markdown 层过了不等于流里过了：内联渲染的转义是另一段代码） ---
 console.log('\n20. 对话演出落进会话流');
@@ -2857,9 +2674,8 @@ check('一行可撤销提示长在它被扔掉的那一格原位：说清撤的�
 check('扔掉过的道具不再回台面（重放同 id 直接不吃）', cam.pushArtifact(prop) === null && !onTable());
 
 // 找回的常驻入口在「素材」页，不只有那一行提示（提示会被下一条动作收掉）。
-state.panelTab = 'files';
-cam.renderPanel();
-const retiredRow = domRoot.findById('panelBody').findByClass('file-item')
+cam.renderDeskState();
+const retiredRow = deskBody().findByClass('file-item')
   .find((n) => n.textContent?.includes('正则试错场'));
 check('「素材」页列着扔掉的那件，行里有「放回台面」和「下载」两颗键',
   !!retiredRow && retiredRow.findByClass('btn').map((b) => b.textContent).join(',') === '放回台面,下载',
@@ -3711,105 +3527,10 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore34, errors.slice(errsBefore34).join(' | '));
 }
 
-// ─── 回看点击验证（放在收尾前：它真的把一句用户消息送进 /turn，会多出一拍，
-//     只能放在所有回放/计数断言之后）───
+// ─── 30. 带走的是作品：制品下载（素材文件一节保留在现状条里）——
+// 小结网页版 / 导出小结随整本备份一起砍了（第三十九轮），这里只钉制品下载。
 {
-  const reviewState = appModule.__hooks;
-  reviewState.state.panelTab = 'learn';
-  reviewState.renderPanel();
-  const reviewRowNow = deepAll(doc.getElementById('panelBody'), 'backup-row')
-    .find((r) => Array.from(r.children).some((b) => b.textContent === '回顾已学'));
-  const reviewClickBtn = reviewRowNow && Array.from(reviewRowNow.children).find((b) => b.textContent === '回顾已学');
-  const msgsBeforeReview = reviewState.state.notebook.chat.messages.length;
-  const reqBeforeReview = requests.length;
-  reviewClickBtn.onclick();
-  const lastMsg = reviewState.state.notebook.chat.messages[reviewState.state.notebook.chat.messages.length - 1];
-  check('点「回顾已学」把一句普通消息发出去（不是排期、不是自动召回）',
-    reviewState.state.notebook.chat.messages.length === msgsBeforeReview + 1 &&
-      lastMsg.role === 'user' && lastMsg.content.includes('回顾一下已经学过的内容'),
-    JSON.stringify(lastMsg));
-  // 回合请求真的打了（nb-test 在本机服务里是桩，404 后前端有收尾提示——那条路基线就在走）
-  await new Promise((r) => setTimeout(r, 500));
-  check('回顾走的就是普通 /turn 通道', requests.slice(reqBeforeReview).some((k) => k.includes('/turn')), requests.slice(reqBeforeReview).join(','));
-  check('回顾这条链路无异常', errors.length === 0, errors.join(' | '));
-}
-
-// ─── 29. 学情在场：目标卡（右栏）＋ 导出小结
-{
-  const { state: st, renderPanel: rp } = appModule.__hooks;
-  const direct = (n) => Array.from(n?.children || []);
-  const nbWithPatch = () => ({
-    ...sampleNotebook(),
-    patches: {
-      patches: [{
-        id: 'p-test', operation: 'ADD', target: '闭包', reason: '测试用待确认改动',
-        applied: false, rejected: false, proposed_at: new Date().toISOString(),
-      }],
-    },
-  });
-  st.panelTab = 'learn';
-  st.notebook = nbWithPatch();
-  rp();
-  const bodyNow = doc.getElementById('panelBody');
-  const titlesNow = deepAll(bodyNow, 'panel-section-title').map((t) => t.textContent);
-  const goalCards = deepAll(bodyNow, 'goal-card');
-  check('目标卡渲染在「待你确认的结构改动」之后（改动区仍置顶）',
-    titlesNow[0] === '待你确认的结构改动' && goalCards.length === 1 &&
-      direct(bodyNow).findIndex((c) => c.classList?.contains?.('goal-card')) > 1,
-    titlesNow.join(' | '));
-  check('目标卡标「目标」并显示 graph.meta.goal 的内容（用对闭包）',
-    goalCards.length === 1 && goalCards[0].textContent.includes('目标') && goalCards[0].textContent.includes('用对闭包'),
-    goalCards[0] ? goalCards[0].textContent : '没有目标卡');
-
-  // 有 goal 就显示背景行（learner_profile.background）
-  const gWithBg = { ...sampleNotebook().graph, meta: { ...sampleNotebook().graph.meta, learner_profile: { pace: 'normal', background: '写过一点 JS' } } };
-  st.notebook = { ...nbWithPatch(), graph: gWithBg };
-  rp();
-  const goalCardsBg = deepAll(doc.getElementById('panelBody'), 'goal-card');
-  check('有背景时目标卡带背景行（背景：写过一点 JS）',
-    goalCardsBg.length === 1 && goalCardsBg[0].textContent.includes('背景：写过一点 JS'),
-    goalCardsBg[0] ? goalCardsBg[0].textContent : '没有目标卡');
-
-  // 无 goal 但有 topic：标「主题」、内容回退到主题（目标确认前不撒谎叫它"目标"）
-  st.notebook = {
-    ...nbWithPatch(),
-    graph: { ...sampleNotebook().graph, meta: { ...sampleNotebook().graph.meta, goal: null, learner_profile: { pace: 'normal' } } },
-  };
-  rp();
-  const goalCardsTopic = deepAll(doc.getElementById('panelBody'), 'goal-card');
-  check('无 goal 时有主题：标「主题」并显示主题内容（JavaScript 闭包）',
-    goalCardsTopic.length === 1 && goalCardsTopic[0].textContent.includes('主题') && goalCardsTopic[0].textContent.includes('JavaScript 闭包'),
-    goalCardsTopic[0] ? goalCardsTopic[0].textContent : '没有目标卡');
-
-  // 都没有：不摆空卡（新会话还没谈目标，空卡是噪声）
-  st.notebook = {
-    ...nbWithPatch(),
-    graph: { ...sampleNotebook().graph, meta: { ...sampleNotebook().graph.meta, goal: null, topic: '', learner_profile: { pace: 'normal' } } },
-  };
-  rp();
-  check('没有目标也没有主题：不摆空卡',
-    deepAll(doc.getElementById('panelBody'), 'goal-card').length === 0);
-
-  // 导出小结：备份行里那颗键，点击真发 GET /summary、下载并提示
-  st.notebook = { ...nbWithPatch(), id: 'nb-test' };
-  rp();
-  const summaryRow = deepAll(doc.getElementById('panelBody'), 'backup-row')
-    .find((r) => Array.from(r.children).some((b) => b.textContent === '导出小结'));
-  const summaryBtn = summaryRow && Array.from(summaryRow.children).find((b) => b.textContent === '导出小结');
-  check('备份行里有「导出小结」按钮', Boolean(summaryBtn), summaryRow ? summaryRow.textContent : '没有备份行');
-  responses.set('GET /api/notebooks/nb-test/summary', () => json({ markdown: '# JavaScript 闭包\n\n## 目标\n用对闭包\n' }));
-  const reqBeforeSummary = requests.length;
-  summaryBtn.onclick();
-  await new Promise((r) => setTimeout(r, 80));
-  check('点「导出小结」真的请求了 /summary', requests.slice(reqBeforeSummary).some((k) => k.includes('/summary')), requests.slice(reqBeforeSummary).join(','));
-  check('导出小结成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出学习小结')));
-  check('导出小结这条链路无异常', errors.length === 0, errors.join(' | '));
-}
-
-// ─── 30. 带走的是作品：制品下载 + 小结网页版
-{
-  const { state: st, renderPanel: rp } = appModule.__hooks;
-  st.panelTab = 'files';
+  const { state: st, renderDeskState: rp } = appModule.__hooks;
   st.notebook = {
     ...sampleNotebook(),
     id: 'nb-test',
@@ -3819,10 +3540,10 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     ],
   };
   rp();
-  const fileRows = deepAll(doc.getElementById('panelBody'), 'file-item');
+  const fileRows = deepAll(deskBody(), 'file-item');
   const dlBtns = fileRows.map((r) => Array.from(r.children).find((c) => c.textContent === '下载')).filter(Boolean);
-  check('素材页每件制品都有「下载」按钮', dlBtns.length === 2, `下载按钮数=${dlBtns.length}`);
-  const retiredRow = deepAll(doc.getElementById('panelBody'), 'file-item').find((r) => r.textContent.includes('旧练习卡'));
+  check('素材一节每件制品都有「下载」按钮', dlBtns.length === 2, `下载按钮数=${dlBtns.length}`);
+  const retiredRow = deepAll(deskBody(), 'file-item').find((r) => r.textContent.includes('旧练习卡'));
   check('已收起的制品也有「下载」按钮（文件永远在）',
     Boolean(retiredRow) && Array.from(retiredRow.children).some((c) => c.textContent === '下载'),
     retiredRow ? retiredRow.textContent : '没有已收起那行');
@@ -3833,62 +3554,8 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('点「下载」真的请求了制品页面', requests.slice(reqBeforeDl).some((k) => k.includes('/artifacts/art-1')), requests.slice(reqBeforeDl).join(','));
   check('制品下载成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已下载制品')));
   check('制品下载这条链路无异常', errors.length === 0, errors.join(' | '));
-
-  // 小结网页版：备份行里那颗键，点击真发 ?format=html 并提示
-  st.panelTab = 'learn';
-  st.notebook = { ...sampleNotebook(), id: 'nb-test' };
-  rp();
-  const htmlBtn = deepAll(doc.getElementById('panelBody'), 'backup-row')
-    .flatMap((r) => Array.from(r.children))
-    .find((b) => b.textContent === '小结网页版');
-  check('备份行里有「小结网页版」按钮', Boolean(htmlBtn));
-  responses.set('GET /api/notebooks/nb-test/summary?format=html', () => json({ html: '<!doctype html><title>小结</title><p>网页版</p>' }));
-  const reqBeforeHtml = requests.length;
-  htmlBtn.onclick();
-  await new Promise((r) => setTimeout(r, 80));
-  check('点「小结网页版」真的请求了 /summary?format=html',
-    requests.slice(reqBeforeHtml).some((k) => k === 'GET /api/notebooks/nb-test/summary?format=html'), requests.slice(reqBeforeHtml).join(','));
-  check('小结网页版成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出小结网页版')));
-  check('小结网页版这条链路无异常', errors.length === 0, errors.join(' | '));
-}
-
-// ─── 31. 带走的是过程：导出对话（备份行那颗键，真发 /conversation）
-{
-  const { state: st, renderPanel: rp } = appModule.__hooks;
-  st.panelTab = 'learn';
-  st.notebook = { ...sampleNotebook(), id: 'nb-test' };
-  rp();
-  // 备份区拆成两行：上行是数据（导出/导入/体检），下行是带走物（小结/对话）。按内容定位。
-  const rows = deepAll(doc.getElementById('panelBody'), 'backup-row');
-  const dataRow = rows.find((r) => Array.from(r.children).some((b) => b.textContent === '导出整本'));
-  const takeawayRow = rows.find((r) => Array.from(r.children).some((b) => b.textContent === '导出小结'));
-  check('数据行只放数据键（导出整本/导入整本/体检数据）',
-    Boolean(dataRow) && ['导出整本', '导入整本', '体检数据'].every((k) => Array.from(dataRow.children).some((b) => b.textContent === k)),
-    dataRow ? Array.from(dataRow.children).map((b) => b.textContent).join('/') : '没有数据行');
-  check('带走行放小结与对话（导出小结/小结网页版/导出对话），不再挤在数据行',
-    Boolean(takeawayRow) && ['导出小结', '小结网页版', '导出对话'].every((k) => Array.from(takeawayRow.children).some((b) => b.textContent === k)),
-    takeawayRow ? Array.from(takeawayRow.children).map((b) => b.textContent).join('/') : '没有带走行');
-  const convBtn = Array.from(takeawayRow.children).find((b) => b.textContent === '导出对话');
-  responses.set('GET /api/notebooks/nb-test/conversation', () =>
-    json({ markdown: '# 测试本 — 对话记录\n\n## 第 1 场：开场\n\n**我**：你好' }));
-  const reqBeforeConv = requests.length;
-  convBtn.onclick();
-  await new Promise((r) => setTimeout(r, 80));
-  check('点「导出对话」真的请求了 /conversation',
-    requests.slice(reqBeforeConv).some((k) => k === 'GET /api/notebooks/nb-test/conversation'), requests.slice(reqBeforeConv).join(','));
-  check('导出对话成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已导出对话')));
-  check('导出对话这条链路无异常', errors.length === 0, errors.join(' | '));
-  const zipBtn = Array.from(takeawayRow.children).find((b) => b.textContent === '打包全部制品 (.zip)');
-  check('带走行有制品打包按钮（zip 打包入口）', Boolean(zipBtn), '没有 zip 按钮');
-  responses.set('GET /api/notebooks/nb-test/artifacts.zip', () =>
-    new Response('PK\x03\x04stubzip', { status: 200, headers: { 'Content-Type': 'application/zip' } }));
-  const reqBeforeZip = requests.length;
-  zipBtn.onclick();
-  await new Promise((r) => setTimeout(r, 80));
-  check('点「打包全部制品」真的请求了 zip 接口（二进制裸取，不走 JSON 解析）',
-    requests.slice(reqBeforeZip).some((k) => k === 'GET /api/notebooks/nb-test/artifacts.zip'), requests.slice(reqBeforeZip).join(','));
-  check('打包成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已打包全部制品')));
-  check('制品打包这条链路无异常', errors.length === 0, errors.join(' | '));
+  check('小结网页版入口不再出现（随整本备份砍掉）',
+    !deepAll(deskState, 'btn').some((b) => ['导出小结', '小结网页版', '导出对话'].includes(b.textContent)));
 }
 
 // ─── 33. 搬家（二）：设置面板里的配置备份（导出设置 / 导入设置）
@@ -4009,143 +3676,9 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     appendTurnErrorHint(t2, '别的错误') === false && (t2.blocks || []).length === before);
 }
 
-// ─── 32. 看不见的看得见：回马枪候选卡 / 判定记录 / 损坏文件取证
-{
-  const { state: st, renderPanel: rp, setCamera: sc } = appModule.__hooks;
-
-  // 32a. 回马枪候选卡：上次判错、还没判对的题（模型每回合都读，前端从此看得见）
-  st.panelTab = 'learn';
-  st.notebook = {
-    ...sampleNotebook(),
-    retests: [
-      { qid: 'q-a', concept: 'closures', attempts: 3, response: '又答错了' },
-      { qid: 'q-b', concept: 'variable-scope', attempts: 1, response: '' },
-    ],
-  };
-  st.camera = null;
-  rp();
-  const retestCards = deepAll(doc.getElementById('panelBody'), 'retest-card');
-  check('有回马枪候选时右栏出现续学卡', retestCards.length === 1, String(retestCards.length));
-  const retestText = retestCards[0] ? retestCards[0].textContent : '';
-  check('续学卡显示概念名（不是题号，学习者看得懂）',
-    retestText.includes('闭包') && retestText.includes('作用域'), retestText);
-  check('续学卡里没有任何数字（次数/作答都不出，Invariant 4）', !/\d/.test(retestText), retestText);
-  check('续学卡不含作答原文（私人证据留在对话里）', !retestText.includes('又答错了'), retestText);
-  // 点击 = 取景：和概念卡同一套交互
-  const items = deepAll(doc.getElementById('panelBody'), 'retest-item');
-  if (items.length) items[0].onclick();
-  check('点续学卡某一项把镜头对准那个概念', st.camera?.conceptId === 'closures', JSON.stringify(st.camera));
-  // 没有候选：不摆卡（没有就不打扰）
-  st.notebook = { ...sampleNotebook(), retests: [] };
-  st.camera = null;
-  rp();
-  check('没有回马枪候选时不摆续学卡', deepAll(doc.getElementById('panelBody'), 'retest-card').length === 0);
-  check('续学卡这条链路无异常', errors.length === 0, errors.join(' | '));
-
-  // 32b. 判定记录：JEV 留痕的可读出口（审计视图，只出词不出数字）
-  st.notebook = {
-    ...sampleNotebook(),
-    decisions: [
-      { kind: 'error', at: '2026-10-07T03:00:00.000Z', error: 'timeout' },
-      { kind: 'decision', at: '2026-10-07T02:00:00.000Z', mode: 'faux', n: 1, verdict: 'needs_review' },
-      { kind: 'decision', at: '2026-10-07T01:00:00.000Z', mode: 'real', n: 1, verdict: 'selected' },
-    ],
-  };
-  rp();
-  const titlesD = deepAll(doc.getElementById('panelBody'), 'panel-section-title').map((t) => t.textContent);
-  check('有判定记录时出现「判定记录」节', titlesD.includes('判定记录'), titlesD.join(' | '));
-  const decText = (deepAll(doc.getElementById('panelBody'), 'state-note') || []).map((n) => n.textContent).join('\n');
-  check('判定记录节说明边界（审计视图，不是掌握度）', decText.includes('审计视图'), decText.slice(0, 120));
-  check('判定记录显示结论词：判定失败 / 有待复核 / 判定通过',
-    decText.includes('判定失败') && decText.includes('有待复核') && decText.includes('判定通过'), decText);
-  check('判定记录显示模式词：真实判定 / 测试桩', decText.includes('真实判定') && decText.includes('测试桩'), decText);
-  check('判定记录不渲染置信度数字（probability/value 不进可见面）',
-    !decText.includes('probability') && !/\b0\.\d+\b/.test(decText), decText);
-  // 没有记录：不摆节
-  st.notebook = { ...sampleNotebook(), decisions: [] };
-  rp();
-  check('没有判定记录时不摆「判定记录」节',
-    !deepAll(doc.getElementById('panelBody'), 'panel-section-title').some((t) => t.textContent === '判定记录'));
-  check('判定记录这条链路无异常', errors.length === 0, errors.join(' | '));
-
-  // 32c. 损坏文件取证：体检点名之后原件拿得到（只读下载，字节不重写）
-  responses.set('GET /api/health', () =>
-    json({
-      ok: false, dataDir: '/tmp/x', notebooks: 1,
-      corruptFiles: ['nb-test/chat.json'], orphanArtifacts: [], missingHtml: [], quarantined: 0,
-    }));
-  responses.set('GET /api/health/corrupt?path=nb-test%2Fchat.json', () =>
-    new Response('{ 半截 JSON ← 原样取证', { status: 200, headers: { 'Content-Type': 'application/octet-stream' } }));
-  st.notebook = { ...sampleNotebook(), decisions: [], retests: [] };
-  st.panelTab = 'learn';
-  rp();
-  const backupRow32 = deepAll(doc.getElementById('panelBody'), 'backup-row')
-    .find((r) => Array.from(r.children).some((b) => b.textContent === '体检数据'));
-  const healthBtn32 = Array.from(backupRow32.children).find((b) => b.textContent === '体检数据');
-  healthBtn32.onclick();
-  await new Promise((r) => setTimeout(r, 20));
-  const rows32 = deepAll(doc.getElementById('panelBody'), 'health-corrupt-row');
-  check('体检点名损坏文件后每行给「下载原件」键',
-    rows32.length === 1 && rows32[0].textContent.includes('nb-test/chat.json') && rows32[0].textContent.includes('下载原件'),
-    rows32.map((r) => r.textContent).join(' | '));
-  const reqBeforeCorrupt = requests.length;
-  const dlBtn = rows32[0] ? deepAll(rows32[0], 'btn')[0] : null;
-  dlBtn?.onclick();
-  await new Promise((r) => setTimeout(r, 80));
-  check('点「下载原件」真的请求了取证接口',
-    requests.slice(reqBeforeCorrupt).some((k) => k.startsWith('GET /api/health/corrupt?path=')), requests.slice(reqBeforeCorrupt).join(','));
-  check('下载损坏文件成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已下载损坏文件原件')));
-  check('损坏取证这条链路无异常', errors.length === 0, errors.join(' | '));
-
-  // 32c-2（第十八轮）：原件治好了，盘上的 `.corrupt-*` 存证也要有出口。
-  // 旧 UI 只渲染 corruptFiles；体检把 corruptFiles 清空、corruptEvidence 里留着 sourceCorrupt=false
-  // 的副本时，面板必须仍给一行「下载存证副本」——否则修好之后想回看"当时坏成什么样"就查无实据。
-  responses.set('GET /api/health', () =>
-    json({
-      ok: true, dataDir: '/tmp/x', notebooks: 1,
-      corruptFiles: [], orphanArtifacts: [], missingHtml: [], quarantined: 0,
-      corruptEvidence: [
-        { rel: 'notebooks/nb-test/chat.json.corrupt-1700000000000', sourceCorrupt: false, bytes: 21 },
-        { rel: 'notebooks/nb-test/notes.json.corrupt-1700000000001', sourceCorrupt: true, bytes: 8 },
-      ],
-    }));
-  responses.set('GET /api/health/corrupt?path=notebooks%2Fnb-test%2Fchat.json.corrupt-1700000000000', () =>
-    new Response('{ 治好前的半截 ← 存证', { status: 200, headers: { 'Content-Type': 'application/octet-stream' } }));
-  healthBtn32.onclick();
-  await new Promise((r) => setTimeout(r, 20));
-  const healthResult32 = () => deepAll(doc.getElementById('panelBody'), 'health-result')[0];
-  const eRows = healthResult32() ? deepAll(healthResult32(), 'health-corrupt-row') : [];
-  const healedRow = eRows.find((r) => r.textContent.includes('chat.json.corrupt-1700000000000'));
-  check('已修复文件的存证单独成行（不再跟着 corruptFiles 一起消失）',
-    Boolean(healedRow) && healedRow.textContent.includes('下载存证副本'),
-    eRows.map((r) => r.textContent).join(' | '));
-  check('还坏着的原件不进"已修复"清单（sourceCorrupt=true 的归损坏清单管）',
-    !deepAll(doc.getElementById('panelBody'), 'health-corrupt-row').some((r) =>
-      r.textContent.includes('notes.json.corrupt-1700000000001') && r.textContent.includes('下载存证副本')),
-    'sourceCorrupt=true 的副本不该出现在已修复存证里');
-  const reqBeforeHealed = requests.length;
-  const healedBtn = healedRow ? deepAll(healedRow, 'btn')[0] : null;
-  healedBtn?.onclick();
-  await new Promise((r) => setTimeout(r, 80));
-  check('点「下载存证副本」真的打取证接口（台账 rel 原样送出去）',
-    requests.slice(reqBeforeHealed).some((k) => k.startsWith('GET /api/health/corrupt?path=notebooks%2Fnb-test%2Fchat.json.corrupt-')),
-    requests.slice(reqBeforeHealed).join(','));
-  check('存证下载成功有提示', Array.from(doc.getElementById('toasts').children).some((t) => t.textContent.includes('已下载损坏存证副本')));
-  check('已修复存证这条链路无异常', errors.length === 0, errors.join(' | '));
-
-  // 老服务（报告里根本没有 corruptEvidence 这个键）不许把面板炸掉
-  responses.set('GET /api/health', () =>
-    json({ ok: true, dataDir: '/tmp/x', notebooks: 1, corruptFiles: [], orphanArtifacts: [], missingHtml: [], quarantined: 0 }));
-  healthBtn32.onclick();
-  await new Promise((r) => setTimeout(r, 20));
-  check('老服务没带 corruptEvidence 时面板正常出"一切正常"（新字段读取要兜住）',
-    healthResult32().textContent.includes('一切正常') && errors.length === 0,
-    `${healthResult32().textContent} | ${errors.join(' | ')}`);
-}
-
 // ─── 33. 键盘走得通：模态焦点归还 / 题卡播报 / `/` 快捷键
 {
-  const { state: st, openSimpleModal, closeModal, handleGlobalKeydown, announce, showQuestion } = appModule.__hooks;
+  const { state: st, openSimpleModal, closeModal, handleGlobalKeydown, handleUiDeskEvent, announce, showQuestion } = appModule.__hooks;
   const ann = () => doc.getElementById('announcer');
 
   // 33a. 模态焦点归还：关掉对话框，焦点回到打开它的触发元素（WCAG 2.4.3 / 2.4.7）。
@@ -4182,15 +3715,18 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const card = showQuestion(q, null, null); // 新题，无 answer → 有人等，播报
   check('新题出现时播报「出一道题」', Boolean(card) && (ann().textContent || '').includes('出一道题'), ann().textContent);
   check('播报词里没有数字（Invariant 4）', !/\d/.test(ann().textContent || ''), ann().textContent);
+  // 选项点选检查必须在回放之前做：回放下一道题会把前一道封掉（sealUnanswered），
+  // 封掉的卡不接点选——这正是真实行为，先点选再回放。
+  const opts = card ? deepAll(card, 'ask-option') : [];
+  check('选项初始 aria-pressed=false', opts.length >= 2 && opts.every((b) => b.getAttribute('aria-pressed') === 'false'), opts.map((b) => b.getAttribute('aria-pressed')).join(','));
+  // 点选走桌面委托（第三十九轮起 ask 卡片没有 onclick，两套实现在真实浏览器会互踢）
+  if (opts.length) handleUiDeskEvent({ target: opts[0] });
+  check('点选后 aria-pressed=true（读屏听得到选中）', opts[0]?.getAttribute('aria-pressed') === 'true', opts[0]?.getAttribute('aria-pressed'));
+  if (opts.length >= 2) handleUiDeskEvent({ target: opts[1] });
+  check('单选切换互斥：前一选项 aria-pressed 回 false', opts[0]?.getAttribute('aria-pressed') === 'false' && opts[1]?.getAttribute('aria-pressed') === 'true', opts.map((b) => b.getAttribute('aria-pressed')).join(','));
   announce('');
   showQuestion({ ...q, questionId: 'q-replay' }, { selected: [], text: '答过', skipped: false }, 's1'); // 回放旧题，带 answer
   check('回放旧题（带答案）不播报', (ann().textContent || '') === '', ann().textContent);
-  const opts = card ? deepAll(card, 'ask-option') : [];
-  check('选项初始 aria-pressed=false', opts.length >= 2 && opts.every((b) => b.getAttribute('aria-pressed') === 'false'), opts.map((b) => b.getAttribute('aria-pressed')).join(','));
-  if (opts.length) opts[0].onclick();
-  check('点选后 aria-pressed=true（读屏听得到选中）', opts[0]?.getAttribute('aria-pressed') === 'true', opts[0]?.getAttribute('aria-pressed'));
-  if (opts.length >= 2) opts[1].onclick();
-  check('单选切换互斥：前一选项 aria-pressed 回 false', opts[0]?.getAttribute('aria-pressed') === 'false' && opts[1]?.getAttribute('aria-pressed') === 'true', opts.map((b) => b.getAttribute('aria-pressed')).join(','));
 
   // 33c. `/` 聚焦输入框：焦点不在输入控件里按下即聚焦；在输入框里按是字符不是命令
   const input = doc.getElementById('input');
@@ -4257,7 +3793,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('打开学习时真的去问 GET /tasks（以前这接口没人调用）',
     requests.slice(reqBefore).includes('GET /api/notebooks/nb-test/tasks'), requests.slice(reqBefore).join(' | '));
   await new Promise((r) => setTimeout(r, 80));
-  tabByName('learn')?.click?.();
+  appModule.__hooks.renderDeskState();
   await new Promise((r) => setTimeout(r, 30));
   const items = deepAll(domRoot, 'task-item');
   check('补水回来的任务渲染成卡片（刷新后不再全空）', items.length === 3, `实际 ${items.length} 张`);
@@ -4325,35 +3861,6 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     requests.filter((r) => r.startsWith('DELETE')).length === delBefore + 1
     && appModule.__hooks.state.notebooks.length === 1, appModule.__hooks.state.notebooks.map((n) => n.id).join(','));
   responses.set('DELETE /api/notebooks/nb-test', () => json({ ok: true }));
-
-  // c) 体检面板点名鬼目录，但不给"一键删除"
-  st.panelTab = 'learn';
-  appModule.__hooks.renderPanel();
-  responses.set('GET /api/health', () => json({
-    ok: false, dataDir: '/tmp/x', notebooks: 1,
-    corruptFiles: [], corruptEvidence: [], orphanArtifacts: [], missingHtml: [], quarantined: 0,
-    ghostDirs: [{ notebook: 'ghost-abc-123', contents: ['jobs'] }],
-  }));
-  const row36 = deepAll(doc.getElementById('panelBody'), 'backup-row')
-    .find((r) => Array.from(r.children).some((b) => b.textContent === '体检数据'));
-  Array.from(row36.children).find((b) => b.textContent === '体检数据').onclick();
-  await new Promise((r) => setTimeout(r, 30));
-  const hr36 = deepAll(doc.getElementById('panelBody'), 'health-result')[0];
-  check('体检面板点名鬼目录（不再"1 本学习，一切正常"）',
-    hr36.textContent.includes('鬼目录 1 处') && hr36.textContent.includes('ghost-abc-123'), hr36.textContent);
-  check('鬼目录不给一键删除键（删除不可恢复，这一处由人拍板）',
-    !deepAll(hr36, 'btn').some((b) => /鬼目录|删掉.*目录/.test(b.textContent)),
-    deepAll(hr36, 'btn').map((b) => b.textContent).join(' | '));
-  // 老服务不带 ghostDirs 字段：面板照常出"一切正常"，不炸
-  responses.set('GET /api/health', () => json({
-    ok: true, dataDir: '/tmp/x', notebooks: 1,
-    corruptFiles: [], orphanArtifacts: [], missingHtml: [], quarantined: 0,
-  }));
-  Array.from(row36.children).find((b) => b.textContent === '体检数据').onclick();
-  await new Promise((r) => setTimeout(r, 30));
-  check('老报告的 ghostDirs 缺席时兜住（新字段读取要容错）',
-    hr36.textContent.includes('一切正常') && errors.length === 0, `${hr36.textContent} | ${errors.join(' | ')}`);
-  check('这一节无异常', errors.length === 0, errors.join(' | '));
 }
 
 // ─── 37. 分身交付的最后一公里：占位卡按 job id 收掉，台面的账从后台流递过来（第二十一轮）
@@ -4447,52 +3954,6 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore37, errors.slice(errsBefore37).join(' | '));
   cam.resetDesk();
   st37.notebook = sampleNotebook();
-}
-
-// ─── 38. 身份这笔账看得见：体检面板点名"打不开的目录"与"盘上 id 对不上"（第二十二轮）
-{
-  console.log('\n38. 体检面板接住身份这两笔新账（写了没人读=没写）');
-  const st38 = appModule.__hooks.state;
-  const errsBefore38 = errors.length;
-  st38.panelTab = 'learn';
-  appModule.__hooks.renderPanel();
-  const row38 = deepAll(doc.getElementById('panelBody'), 'backup-row')
-    .find((r) => Array.from(r.children).some((b) => b.textContent === '体检数据'));
-  check('备份区那颗「体检数据」还在（这一节靠它，别改了名字就把钉子架空）', Boolean(row38));
-
-  responses.set('GET /api/health', () => json({
-    ok: false, dataDir: '/tmp/x', notebooks: 2,
-    corruptFiles: [], corruptEvidence: [], orphanArtifacts: [], missingHtml: [], quarantined: 0,
-    ghostDirs: [],
-    unaddressableDirs: [{ notebook: 'a:b', contents: ['notebook.json'] }],
-    identityDrift: [{ notebook: 'topic-x-000001', metaId: 'topic-y-999999' }],
-  }));
-  Array.from(row38.children).find((b) => b.textContent === '体检数据').onclick();
-  await new Promise((r) => setTimeout(r, 30));
-  const hr38 = deepAll(doc.getElementById('panelBody'), 'health-result')[0];
-  check('面板点名打不开的目录（不进列表 ≠ 不存在，盘上这一处要看得见）',
-    hr38.textContent.includes('打不开的目录 1 处') && hr38.textContent.includes('a:b'), hr38.textContent);
-  check('面板点名身份对不上（带目录名与盘上那行值——取证要能定位到具体哪一本）',
-    hr38.textContent.includes('topic-x-000001') && hr38.textContent.includes('topic-y-999999'), hr38.textContent);
-  check('不说一键修：改盘上那行与删目录都是动数据，由人拍板',
-    !deepAll(hr38, 'btn').some((b) => /修好|一键|删掉这本|对齐身份/.test(b.textContent)),
-    deepAll(hr38, 'btn').map((b) => b.textContent).join(' | '));
-  // 面板那句汇总不许说"一切正常"——新字段进了 ok 却不进这句话就是白报
-  check('有新账时汇总行不许说"一切正常"（口径与 ghostDirs 那条一致）',
-    !hr38.textContent.includes('一切正常'), hr38.textContent);
-
-  // 老服务（报告里没有这两个键）：面板照常出结论，不炸
-  responses.set('GET /api/health', () => json({
-    ok: true, dataDir: '/tmp/x', notebooks: 1,
-    corruptFiles: [], corruptEvidence: [], orphanArtifacts: [], missingHtml: [], quarantined: 0,
-    ghostDirs: [],
-  }));
-  Array.from(row38.children).find((b) => b.textContent === '体检数据').onclick();
-  await new Promise((r) => setTimeout(r, 30));
-  check('老报告缺这两个字段时兜住（读取要容错，不许把面板炸掉）',
-    hr38.textContent.includes('一切正常') && errors.length === errsBefore38,
-    `${hr38.textContent} | ${errors.slice(errsBefore38).join(' | ')}`);
-  check('这一节无异常', errors.length === errsBefore38, errors.slice(errsBefore38).join(' | '));
 }
 
 // ─── 39. 内联界面：```ui 围栏编译成台面上的界面（第二十五轮，学 Intelligent UI 那一手）
@@ -5187,10 +4648,10 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
 {
   console.log('\n42. 右栏界面状态回看（勾了/滑到/看过，现象不进判分）');
   const errsBefore42 = errors.length;
-  const { state: st42, renderPanel } = appModule.__hooks;
-  const cardOf = () => deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
+  const { state: st42, renderDeskState: renderPanel } = appModule.__hooks;
+  const cardOf = () => deepAll(deskBody(), 'ui-state-card')[0] || null;
   const cardText = () => (cardOf() ? deepAll(cardOf(), 'state-note').map((n) => n.textContent) : []);
-  const titles42 = () => deepAll(doc.getElementById('panelBody'), 'panel-section-title').map((t) => t.textContent);
+  const titles42 = () => deepAll(deskBody(), 'panel-section-title').map((t) => t.textContent);
 
   // 1) 三档状态都在盘上时，卡按原文 / 值 / 看过排出来
   st42.notebook = sampleNotebook();
@@ -5516,7 +4977,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   console.log('\n46. 交互式 chart（slider + snap 快照，拖一拖看形状怎么变）');
   const errsBefore46 = errors.length;
   const ui46 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
-  const { state: st46, handleUiDeskEvent, renderPanel } = appModule.__hooks;
+  const { state: st46, handleUiDeskEvent, renderDeskState: renderPanel } = appModule.__hooks;
   const compile46 = (lines, partial) => ui46.compileUiBlock(lines.filter((l) => l.trim()), partial);
   ui46.resetUiState();
   const input46 = doc.getElementById('input');
@@ -5687,7 +5148,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   // 11) 右栏回看卡：交互 chart 出现在「这局动过的界面」（与 hydrate 同一条筛子）
   st46.notebook.progress.artifact_state = { 'ui:clt1': { uiKind: 'chart', snap: 'n30' } };
   renderPanel();
-  const card46 = deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
+  const card46 = deepAll(deskBody(), 'ui-state-card')[0] || null;
   const notes46 = card46 ? deepAll(card46, 'state-note').map((n) => n.textContent) : [];
   check('右栏卡把交互 chart 排进来（只出现象：现在停在）',
     notes46.includes('图表「clt1」') && notes46.includes('· 现在停在：n30'), notes46.join(' / '));
@@ -5703,7 +5164,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   console.log('\n47. explore（分段探索：一个整体拆成几面，点开看每一面的角色）');
   const errsBefore47 = errors.length;
   const ui47 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
-  const { state: st47, handleUiDeskEvent, renderPanel } = appModule.__hooks;
+  const { state: st47, handleUiDeskEvent, renderDeskState: renderPanel } = appModule.__hooks;
   const compile47 = (lines, partial) => ui47.compileUiBlock(lines.filter((l) => l.trim()), partial);
   ui47.resetUiState();
   const input47 = doc.getElementById('input');
@@ -5827,7 +5288,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   // 8) 右栏回看卡：explore 出现在「这局动过的界面」（与 hydrate 同一条筛子）
   st47.notebook.progress.artifact_state = { 'ui:bike': { uiKind: 'explore', active: '车轮', viewed: { '车架': true, '车轮': true } } };
   renderPanel();
-  const card47 = deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
+  const card47 = deepAll(deskBody(), 'ui-state-card')[0] || null;
   const notes47 = card47 ? deepAll(card47, 'state-note').map((n) => n.textContent) : [];
   check('右栏卡把 explore 排进来（只出现象：看过 + 现在停在）',
     notes47.includes('探索「bike」') && notes47.includes('· 看过：车架、车轮') && notes47.includes('· 现在停在：车轮'), notes47.join(' / '));
@@ -5844,7 +5305,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   console.log('\n48. game（选一个选项、看会发生什么：蒙提霍尔式交互实验）');
   const errsBefore48 = errors.length;
   const ui48 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
-  const { state: st48, handleUiDeskEvent, renderPanel } = appModule.__hooks;
+  const { state: st48, handleUiDeskEvent, renderDeskState: renderPanel } = appModule.__hooks;
   const compile48 = (lines, partial) => ui48.compileUiBlock(lines.filter((l) => l.trim()), partial);
   ui48.resetUiState();
   const input48 = doc.getElementById('input');
@@ -6009,7 +5470,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   // 8) 右栏回看卡：game 出现在「这局动过的界面」（与 hydrate 同一条筛子）
   st48.notebook.progress.artifact_state = { 'ui:mh1': { uiKind: 'game', last: '选门2', tried: { '选门1': true, '选门2': true } } };
   renderPanel();
-  const card48 = deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
+  const card48 = deepAll(deskBody(), 'ui-state-card')[0] || null;
   const notes48 = card48 ? deepAll(card48, 'state-note').map((n) => n.textContent) : [];
   check('右栏卡把 game 排进来（只出现象：试过 + 现在停在）',
     notes48.includes('游戏「mh1」') && notes48.includes('· 试过：选门1、选门2') && notes48.includes('· 现在停在：选门2'), notes48.join(' / '));
@@ -6027,7 +5488,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   console.log('\n49. walkthrough（一步步走完一个问题：一次只露一步，点「下一步」往下走）');
   const errsBefore49 = errors.length;
   const ui49 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
-  const { state: st49, handleUiDeskEvent, renderPanel } = appModule.__hooks;
+  const { state: st49, handleUiDeskEvent, renderDeskState: renderPanel } = appModule.__hooks;
   const compile49 = (lines, partial) => ui49.compileUiBlock(lines.filter((l) => l.trim()), partial);
   ui49.resetUiState();
   const input49 = doc.getElementById('input');
@@ -6212,7 +5673,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   // 8) 右栏回看卡：walkthrough 出现在「这局动过的界面」（与 hydrate 同一条筛子）
   st49.notebook.progress.artifact_state = { 'ui:eq1': { uiKind: 'walkthrough', last: '两边除以5', visited: { '翻译成算式': true, '两边减去3': true, '两边除以5': true } } };
   renderPanel();
-  const card49 = deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
+  const card49 = deepAll(deskBody(), 'ui-state-card')[0] || null;
   const notes49 = card49 ? deepAll(card49, 'state-note').map((n) => n.textContent) : [];
   check('右栏卡把 walkthrough 排进来（只出现象：走到过 + 现在停在）',
     notes49.includes('走一遍「eq1」') && notes49.includes('· 走到过：翻译成算式、两边减去3、两边除以5') && notes49.includes('· 现在停在：两边除以5'), notes49.join(' / '));
@@ -6229,7 +5690,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   console.log('\n50. deck（一个界面由几块拼成：part 缩进子块，子块照旧走十档）');
   const errsBefore50 = errors.length;
   const ui50 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
-  const { state: st50, handleUiDeskEvent, renderPanel } = appModule.__hooks;
+  const { state: st50, handleUiDeskEvent, renderDeskState: renderPanel } = appModule.__hooks;
   const compile50 = (lines, partial) => ui50.compileUiBlock(lines.filter((l) => l.trim()), partial);
   ui50.resetUiState();
   const input50 = doc.getElementById('input');
@@ -6385,7 +5846,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     'ui:cook1': { uiKind: 'checklist', done: { 腌羊腿: true } },
   };
   renderPanel();
-  const card50 = deepAll(doc.getElementById('panelBody'), 'ui-state-card')[0] || null;
+  const card50 = deepAll(deskBody(), 'ui-state-card')[0] || null;
   const notes50 = card50 ? deepAll(card50, 'state-note').map((n) => n.textContent) : [];
   check('右栏卡把 deck 内两块子块都排进来（只出现象）',
     notes50.includes('计算器「shop1」') && notes50.includes('· 人数 = 8') && notes50.includes('清单「cook1」') && notes50.includes('· ✓ 腌羊腿'), notes50.join(' / '));

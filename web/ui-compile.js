@@ -22,7 +22,7 @@
 import { escapeHtml } from './escape.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'deck'];
+export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'deck', 'question', 'canvas'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -216,6 +216,8 @@ function compileCompare(fields, lines) {
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
+  if (questionWords(fields)) return { error: QUESTION_ONLY };
+  if (canvasWords(fields)) return { error: CANVAS_ONLY };
   const rows = pick(fields, 'row');
   if (rows.length < 2) return { error: '并排对照至少两行' };
   const grid = rows.map((r) => r.split('|').map((c) => c.trim()));
@@ -246,6 +248,8 @@ function compileSteps(fields, lines) {
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
+  if (questionWords(fields)) return { error: QUESTION_ONLY };
+  if (canvasWords(fields)) return { error: CANVAS_ONLY };
   const items = pick(fields, 'step');
   if (items.length < 1) return { error: '没有一行 step' };
   const title = pick(fields, 'title')[0] || '';
@@ -274,6 +278,8 @@ function compileChecklist(fields) {
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
+  if (questionWords(fields)) return { error: QUESTION_ONLY };
+  if (canvasWords(fields)) return { error: CANVAS_ONLY };
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
   const items = pick(fields, 'item').map((s) => s.trim());
@@ -317,6 +323,8 @@ function compileCalculator(fields, lines, partial) {
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
+  if (questionWords(fields)) return { error: QUESTION_ONLY };
+  if (canvasWords(fields)) return { error: CANVAS_ONLY };
   const params = [];
   for (const p of pick(fields, 'param')) {
     const parts = p.split('|').map((s) => s.trim());
@@ -461,6 +469,8 @@ function compileDiagram(fields) {
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
+  if (questionWords(fields)) return { error: QUESTION_ONLY };
+  if (canvasWords(fields)) return { error: CANVAS_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -692,6 +702,8 @@ function compileExplore(fields) {
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
+  if (questionWords(fields)) return { error: QUESTION_ONLY };
+  if (canvasWords(fields)) return { error: CANVAS_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -765,6 +777,8 @@ function compileGame(fields) {
   if (!id) return { error: '这个游戏没有 id：试到哪一步没有地方续' };
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (walkWords(fields)) return { error: WALK_ONLY };
+  if (questionWords(fields)) return { error: QUESTION_ONLY };
+  if (canvasWords(fields)) return { error: CANVAS_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -947,7 +961,7 @@ const DECK_MIN_PARTS = 2;
 const DECK_MAX_PARTS = 3;
 /** 并排是"对比"的形状：两块左右、一块没得比、三块是装饰。 */
 const DECK_COLUMNS_PARTS = 2;
-const DECK_PARTS = UI_KINDS.filter((k) => k !== 'deck' && k !== 'suggest');
+const DECK_PARTS = UI_KINDS.filter((k) => k !== 'deck' && k !== 'suggest' && k !== 'question' && k !== 'canvas');
 const DECK_PARTS_TEXT = DECK_PARTS.join(' / ');
 const DECK_TOP_ONLY = 'deck 顶层只认 kind / title / layout / part（它属于哪一块，就缩进到那一块的 part 下面）';
 
@@ -1059,6 +1073,8 @@ function compileSuggest(fields) {
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
+  if (questionWords(fields)) return { error: QUESTION_ONLY };
+  if (canvasWords(fields)) return { error: CANVAS_ONLY };
   const picks = pick(fields, 'pick').map((s) => s.trim()).filter(Boolean);
   if (!picks.length) return { error: '至少写一行 pick（一句想让学习者接着问的话）' };
   if (picks.length > SUGGEST_MAX) return { error: `最多 ${SUGGEST_MAX} 个分支（多了就是菜单，不是建议）` };
@@ -1145,6 +1161,8 @@ function compileChart(fields) {
   const handoff = pick(fields, 'handoff')[0] || '';
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
+  if (questionWords(fields)) return { error: QUESTION_ONLY };
+  if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (pick(fields, 'slider').length) return compileInteractiveChart(fields, { type, title, handoff });
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (handoff.length) {
@@ -1399,7 +1417,162 @@ function chartSnapTable(snap, xLabels) {
   return `<table class="ui-chart-table-el">${head}<tbody>${row}</tbody></table>`;
 }
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, deck: compileDeck };
+/**
+ * question（第三十九轮，ask_user_question 融入 IUI）：模型在 ```ui 围栏里声明题目，
+ * 服务端看到这一档就照旧阻塞回合、把作答作为工具结果交回模型——收答的语义不搬家，
+ * 搬的是声明的位置（从工具调用改成界面档）。
+ *
+ * 词表（与 ask_user_question 同一组字段，改名成界面字段）：
+ *   kind: question
+ *   id: q3                  ← 必填（服务端阻塞与作答回传都要靠它对上号；缺 id 掉回原文）
+ *   header: 先别急着答       ← 可选（题面之上的小标题）
+ *   question: 换门之后胜率是多少？
+ *   option: 1/2 — 换不换都一样   ← 可多条（label — description，至多 8 条）
+ *   multiSelect: true        ← 可选，默认单选
+ *   allowText: false         ← 可选，默认允许补一句理由
+ *   conceptId: monty         ← 可选（教学坐标：答完把那一格从 Unknown 记成 Seen）
+ *
+ * 为什么它不进 UI_STATEFUL：作答状态由服务端 progress 记（ask 那套落盘与回放），
+ * 不是 artifact_state——它不续"学习者动过哪一档"，它是一次性的收答。
+ * deck 里不许拼它：阻塞语义是整块 deck 的，不是哪一块的（DECK_PARTS 里没有 question）。
+ */
+const QUESTION_MAX_OPTIONS = 8;
+const QUESTION_TEXT_MAX = 240;
+const QUESTION_OPT_LABEL_MAX = 60;
+const QUESTION_OPT_DESC_MAX = 120;
+
+/** question 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
+function questionWords(fields) {
+  return pick(fields, 'question').length > 0 || pick(fields, 'option').length > 0;
+}
+const QUESTION_ONLY = 'question / option 只配 question（要收答判对错，写一道 question 档）';
+
+/**
+ * canvas（第三十九轮，share_artifact 融入 IUI）：整页制品直接写在 ```ui 围栏里。
+ * 词表：`kind: canvas` + `title:`（必填）+ `html:` 之后的**原样正文**（整份 HTML 抄到围栏
+ * 结束，不许压成一行——html 里有换行是常态，压行只会逼模型写坏）。编译产物是空的：
+ * canvas 的渲染走 artifact 通道（服务端从围栏取出 HTML 存盘、发 artifact 事件，宿主把它
+ * 摆进当前这一拍）——围栏本身不占界面位置，这一格就是"制品上台"的声明。
+ * 大小写不猜：kind 首行必须是 `kind: canvas`（html 正文里可能有形似字段的行，行首空格
+ * 是正文的一部分，不能按字段拆）。
+ */
+function compileCanvas(lines) {
+  const body = String(lines.join('\n')).replace(/\r\n?/g, '\n').split('\n');
+  const first = body.findIndex((l) => l.trim());
+  if (first < 0 || !/^kind\s*:\s*canvas\s*$/i.test(body[first].trim())) {
+    return { error: 'canvas 的第一行必须是 kind: canvas（html 从 html: 之后原样抄，行首空格是正文）' };
+  }
+  let title = null;
+  let htmlStart = -1;
+  let htmlPrefix = '';
+  for (let i = first + 1; i < body.length; i += 1) {
+    if (htmlStart >= 0) break; // html 开始后全是正文，不再按字段拆
+    const line = body[i].trim();
+    if (!line) continue;
+    const hm = /^html\s*:\s*(.*)$/.exec(line);
+    if (hm) {
+      htmlStart = i + 1;
+      if (hm[1].trim()) htmlPrefix = hm[1];
+      break;
+    }
+    const m = /^([A-Za-z_][\w-]*)\s*:\s*(\S.*)$/.exec(line);
+    if (!m) return { error: 'html: 之前那一行不是「字段: 值」' };
+    const key = m[1].toLowerCase();
+    const value = m[2].trim();
+    if (key === 'kind') return { error: 'kind 写了两遍' };
+    if (key === 'title') {
+      if (title) return { error: 'title 写了两遍' };
+      title = value;
+      continue;
+    }
+    return { error: `「${key}」不是 canvas 的字段（canvas 只认 kind / title / html；html 之后原样抄到围栏结束）` };
+  }
+  if (!title) return { error: 'canvas 要有一个 title（这件制品叫什么）' };
+  if (htmlStart < 0) return { error: 'html: 那一行之后要跟着制品的 HTML' };
+  const html = [htmlPrefix, ...body.slice(htmlStart)].join('\n').trim();
+  if (!html) return { error: 'html 是空的（html: 之后写整份 HTML，从 <!doctype html> 开始）' };
+  return { html: '', shape: 'canvas', canvas: { title, html } };
+}
+
+/** canvas 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
+function canvasWords(fields) {
+  return pick(fields, 'html').length > 0;
+}
+const CANVAS_ONLY = 'html 只配 canvas（整页制品写在 kind: canvas 的围栏里，从 html: 之后原样抄到围栏结束）';
+
+function compileQuestion(fields) {
+  if (pick(fields, 'handoff').length) return { error: 'question 自己就是收答的卡，不要再写 handoff' };
+  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (gameWords(fields)) return { error: GAME_ONLY };
+  if (walkWords(fields)) return { error: WALK_ONLY };
+  const ids = pick(fields, 'id');
+  if (ids.length > 1) return { error: 'id 写了两遍' };
+  if (!ids.length) return { error: '提问要有一个 id（服务端按它收作答，缺了没人接得住）' };
+  const id = ids[0].trim();
+  if (id.length > 80) return { error: 'id 太长了' };
+  const questions = pick(fields, 'question');
+  if (questions.length > 1) return { error: 'question 写了两遍' };
+  if (!questions.length) return { error: '至少写一行 question（要问的那句话）' };
+  const question = questions[0].trim();
+  if (question.length > QUESTION_TEXT_MAX) return { error: `question 太长了（≤${QUESTION_TEXT_MAX} 字）` };
+  const headers = pick(fields, 'header');
+  if (headers.length > 1) return { error: 'header 写了两遍' };
+  const header = headers[0]?.trim() || '';
+  const concepts = pick(fields, 'conceptid');
+  if (concepts.length > 1) return { error: 'conceptId 写了两遍' };
+  const conceptId = concepts[0]?.trim() || '';
+  const multis = pick(fields, 'multiselect');
+  if (multis.length > 1) return { error: 'multiSelect 写了两遍' };
+  if (multis.length && multis[0].trim() !== 'true' && multis[0].trim() !== 'false') return { error: 'multiSelect 只认 true / false' };
+  const multiSelect = multis.length ? multis[0].trim() === 'true' : false;
+  const allowTexts = pick(fields, 'allowtext');
+  if (allowTexts.length > 1) return { error: 'allowText 写了两遍' };
+  if (allowTexts.length && allowTexts[0].trim() !== 'true' && allowTexts[0].trim() !== 'false') return { error: 'allowText 只认 true / false' };
+  const allowText = allowTexts.length ? allowTexts[0].trim() !== 'false' : true;
+  const options = pick(fields, 'option').map((s) => {
+    const [label, ...rest] = s.split(' — ');
+    return { label: label.trim(), description: rest.join(' — ').trim() || null };
+  });
+  if (options.length > QUESTION_MAX_OPTIONS) return { error: `最多 ${QUESTION_MAX_OPTIONS} 个选项（再多是菜单，不是题）` };
+  if (options.some((o) => !o.label)) return { error: 'option 那行要有一个选项名' };
+  if (options.some((o) => o.label.length > QUESTION_OPT_LABEL_MAX)) return { error: '选项名太长了' };
+  if (options.some((o) => o.description && o.description.length > QUESTION_OPT_DESC_MAX)) return { error: '选项说明太长了' };
+  if (new Set(options.map((o) => o.label)).size !== options.length) return { error: '两条选项一模一样' };
+  const known = new Set(['id', 'question', 'header', 'option', 'multiselect', 'allowtext', 'conceptid']);
+  const bad = fields.filter(([k]) => !known.has(k)).map(([k]) => k);
+  if (bad.length) {
+    return { error: `「${bad[0]}」不是 question 的字段（question 只认 id / question / header / option / multiSelect / allowText / conceptId）` };
+  }
+
+  const opts = options
+    .map(
+      (o, i) =>
+        `<button type="button" class="ask-option ${multiSelect ? 'multi' : 'single'}" data-ui-ask-opt="${i}" aria-pressed="false">` +
+        `<span class="mark">✓</span><span class="label">${cell(o.label)}</span>` +
+        (o.description ? `<span class="desc"> — ${cell(o.description)}</span>` : '') +
+        `</button>`,
+    )
+    .join('');
+  const textarea = allowText
+    ? `<textarea class="ask-textarea" placeholder="${options.length ? '也可以在这里补充你的理由…' : '用你自己的话说说看…'}"></textarea>`
+    : '';
+  const html =
+    `<div class="ask-card" data-question-id="${escapeHtml(id)}">` +
+    (header ? `<div class="ask-header">${cell(header)}</div>` : '') +
+    `<div class="ask-question">${cell(question)}</div>` +
+    (options.length ? `<div class="ask-options">${opts}</div>` : '') +
+    textarea +
+    `<div class="ask-actions">` +
+    `<button type="button" class="btn btn-primary" data-ui-ask-submit="" disabled>提交</button>` +
+    `<button type="button" class="btn btn-ghost btn-sm" data-ui-ask-skip="" disabled>先跳过</button>` +
+    `</div></div>`;
+  return { html, shape: 'question' };
+}
+
+/** question 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
+const QUESTION_FIELDS = new Set(['id', 'question', 'header', 'option', 'multiSelect', 'allowText', 'conceptId']);
+
+const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
 
 /**
  * 编译器入口。partial = 这一段还在流里长（围栏未闭合）。
@@ -1414,8 +1587,16 @@ export function compileUiBlock(lines, partial) {
     // 简洁模式里围栏就是原文：这不是编译失败，不报降级，也不摆占位。
     return { html: `<pre><code class="lang-ui">${escapeHtml(lines.join('\n'))}</code></pre>`, degraded: 'plain-mode' };
   }
-  const parsed = parseFence(lines);
   const fail = (why) => (partial ? { html: skeleton('正在把这个界面长出来…'), pending: true } : { html: degrade(why, lines), degraded: why });
+  // canvas 的 html 是多行正文，不能走 parseFence 的「字段: 值」通用拆（html 行会被当字段
+  // 判坏，长行还会先撞「单行过长」）——首行声明 kind: canvas 就先按原文行整段编译。
+  const firstMeaningful = lines.find((l) => l.trim());
+  if (firstMeaningful && /^kind\s*:\s*canvas\s*$/i.test(firstMeaningful.trim())) {
+    const r = compileCanvas(lines);
+    if (r.error) return fail(r.error);
+    return { html: r.html, shape: r.shape, canvas: r.canvas };
+  }
+  const parsed = parseFence(lines);
   if (parsed.error) return fail(parsed.error);
   const kind = parsed.kind;
   if (UI_VETOED.includes(kind)) {

@@ -187,15 +187,15 @@ const GRAPH_CONCEPTS = [
 
 // faux 回复脚本：4 个回合块。GATE-1 的正确形状是走题卡（曾把确认写进正文、
 // 学习者连打三次「可以」——活数据证明那条路会让同一份清单被念三遍）。
+// 第三十九轮起提问不再走 ask_user_question 工具：模型在正文里写 ```ui 的 question
+// 档，平台编译成题卡并阻塞收答——语义同款，语法换壳。
 const SCRIPT = [
   [
-    { type: 'text', text: '我先把这块拆成两个概念。\n\n1. 作用域\n2. 闭包' },
+    { type: 'text', text: '我先把这块拆成两个概念。\n\n1. 作用域\n2. 闭包\n\n```ui\nkind: question\nid: gate1:confirm\nconceptId: none\nheader: 确认范围\nquestion: 这个范围和顺序可以吗？\noption: 就按这个顺序 — 按这两块的顺序推进\noption: 先只看闭包 — 跳过作用域\n```' },
     { type: 'toolCall', name: 'update_learning_graph', arguments: { topic: 'JavaScript 闭包', goal: '在项目里用对闭包', pedagogy: 'programming', concepts: GRAPH_CONCEPTS } },
-    { type: 'toolCall', name: 'ask_user_question', arguments: { id: 'gate1:confirm', concept_id: 'none', header: '确认范围', question: '这个范围和顺序可以吗？', options: [{ label: '就按这个顺序' }, { label: '先只看闭包' }] } },
   ],
   [
-    { type: 'text', text: '先别查——你猜外层函数已经 return 之后，里层还能不能读到外层当时的变量？' },
-    { type: 'toolCall', name: 'ask_user_question', arguments: { id: 'closures:q_outer_var', concept_id: 'closures', header: '探针', question: '外层函数已经 return 了，里层函数还能读到外层当时的变量吗？', options: [{ label: '能读到' }, { label: '读不到' }] } },
+    { type: 'text', text: '先别查——你猜外层函数已经 return 之后，里层还能不能读到外层当时的变量？\n\n```ui\nkind: question\nid: closures:q_outer_var\nconceptId: closures\nheader: 探针\nquestion: 外层函数已经 return 了，里层函数还能读到外层当时的变量吗？\noption: 能读到 — 里层还握着那个变量\noption: 读不到 — 外层一结束变量就没了\n```' },
   ],
   [
     { type: 'text', text: '对，它握着的是那个绑定本身。' },
@@ -361,21 +361,21 @@ try {
     if (graphAt < 0 && e.type === 'graph') graphAt = i;
     if (gateAt < 0 && e.type === 'ask' && e.questionId === 'gate1:confirm') gateAt = i;
   }
-  check('GATE-1 走 ask_user_question，且排在存图之后', graphAt >= 0 && gateAt > graphAt, `graph=${graphAt} gate=${gateAt}`);
-  const gateTool = events.find((e) => e.type === 'tool_exec' && e.name === 'ask_user_question' && e.args?.id === 'gate1:confirm');
-  check('门禁那题不算探针：concept_id 是 none，不会把 Seen 记到概念头上', gateTool?.args?.concept_id === 'none', JSON.stringify(gateTool));
+  check('GATE-1 走 question 档（ask 事件），且排在存图之后', graphAt >= 0 && gateAt > graphAt, `graph=${graphAt} gate=${gateAt}`);
+  const gateAsk = events.find((e) => e.type === 'ask' && e.questionId === 'gate1:confirm');
+  check('门禁那题不算探针：concept_id 是 none，不会把 Seen 记到概念头上', gateAsk?.conceptId === 'none', JSON.stringify(gateAsk));
   check('正文里不再出现降级版的确认标记', !prose.includes('等待你的确认'), prose);
 
   // §1.2 的 Unknown→Seen 是无条件的，由应用在收到作答时代写。钉的是"谁写的"：
-  // 这条 progress 必须出现在它所属那道题的 ask_user_question 收尾之前。
+  // 这条 progress 必须出现在它所属那道题的作答回传之前。
   const probeAskAt = events.findIndex((e) => e.type === 'ask' && e.questionId === 'closures:q_outer_var');
-  let autoIdx = -1; let askEndIdx = -1;
+  let autoIdx = -1; let probeAnswerAt = -1;
   for (let i = probeAskAt; i < events.length; i += 1) {
     const e = events[i];
     if (autoIdx < 0 && e.type === 'progress' && (e.changes || []).some((c) => `${c.from}->${c.to}` === 'unknown->seen')) autoIdx = i;
-    if (askEndIdx < 0 && e.type === 'tool_end' && e.name === 'ask_user_question') askEndIdx = i;
+    if (probeAnswerAt < 0 && e.type === 'answer' && e.questionId === 'closures:q_outer_var') probeAnswerAt = i;
   }
-  check('探针一答，应用当场把那格写成 Seen', probeAskAt >= 0 && autoIdx > probeAskAt && askEndIdx > probeAskAt && autoIdx < askEndIdx, `probe=${probeAskAt} auto=${autoIdx} askEnd=${askEndIdx}`);
+  check('探针一答，应用当场把那格写成 Seen', probeAskAt >= 0 && autoIdx > probeAskAt && probeAnswerAt > probeAskAt && autoIdx < probeAnswerAt, `probe=${probeAskAt} auto=${autoIdx} answer=${probeAnswerAt}`);
   const autoWrites = events.filter((e) => e.type === 'progress' && (e.changes || []).some((c) => `${c.from}->${c.to}` === 'unknown->seen'));
   check('同一格不会被重复写 Seen（老师那一步成了 no-op）', autoWrites.length === 1, `${autoWrites.length} 次`);
 
@@ -748,8 +748,7 @@ try {
     const delId = delNb.data?.notebook?.id;
     check('删除探针用的本子建好了', Boolean(delId), String(delId));
     const hangScript = [[
-      { type: 'text', text: '先问一句，然后等你作答。' },
-      { type: 'toolCall', name: 'ask_user_question', arguments: { id: 'del:hang', concept_id: 'none', header: '探针', question: '这道题没人答，回合就一直等。', options: [{ label: '等' }, { label: '继续等' }] } },
+      { type: 'text', text: '先问一句，然后等你作答。\n\n```ui\nkind: question\nid: del:hang\nconceptId: none\nheader: 探针\nquestion: 这道题没人答，回合就一直等。\noption: 等 — 就这么等着\noption: 继续等 — 再等等\n```' },
     ]];
     await jfetch(`${BASE}/api/__faux`, { method: 'POST', headers: H, body: scriptBody(hangScript) });
     const turnRes19 = await fetch(`${BASE}/api/notebooks/${delId}/turn`, {
@@ -909,7 +908,7 @@ try {
     await jfetch(`${BASE}/api/__faux`, { method: 'POST', headers: H, body: scriptBody([
       [{ type: 'text', text: '我把出题挂到后台。' },
        { type: 'toolCall', name: 'run_background_task', arguments: { title: '永远在跑的分身', instructions: '问一个问题然后等答案，不要继续' } }],
-      [{ type: 'toolCall', name: 'ask_user_question', arguments: { id: 'q-hang22', concept_id: 'none', question: '还在吗？', options: [{ label: '在' }] }, stopReason: 'toolUse' }],
+      [{ type: 'text', text: '还在吗？\n\n```ui\nkind: question\nid: q-hang22\nconceptId: none\nquestion: 还在吗？\noption: 在 — 还在\n```' }],
       [{ type: 'text', text: '挂在后台了，这边先继续。' }],
     ]) });
     const turn22 = await fetch(`${BASE}/api/notebooks/${ghostNb}/turn`, {

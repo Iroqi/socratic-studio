@@ -281,7 +281,7 @@ try {
   // 模型卡在题上等人答，学习者趁这会儿点「扔掉」，答完模型接着调 run_scene——
   // 它读写的是内存里那一份，不同步就把刚扔掉的那件又写回台上。
   const SCRIPT4 = [
-    [{ type: 'toolCall', name: 'ask_user_question', arguments: { id: 'live:q_drop', concept_id: 'closures', header: '看一下台面', question: '我先把这件撤下来，接着往下讲？', options: [{ label: '嗯，接着讲' }, { label: '先停这儿' }] } }],
+    [{ type: 'text', text: '我先把这件撤下来，接着往下讲？\n\n```ui\nkind: question\nid: live:q_drop\nconceptId: closures\nheader: 看一下台面\nquestion: 我先把这件撤下来，接着往下讲？\noption: 嗯，接着讲 — 撤吧\noption: 先停这儿 — 再看一眼\n```' }],
     [{ type: 'toolCall', name: 'run_scene', arguments: { action: 'phase', phase: 'teach' } }],
     [{ type: 'text', text: '接着往下讲。' }],
   ];

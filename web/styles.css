@@ -87,14 +87,7 @@ html, body {
 
 .hidden { display: none !important; }
 
-.layout {
-  display: grid;
-  grid-template-columns: 216px minmax(0, 1fr) 312px;
-  height: 100vh;
-  overflow: hidden;
-}
-.layout.panel-collapsed { grid-template-columns: 216px minmax(0, 1fr); }
-.layout.panel-collapsed .panel { display: none; }
+.layout { display: grid; grid-template-columns: 216px minmax(0, 1fr); }
 
 /* ───────────── 左导航栏：点击式 ───────────── */
 .rail {
@@ -1189,6 +1182,35 @@ html, body {
 .panel-section-title:first-child { margin-top: 0; }
 .state-note { font-size: 12.5px; color: var(--ink-2); }
 
+/* IUI 文本块（第三十九轮起的默认信封）：模型不写 ```ui 围栏时，纯文字包成这一块上台。
+   与 ask/checklist 那些卡片同底色、同圆角，正文段落之间靠段距而不是边框分隔。 */
+.ui-text { background: var(--surface-2); border-radius: 10px; padding: 10px 14px; }
+.ui-text p:first-child { margin-top: 0; }
+.ui-text p:last-child { margin-bottom: 0; }
+
+/* 台面顶部的现状条（第三十九轮：右栏并入会话界面）。整条在对话之上、
+   卡片之下：待确认的结构改动置顶，其余折进原生 <details>。 */
+.desk-state { padding: 10px 0 2px; margin-bottom: 6px; }
+.desk-state.hidden { display: none; }
+.desk-state-details { font-size: 13px; }
+.desk-state-details summary {
+  cursor: pointer; user-select: none; color: var(--ink-2);
+  font-size: 12px; letter-spacing: 0.04em; padding: 2px 0;
+}
+.desk-state-details summary:hover { color: var(--ink-1); }
+.desk-state-body { margin-top: 4px; }
+.desk-state-body .panel-section-title { margin-top: 14px; }
+.desk-state-body .ui-state-card {
+  background: var(--surface-2); border-radius: 10px; padding: 2px 14px 10px; margin: 6px 0;
+}
+.desk-state-body .ui-state-card .panel-section-title:first-child { margin-top: 8px; }
+
+/* GATE 入口：待确认的结构改动是唯一有副作用的界面入口，置顶排在最上面。 */
+.desk-gate { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.desk-gate.hidden { display: none; }
+.desk-gate .panel-section-title { margin: 2px 0 0; }
+.desk-gate .patch-card { margin: 0; }
+
 /* 目标卡：右栏"为什么在学这本"的一行只读上下文，不是动作入口。
    底色沿用 --surface-2、强调边沿用 --accent，不新造配色（新配色组合要先量对比度）。
    只显示、不统计：这里没有任何数字（Invariant 4）。 */
@@ -1387,11 +1409,9 @@ html, body {
 ::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-/* 窄屏 */
+/* 窄屏：右栏砍掉后没有覆盖层那回事，只剩左栏与消息流两列 */
 @media (max-width: 1180px) {
-  .layout { grid-template-columns: 232px minmax(0, 1fr); }
-  .panel { position: fixed; right: 0; top: 0; bottom: 0; width: min(400px, 92vw); z-index: 50; box-shadow: var(--shadow-pop); }
-  .layout.panel-collapsed .panel { display: none; }
+  .layout { grid-template-columns: 216px minmax(0, 1fr); }
 }
 @media (max-width: 980px) {
   .stage-bar { padding: 5px 12px; }

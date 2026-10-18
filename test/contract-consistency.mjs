@@ -165,11 +165,11 @@ check('契约提示点名「一个孔」（按小标题认，注释不算）',
   artifactSrc.includes('【一个孔（建构型）】'));
 check('工具描述也点名（模型在选型那一步就看得见这个形状）',
   /还有一种形状是.一个孔/.test(agentSrc));
-check('提示说"宿主物理拦住"↔ 装配真的注入 CSP', /injectArtifactCsp\(html\)/.test(agentSrc)
+check('提示说"宿主物理拦住"↔ 装配真的注入 CSP', /injectArtifactCsp\(out\)/.test(agentSrc)
   && /export function injectArtifactCsp/.test(artifactSrc));
 check('提示说 CSP 在最后注入（meta 必须在运行时脚本之前）',
-  agentSrc.indexOf('injectArtifactCsp(html)') > agentSrc.indexOf('injectArtifactRuntime(args.html)'),
-  'execShareArtifact 里的调用顺序变了，策略会管不住注入的运行时');
+  agentSrc.indexOf('injectArtifactCsp(out)') > agentSrc.indexOf('injectArtifactRuntime(html)'),
+  'deliverArtifactHtml 里的调用顺序变了，策略会管不住注入的运行时');
 check('承诺禁网 ↔ 策略里真有 connect-src 阻断', /connect-src 'none'/.test(artifactSrc));
 check('承诺内联脚本照跑 ↔ 策略里真有 unsafe-inline', /script-src[^;]*'unsafe-inline'/.test(artifactSrc));
 check('承诺孔要能 eval 学习者的代码 ↔ 策略里真有 unsafe-eval', /script-src[^;]*'unsafe-eval'/.test(artifactSrc));
@@ -580,14 +580,9 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
   }
   check('README 写到取证口两条清单都认（原件与副本）',
     /取证下载两条清单都认|两条清单都认/.test(readmeDoc), 'README 没跟上第十八轮口径');
-  const webAppSrc = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
-  check('前端渲染 corruptEvidence 并给"已修复"存证下载口',
-    webAppSrc.includes('corruptEvidence') && webAppSrc.includes('下载存证副本'), '面板没有台账出口');
-  check('前端读取台账带兜底（老服务没这字段不许炸面板）',
-    /Array\.isArray\(report\.corruptEvidence\)/.test(webAppSrc), '直接当数组用了');
-  // 台账的 rel 基准必须和 corruptFiles 不同且被 readCorruptFile 认得——两处基准搞混就是 404 现场
-  // （第二十四轮把"原件"这一圈再分成两套基准：逐本 `<id>/<file>` 对 NOTEBOOKS_DIR、
-  //  根目录裸名对 DATA_DIR，钉的仍是"分得开、不混用"这一条）
+  // 前端这一侧原来有体检面板的台账出口；第三十九轮右栏砍除（用户拍板：整本备份含体检入口
+  // 一并移出界面），前端不再渲染台账——数据仍在 store 侧（上面两条钉着），界面出口没了。
+  // readCorruptFile 分辨两份清单的契约仍由服务端那两条钉着。
   check('readCorruptFile 明确分辨两份清单（原件走 NOTEBOOKS_DIR，副本走 DATA_DIR）',
     /report\.corruptFiles\.includes/.test(storeSrc) && /corruptEvidence\.find/.test(storeSrc)
     && /NOTEBOOKS_DIR/.test(storeSrc) && /serveWhitelisted\(DATA_DIR/.test(storeSrc)
@@ -732,13 +727,9 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
   check('ghostDirs 进 ok 判定（此刻盘上真存在的一处不该存在，不是往事）',
     Boolean(healthBody) && /ghostDirs\.length === 0/.test(healthBody[0]), '报告了但没人需要管');
 
-  // 前端这一侧：读新字段要兜住老服务，而且只点名、不给一键删除
-  const webApp = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
-  check('前端读 ghostDirs 带兜底（老服务没这个字段不许炸面板）',
-    /Array\.isArray\(report\.ghostDirs\)/.test(webApp), '直接当数组用了');
-  check('前端点名鬼目录并说明要人自己确认（不给一键删除的键）',
-    /鬼目录/.test(webApp) && /手动删掉这个目录/.test(webApp), '面板没有鬼目录出口');
+  // 前端这一侧原来有体检面板；第三十九轮右栏砍除，面板出口没了（服务端两条照旧钉着）。
   // 删除弹层这一侧：回合与分身两笔账都要提，客户端那句不再是唯一的一道闸
+  const webApp = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
   check('删除弹层也提"后台任务还在跑"这一笔（与 state.turn 那句并列）',
     /个后台任务在跑/.test(webApp), '弹层还只认回合');
 
@@ -921,13 +912,7 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     /if \(!safeId\(id\)\) \{[\s\S]{0,300}?unaddressableDirs\.push[\s\S]{0,60}?continue;\s*\}\s*notebooks \+= 1;/.test(healthFn22)
     || /if \(!safeId\(id\)\)[\s\S]*?continue;[\s\S]*?notebooks \+= 1;/.test(healthFn22),
     '本数开始把打不开的目录数进去了');
-  // 这一条对着"汇总行"那一处的形状，不对着全文里出现过这个词：明细行也写着同一句话，
-  // 只钉词的话汇总行被改掉照样绿（变异 m15 抓到的就是这个）。
-  check('前端把这两笔账接进汇总行（写了没人读=没写：第十九轮 jobs 那个洞的反面）',
-    /Array\.isArray\(report\.unaddressableDirs\)/.test(webSrc22) && /Array\.isArray\(report\.identityDrift\)/.test(webSrc22)
-    && /issues\.push\(`打不开的目录 \$\{unaddressable\.length\} 处/.test(webSrc22)
-    && /issues\.push\(`盘上写的 id 与目录名对不上 \$\{drift\.length\} 处/.test(webSrc22),
-    '汇总行没渲染这两笔账');
+  // 前端汇总行那一侧原来在体检面板；第三十九轮右栏砍除后界面出口没了（服务端那两条照旧钉着）。
   // 这一条否定的是"代码里长出一个会动盘的键"，不是"文档里出现这个词"——
   // 注释里本来就要说明为什么不给这个键，连着注释一起禁就是自己钉自己。
   // 面板上真的没有这种按钮由 web-smoke §38 从行为那一侧钉（读渲染出来的按钮文本）。
@@ -1168,7 +1153,6 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     `定义 ${(webSrc24.match(/function blockedBackupToast\(/g) || []).length} 处`);
   check('这句话的骨架全仓只有一份（两扇门调它，不各自抄一遍模板）',
     (webSrc24.match(/先点「体检数据」取证修好，再备份/g) || []).length === 1
-    && /blockedBackupToast\(err, '没能备份'\)/.test(webSrc24)
     && /blockedBackupToast\(err, '没能备份设置'\)/.test(webSrc24),
     `骨架 ${(webSrc24.match(/先点「体检数据」取证修好，再备份/g) || []).length} 处`);
   check('配置导出的错误体真的被读出来（HTTP 状态码不是给学习者看的清单）',
@@ -1268,7 +1252,7 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
   // 3) data-* 那根线：编译器写进 HTML 的名字 ↔ 宿主读的名字（错一位就回收不上状态）
   const emittedAttrs = [...uiSrc.matchAll(/data-(ui-[a-z-]+)=/g)].map((m) => m[1]);
   check('编译器一共只写这几个 data-*（多一个就是多一条没人读的记号，契约测试会把它认成断线）',
-    [...emittedAttrs].sort().join(',') === 'ui-calc,ui-chart,ui-chart-snap,ui-check,ui-diagram,ui-explore,ui-explore-tab,ui-game,ui-game-try,ui-handoff,ui-item,ui-node,ui-param,ui-slider,ui-suggest,ui-tab-name,ui-try-name,ui-walk,ui-walk-next,ui-walk-prev',
+    [...emittedAttrs].sort().join(',') === 'ui-ask-opt,ui-ask-skip,ui-ask-submit,ui-calc,ui-chart,ui-chart-snap,ui-check,ui-diagram,ui-explore,ui-explore-tab,ui-game,ui-game-try,ui-handoff,ui-item,ui-node,ui-param,ui-slider,ui-suggest,ui-tab-name,ui-try-name,ui-walk,ui-walk-next,ui-walk-prev',
     [...new Set(emittedAttrs)].sort().join(','));
   for (const attr of new Set(emittedAttrs)) {
     const key = attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase());

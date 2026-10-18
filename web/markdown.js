@@ -8,7 +8,7 @@
 // 词汇表与渲染只该有一个入口，多一个入口就多一条"这条路上没人校验"。
 
 import { escapeHtml } from './escape.js';
-import { compileUiBlock } from './ui-compile.js';
+import { compileUiBlock, getUiMode } from './ui-compile.js';
 
 /** 行内语法。输入已转义。 */
 function inline(text) {
@@ -90,13 +90,15 @@ function renderScene(lines) {
 
 /**
  * @param {string} src
- * @param {{partial?: boolean}} [opts] partial=true：这段正文还在流里长（回合没结束）。
+ * @param {{partial?: boolean, _inner?: boolean}} [opts] partial=true：这段正文还在流里长（回合没结束）。
  *   未闭合的 ```ui 按"还没写完"办——摆占位，不说写坏了；刚打出开围栏那一行也不摆空块。
+ *   _inner=true：递归（引用块里）调用——信封只在最外层包一次，嵌套包就是给包装套包装。
  * @returns {string} HTML
  */
-export function renderMarkdown(src, { partial = false } = {}) {
+export function renderMarkdown(src, { partial = false, _inner = false } = {}) {
   const lines = String(src ?? '').replace(/\r\n?/g, '\n').split('\n');
   const out = [];
+  let sawUiFence = false;
   let i = 0;
 
   while (i < lines.length) {
@@ -125,6 +127,7 @@ export function renderMarkdown(src, { partial = false } = {}) {
       }
       // 内联界面：词汇表、降级、续状态全住在 ui-compile.js，这里只说"轮到它编译了"
       if (/^ui$/i.test(lang)) {
+        sawUiFence = true;
         // 只有"这段还会再长"（partial）且围栏没闭合时才是"没写完"。
         // 宿主已经说了这是终态（partial=false）而围栏仍没闭合，那就是真写坏了——
         // 让它继续摆"正在长"的占位等于永远骗人，这一格必须当场降级。
@@ -206,7 +209,7 @@ export function renderMarkdown(src, { partial = false } = {}) {
         buf.push(lines[i].replace(/^\s*>\s?/, ''));
         i += 1;
       }
-      out.push(`<blockquote>${renderMarkdown(buf.join('\n'), { partial })}</blockquote>`);
+      out.push(`<blockquote>${renderMarkdown(buf.join('\n'), { partial, _inner: true })}</blockquote>`);
       continue;
     }
 
@@ -261,7 +264,15 @@ export function renderMarkdown(src, { partial = false } = {}) {
     out.push(`<p>${inline(escapeHtml(buf.join('\n'))).replace(/\n/g, '<br />')}</p>`);
   }
 
-  return out.join('\n');
+  const html = out.join('\n');
+  // 默认信封（第三十九轮）：IUI 是一等公民——正文也是界面的一部分。
+  // 模型没写 ```ui 围栏时，平台把纯文字包成 IUI 的文本块（.ui-text）再上台，
+  // 而不是让文字以"不是界面"的身份出现；写过围栏的块不包（卡片是它自己的表面，
+  // 外面的文字照旧是旁白）。「只要文字」模式（uiToggle）不包——那是退回纯文本的逃生口。
+  if (!_inner && !sawUiFence && getUiMode() !== 'plain' && html.trim()) {
+    return `<div class="ui-text">${html}</div>`;
+  }
+  return html;
 }
 
 // app.js 一直在从这道 import escapeHtml；定义搬去 escape.js 了，出口保持不变。

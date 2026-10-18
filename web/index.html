@@ -57,6 +57,11 @@
           <span class="status-live" id="statusLive"></span>
         </div>
 
+        <!-- 台面顶部的现状条（第三十九轮起，右栏并入会话界面）：
+             待确认的结构改动（GATE 入口）、这局动过的界面、后台任务、素材——
+             右栏被砍掉后这些信息长在对话里，不是藏在旁边一列里。 -->
+        <div class="desk-state hidden" id="deskState" role="region" aria-label="这一局的现状"></div>
+
         <!-- 中间舞台：一片台面，不是一条消息流。
              分段只有两层：场（幕）与拍。台面上摆的是"第几场的第几拍"——
              讲解、题目与作答、道具、讲义都落在它们发生的那一拍里，按到达顺序排。
@@ -74,8 +79,6 @@
             <!-- 流内搜索：长本子回找旧轮用的。只过滤这一本对话流里的拍，不动任何数据。 -->
             <input type="search" id="deskSearch" class="desk-search" placeholder="在这本里找…" aria-label="在对话流里搜索" autocomplete="off" />
             <span class="desk-search-none hidden" id="deskSearchNone">没有匹配的内容</span>
-            <!-- 面板收起/展开：放右上角，收起后按钮本身不消失 -->
-            <button class="icon-btn" id="togglePanel" title="展开 / 收起右栏" aria-label="展开 / 收起右栏">◧</button>
           </nav>
 
           <div class="thread" id="deskStream">
@@ -101,18 +104,6 @@
           <div class="composer-hint">Enter 发送 · Shift+Enter 换行 · / 聚焦输入框</div>
         </div>
       </main>
-
-      <!-- ─────────── 右栏：这一局学习的现状 ─────────── -->
-      <aside class="panel" id="panel">
-        <div class="panel-head">
-          <div class="panel-tabs" role="tablist">
-            <button class="tab active" data-tab="learn" role="tab" aria-selected="true">学习<span class="tab-badge hidden" id="learnTabBadge" title="待你确认的结构改动"></span></button>
-            <button class="tab" data-tab="files" role="tab" aria-selected="false">素材</button>
-          </div>
-          <button class="icon-btn" id="closePanel" title="收起" aria-label="收起右栏">✕</button>
-        </div>
-        <div class="panel-body" id="panelBody" role="tabpanel"></div>
-      </aside>
     </div>
 
     <!-- ─────────── 模型配置弹层 ─────────── -->

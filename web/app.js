@@ -245,7 +245,7 @@ async function subscribeTaskStream() {
         // taskId 也要传：占位卡是按 job id 记的，交付的是 art-*（两个 id 不同名）。
         completeArtifactPlaceholder(evt.artifact, evt.taskId ?? evt.task?.id);
       }
-      if (state.panelTab === 'learn') renderPanel();
+      renderDeskState();
       updateTaskBadge();
     };
     es.onerror = () => {
@@ -641,7 +641,7 @@ async function openNotebook(id, { carryComposer = false } = {}) {
   hydrateUiState(notebook); // 内联控件的勾选/参数从盘上续回来，必须赶在渲台面之前
   $('emptyState')?.remove();
   renderThread();
-  renderPanel();
+  renderDeskState();
   renderNotebookList();
   if (carryComposer) {
     const input = $('input');
@@ -680,7 +680,7 @@ function hydrateTasks(notebookId) {
         if (local && local.status !== 'running') continue;
         state.tasks = upsertTask(merged, t);
       }
-      if (state.panelTab === 'learn') renderPanel();
+      renderDeskState();
       updateTaskBadge();
     })
     .catch(() => {
@@ -727,7 +727,7 @@ async function syncOrphanTurn() {
       state.notebook = notebook;
       renderThread();
       sealUnanswered(); // 回合已经跑完：还留着没答的题作废
-      renderPanel();
+      renderDeskState();
       renderNotebookList();
       toast('上一个回合已经跑完了，内容已恢复');
     } catch (err) {
@@ -1350,9 +1350,27 @@ function resetDesk() {
  */
 function showQuestion(evt, answer, sceneId = null) {
   if (!(evt?.questionId || evt?.question)) return null;
-  const card = renderAskCard(evt);
-  if (state.turn) appendCard(state.turn, card);
-  else flowFor(sceneId ?? (currentScene()?.id || null))?.append(card);
+  // 第三十九轮：question 是 ```ui 的档——围栏在流里先把题卡长出来，ask 事件只负责
+  // "服务端开始阻塞收答"。卡已经在了（编译器那张）就不重画，把提交/跳过放活就行；
+  // 刷新回放同理：围栏重绘出一张卡，questions 回放补作答，两张卡会互踢。
+  const root = deskRootEl() || document.body;
+  const existing = deepByClass(root, 'ask-card').find((c) => c.dataset?.questionId === evt.questionId);
+  let card;
+  if (existing) {
+    card = existing;
+    for (const b of deepByClass(card, 'ask-option')) b.disabled = false;
+    const actions = deepByClass(card, 'ask-actions')[0];
+    if (actions) {
+      const submit = actions.querySelector?.('[data-ui-ask-submit]');
+      const skip = actions.querySelector?.('[data-ui-ask-skip]');
+      if (submit) submit.disabled = false;
+      if (skip) skip.disabled = false;
+    }
+  } else {
+    card = renderAskCard(evt);
+    if (state.turn) appendCard(state.turn, card);
+    else flowFor(sceneId ?? (currentScene()?.id || null))?.append(card);
+  }
   sealUnanswered(card); // 这一道才是"当前问题"，之前没答的都作废
   if (answer) {
     markAskAnswered({
@@ -1548,7 +1566,7 @@ async function retireArtifact(id, title) {
   removeArtifactCards(id);
   state.lastRetired = { id, title: title || artifactTitle(id), flow: where };
   renderRetireCue();
-  renderPanel(); // 「素材」页那一节当场多出一条，找回的入口不能只活在那一行提示里
+  renderDeskState(); // 「素材」页那一节当场多出一条，找回的入口不能只活在那一行提示里
 }
 
 /** 放回：先改寿命，再拿它自己的稳定地址把 HTML 端回当前这一场（1a 那条地址就是为这一步存在的）。 */
@@ -1563,7 +1581,7 @@ async function restoreArtifact(id) {
   } catch (err) {
     toast(`寿命放回去了，但这份 HTML 取不到：${err.message}`, true);
   }
-  renderPanel();
+  renderDeskState();
 }
 
 /**
@@ -2365,12 +2383,12 @@ function handleTurnEvent(evt) {
     case 'todo':
       state.todos = evt.todos || [];
       if (state.notebook) state.notebook.todos = state.todos;
-      renderPanel();
+      renderDeskState();
       break;
     case 'graph':
       if (state.notebook) {
         state.notebook.graph = evt.graph;
-        renderPanel();
+        renderDeskState();
       }
       break;
     case 'progress':
@@ -2381,7 +2399,7 @@ function handleTurnEvent(evt) {
           const c = evt.changes[0];
           if (c.to && c.to !== 'unknown') setCamera(c.conceptId);
         }
-        renderPanel();
+        renderDeskState();
       }
       break;
     case 'patch':
@@ -2389,7 +2407,7 @@ function handleTurnEvent(evt) {
       if (state.notebook) {
         state.notebook.patches = state.notebook.patches || { patches: [] };
         state.notebook.patches.patches.push(evt.patch);
-        renderPanel();
+        renderDeskState();
       }
       break;
     case 'artifact_state':
@@ -2435,7 +2453,7 @@ function handleTurnEvent(evt) {
     case 'turn_end':
       if (evt.notebook) {
         state.notebook = evt.notebook;
-        renderPanel();
+        renderDeskState();
         renderNotebookList();
         // 回合收尾的那份快照是台面的权威：中途有 scene 事件丢了（断线重连）也在这里补齐。
         applySceneState();
@@ -2662,11 +2680,9 @@ function renderTodoBar(body, todos) {
 
 function renderTasksPanel(body) {
   const tasks = state.tasks || [];
-  body.append(el('div', 'panel-section-title', tasks.length ? `后台任务（${tasks.filter((t) => t.status === 'running').length} 个在跑）` : '后台任务'));
-  if (!tasks.length) {
-    body.append(el('div', 'empty-note', '没有后台任务。老师可以把整理长素材、预生成题目这类不必现场等的活挂到这里。'));
-    return;
-  }
+  // 现状条里没有任务就不摆这一节（空说明是面板时代的落款，不是对话界面该常驻的话）。
+  if (!tasks.length) return;
+  body.append(el('div', 'panel-section-title', `后台任务（${tasks.filter((t) => t.status === 'running').length} 个在跑）`));
   const list = el('div', 'tasks-list');
   for (const t of tasks) list.append(renderTaskItem(t));
   body.append(list);
@@ -2722,36 +2738,19 @@ function renderAskCard(evt) {
   // 不自带「本题的上下文」折叠：题面就落在讲解正文下面，上下文在上面同一列里，
   // 再复制一份进卡片只是重复。
 
-  const selected = new Set();
   if (evt.options?.length) {
     const box = el('div', 'ask-options');
     evt.options.forEach((opt, i) => {
       const b = el('button', `ask-option ${evt.multiSelect ? 'multi' : 'single'}`);
+      b.dataset.uiAskOpt = String(i);
       b.setAttribute('aria-pressed', 'false'); // 选中态不只靠视觉勾选，读屏/键盘也要听得见
       const mark = el('span', 'mark', '✓');
       const body = el('span');
       body.append(el('span', 'label', opt.label));
       if (opt.description) body.append(el('span', 'desc', ` — ${opt.description}`));
       b.append(mark, body);
-      b.onclick = () => {
-        if (card.classList.contains('answered')) return;
-        if (evt.multiSelect) {
-          const key = String(i);
-          if (selected.has(key)) selected.delete(key);
-          else selected.add(key);
-          b.classList.toggle('selected', selected.has(key));
-          b.setAttribute('aria-pressed', selected.has(key) ? 'true' : 'false');
-        } else {
-          selected.clear();
-          selected.add(String(i));
-          for (const other of box.querySelectorAll('.ask-option')) {
-            other.classList.remove('selected');
-            other.setAttribute('aria-pressed', 'false');
-          }
-          b.classList.add('selected');
-          b.setAttribute('aria-pressed', 'true');
-        }
-      };
+      // 选中/取消由桌面委托统一处理（handleUiDeskEvent 的 data-ui-ask-opt）——
+      // 编译出来的题卡没有 onclick，这里的题卡也不该有第二套实现，两处会互踢。
       box.append(b);
     });
     card.append(box);
@@ -2766,39 +2765,34 @@ function renderAskCard(evt) {
 
   const actions = el('div', 'ask-actions');
   const submit = el('button', 'btn btn-primary', '提交');
+  submit.dataset.uiAskSubmit = '';
   const skip = el('button', 'btn btn-ghost btn-sm', '先跳过');
+  skip.dataset.uiAskSkip = '';
+  // 提交/跳过初始禁用：服务端开始阻塞收答（ask 事件）才放活。围栏题卡在流里先长出来、
+  // ask 事件随后才到，不初始禁掉的话答案会先于"服务端在收"落出去。
+  submit.disabled = true;
+  skip.disabled = true;
   actions.append(submit, skip);
   card.append(actions);
-
-  const send = async (skipped) => {
-    const payload = {
-      questionId: evt.questionId,
-      selected: skipped
-        ? []
-        : [...selected].map((i) => String(evt.options?.[Number(i)]?.label ?? '')),
-      text: skipped ? '' : textarea?.value.trim() || '',
-      skipped: Boolean(skipped),
-    };
-    if (!skipped && !payload.selected.length && !payload.text) {
-      toast('先选一个选项，或写一句你的想法');
-      return;
-    }
-    submit.disabled = true;
-    skip.disabled = true;
-    try {
-      await api('POST', `/api/notebooks/${state.notebook.id}/answer`, payload);
-      // 就地标记作答——和 SSE 的 answer 事件走同一个函数，两处各写一遍就会谁都不认谁
-      markAskAnswered(payload);
-      scrollToBottom();
-    } catch (err) {
-      submit.disabled = false;
-      skip.disabled = false;
-      toast(err.message, true);
-    }
-  };
-  submit.onclick = () => send(false);
-  skip.onclick = () => send(true);
   return card;
+}
+
+/** 把一道题的作答 POST 给服务端（问的是"这道题"，答的是"这个学习者"）。 */
+async function submitAskAnswer(card, questionId, payload) {
+  const submit = deepByClass(card, 'btn-primary')[0];
+  const skip = deepByClass(card, 'ask-actions')[0]?.querySelector?.('[data-ui-ask-skip]');
+  if (submit) submit.disabled = true;
+  if (skip) skip.disabled = true;
+  try {
+    await api('POST', `/api/notebooks/${state.notebook.id}/answer`, payload);
+    // 就地标记作答——和 SSE 的 answer 事件走同一个函数，两处各写一遍就会谁都不认谁
+    markAskAnswered(payload);
+    scrollToBottom();
+  } catch (err) {
+    if (submit) submit.disabled = false;
+    if (skip) skip.disabled = false;
+    toast(err.message, true);
+  }
 }
 
 function markAskAnswered(evt) {
@@ -3048,6 +3042,49 @@ function handleUiDeskEvent(evt) {
   if (handoffId) {
     const ok = handoffUiState(handoffId);
     return ok ? { handled: true, kind: 'handoff', id: handoffId } : { handled: false };
+  }
+
+  // ask / question（第三十九轮，ask 融入 IUI）：选项点选与提交都走桌面委托。
+  // 编译器长的题卡（data-ui-ask-opt）没有 onclick，renderAskCard 也把 onclick 撤了——
+  // 两套实现在真实浏览器里会互踢。提交/跳过初始禁用，ask 事件（服务端开始阻塞收答）
+  // 到了才放活：围栏题卡在流里先长出来，ask 事件随后才到。
+  const askOptIndex = node.dataset?.uiAskOpt;
+  if (askOptIndex !== undefined) {
+    const card = node.closest ? node.closest('.ask-card') : null;
+    if (!card || card.classList.contains('answered') || card.classList.contains('sealed')) return { handled: false };
+    if (node.classList.contains('multi')) {
+      const pressed = node.getAttribute?.('aria-pressed') === 'true';
+      node.classList.toggle('selected', !pressed);
+      node.setAttribute?.('aria-pressed', pressed ? 'false' : 'true');
+    } else {
+      for (const other of card.querySelectorAll('.ask-option')) {
+        other.classList.remove('selected');
+        other.setAttribute?.('aria-pressed', 'false');
+      }
+      node.classList.add('selected');
+      node.setAttribute?.('aria-pressed', 'true');
+    }
+    return { handled: true, kind: 'ask', id: card.dataset?.questionId };
+  }
+
+  const askSubmit = node.dataset?.uiAskSubmit !== undefined;
+  const askSkip = node.dataset?.uiAskSkip !== undefined;
+  if (askSubmit || askSkip) {
+    const card = node.closest ? node.closest('.ask-card') : null;
+    if (!card) return { handled: false };
+    const questionId = card.dataset?.questionId;
+    if (!questionId) return { handled: false };
+    const selected = [...(card.querySelectorAll?.('.ask-option.selected') || [])]
+      .map((b) => b.querySelector?.('.label')?.textContent ?? '')
+      .filter(Boolean);
+    const textarea = card.querySelector?.('.ask-textarea');
+    const text = textarea?.value?.trim() || '';
+    if (!askSkip && !selected.length && !text) {
+      toast('先选一个选项，或写一句你的想法');
+      return { handled: true, kind: 'ask', id: questionId };
+    }
+    submitAskAnswer(card, questionId, { questionId, selected, text, skipped: askSkip });
+    return { handled: true, kind: 'ask', id: questionId };
   }
 
   // suggest（第三十轮）：回答末尾的"往哪走"分支条。按钮自己带着那句话（data-ui-suggest），
@@ -3442,7 +3479,6 @@ function applyUiMode(mode) {
   }
 }
 
-
 function collectArtifactEvidence(artifactId, evidence) {
   if (!artifactId || !evidence) return;
   const list = artifactEvidence.get(artifactId) || [];
@@ -3706,44 +3742,43 @@ window.addEventListener('message', (event) => {
 
 // ─────────────────────────────────────────────── 右栏：学习（一页到底）/ 素材
 
-function renderPanel() {
-  // 角标在面板收起时也要跟着变，所以放在早退之前刷
-  const badge = $('learnTabBadge');
-  if (badge) {
-    const n = pendingPatches().length;
-    badge.classList.toggle('hidden', n === 0);
-    badge.textContent = n ? String(n) : '';
-  }
-  // 右栏只在打开时才渲染：面板收起时面板体不在文档里，硬渲染会空指针
-  if (document.querySelector('.layout')?.classList.contains('panel-collapsed')) return;
-  const body = $('panelBody');
-  body.innerHTML = '';
-  for (const tab of document.querySelectorAll('.tab')) {
-    const on = tab.dataset.tab === state.panelTab;
-    tab.classList.toggle('active', on);
-    tab.setAttribute('aria-selected', String(on));
-  }
+/**
+ * 台面顶部的现状条（第三十九轮起，右栏并入会话界面）：待确认的结构改动（GATE 入口）置顶，
+ * 下面折进「这一局的现状」——这局动过的界面、后台任务、素材。右栏被砍掉后，这些信息
+ * 长在对话里，不是藏在旁边一列里。没有打开学习、或什么都没有时整条隐藏（空条是噪声）。
+ */
+function renderDeskState() {
+  const strip = $('deskState');
+  if (!strip) return;
+  strip.innerHTML = '';
   if (!state.notebook) {
-    body.append(el('div', 'empty-note', '还没有打开学习。'));
+    strip.classList.add('hidden');
     return;
   }
-  if (state.panelTab === 'files') renderFilesPanel(body);
-  else renderLearnPanel(body);
-}
+  // 取景坐标跟着结构走：被删掉的概念不许继续顶着镜头（状态机活着，坐标必须有效）
+  if (state.camera && !(state.notebook?.graph?.concepts || []).some((c) => c.id === state.camera.conceptId)) {
+    state.camera = null;
+  }
+  // GATE：待确认的结构改动是唯一有副作用的入口，必须置顶，不能埋在长列表里等人翻到。
+  const gateBox = el('div', 'desk-gate');
+  const patches = pendingPatches();
+  if (!patches.length) gateBox.classList.add('hidden');
+  else {
+    gateBox.append(el('div', 'panel-section-title', '待你确认的结构改动'));
+    for (const p of patches) gateBox.append(renderPatchCard(p));
+  }
+  strip.append(gateBox);
 
-// 待确认的结构改动是右栏唯一有副作用的入口，必须置顶，不能埋在长列表里等人翻到。
-function renderLearnPanel(body) {
-  renderPendingPatches(body);
-  renderGoalCard(body);
-  renderRetestCard(body);
+  // 现状细节折进 <details>：常在但不占屏（原生折叠，无障碍不用另写一套）。
+  const details = el('details', 'desk-state-details');
+  details.append(el('summary', null, '这一局的现状'));
+  const body = el('div', 'desk-state-body');
   renderUiStatePanel(body);
-  renderGraphPanel(body);
-  renderEventsPanel(body);
-  renderDecisionsPanel(body);
-  renderNotesPanel(body);
   renderTasksPanel(body);
-  renderReviewPanel(body);
-  renderBackupPanel(body);
+  renderFilesPanel(body);
+  details.append(body);
+  strip.append(details);
+  strip.classList.toggle('hidden', gateBox.children.length === 0 && body.children.length === 0);
 }
 
 /**
@@ -3805,330 +3840,28 @@ function renderUiStatePanel(body) {
   body.append(card);
 }
 
-/**
- * 目标在场：右栏紧挨着改动区的那一行，说清"这一本为什么在学"。
- *
- * 规则把 goal 当锚点（CLARIFY 收窄目标 → DECOMPOSE 编译成 Graph → 终局对着 goal 收尾），
- * 但前端此前从不显示它——目标是学习者自己的，却只在模型侧存在。
- * 显示顺序：graph.meta.goal（分解时编译过的目标）→ notebook.goal（建会话时的原始目标）→
- * topic（还没有明确目标时，先给"在学什么"）；都没有就不摆卡（新会话还没谈目标，
- * 空卡是噪声）。只显示、不改——改目标走对话（CLARIFY 是老师的事），UI 不抢这条通道。
- * 状态词与数字一概不出现（Invariant 4：这里只有一句话，不是进度可视化）。
- */
-function renderGoalCard(body) {
-  const g = state.notebook.graph;
-  const goal = g?.meta?.goal || state.notebook.goal || '';
-  const topic = g?.meta?.topic || state.notebook.topic || '';
-  const text = String(goal || topic || '').trim();
-  if (!text) return;
-  const card = el('div', 'goal-card');
-  card.append(el('div', 'goal-label', goal ? '目标' : '主题'));
-  card.append(el('div', 'goal-text', text));
-  const background = g?.meta?.learner_profile?.background || state.notebook.learner?.background;
-  if (background) card.append(el('div', 'goal-sub', `背景：${background}`));
-  body.append(card);
-}
-
-/**
- * 续学锚点：上次判错、还没判对的题（回马枪候选）。
- *
- * 这份候选模型每回合都读（prompt 快照），学习者却从来看不见——打开一本旧学习，
- * 不知道"上次差在哪"。这里把它变成右栏一张只读卡：概念名 + 一句状态，点击取景
- * 那张概念卡（与概念卡同一套 setCamera 交互）。
- * 边界：不显示错过次数、不显示上次作答内容（Invariant 4 不出数字；作答原文是
- * 私人证据，留在对话里）；无候选不摆卡（没有就不打扰）。
- */
-function renderRetestCard(body) {
-  const retests = state.notebook?.retests || [];
-  if (!retests.length) return;
-  const g = state.notebook.graph;
-  const names = new Map((g?.concepts || []).map((c) => [c.id, c.name]));
-  const card = el('div', 'retest-card');
-  card.append(el('div', 'retest-label', '上次还差这些'));
-  for (const r of retests) {
-    const name = (r.concept && names.get(r.concept)) || r.qid || '上一题';
-    const line = el('div', 'retest-item', `· ${name}`);
-    line.title = '点这里在概念结构里找到它';
-    line.onclick = () => {
-      if (r.concept && (g?.concepts || []).some((c) => c.id === r.concept)) setCamera(r.concept);
-      else releaseCamera();
-    };
-    card.append(line);
-  }
-  body.append(card);
-}
-
-/**
- * 判定账本的可读出口：JEV 判定模型留了什么痕，打开就看得见。
- *
- * 第六轮接的判定外包红线是"判定全留痕"，但留痕在盘上没有任何入口看——这是审计
- * 视图：谁判的（真实/测试桩）、判出什么结论（通过/待复核/失败）、什么时候判的。
- * Invariant 4 边界：这里只出词、不出数字——value / probability 是判定置信度，
- * 不是学习量，放进可见面有被读成"你掌握了百分之几"的风险（见 store.readDecisions）。
- * 有记录才显示；错误条目照实说"判定失败"。
- */
-function renderDecisionsPanel(body) {
-  const decisions = state.notebook?.decisions || [];
-  if (!decisions.length) return;
-  body.append(el('div', 'panel-section-title', '判定记录'));
-  body.append(el('div', 'state-note', '模型判定留痕（审计视图）——不是你的掌握度。'));
-  const list = el('div', 'state-note');
-  for (const d of decisions) {
-    const words = [];
-    if (d.kind === 'error') {
-      words.push('判定失败');
-      if (d.error) words.push(`：${d.error}`);
-    } else {
-      words.push(d.mode === 'faux' ? '测试桩' : '真实判定');
-      words.push(d.verdict === 'needs_review' ? '· 有待复核' : '· 判定通过');
-    }
-    const ts = d.at ? formatTime(d.at) : '';
-    list.append(el('div', null, `· ${words.join(' ')}${ts ? ` · ${ts}` : ''}`));
-  }
-  body.append(list);
-}
-
-/**
- * 回看：学习者**主动**发起的一轮回顾练习。
- *
- * 为什么会有这个键：规则允许且只允许用户主动提出复习/回顾（runtime.md「排程边界」——
- * 不按日期、次数或"到期"排任何复习，也不自动召回）。这一颗键就是把"主动发起"变成一个
- * 明确的手势：点了就走一条普通用户消息（"帮我回顾一下已经学过的内容"），老师按当前 session
- * 的一次普通练习/迁移动作执行。它不建日历、不产生"下一次复习"记录，只是替你把那句话递出去。
- */
-function renderReviewPanel(body) {
-  if (!state.notebook) return;
-  body.append(el('div', 'panel-section-title', '回看'));
-  const row = el('div', 'backup-row');
-  const btn = el('button', 'btn btn-ghost btn-sm', '回顾已学');
-  row.append(btn);
-  body.append(row);
-  body.append(el('div', 'backup-hint', '按当前的进度做一轮回顾练习。这是你主动发起的，不排期、不自动召回。'));
-  btn.onclick = () => {
-    $('input').value = '帮我回顾一下已经学过的内容';
-    autosize?.();
-    sendTurn().catch((err) => toast(`回顾发送失败：${err.message}`, true));
-  };
-}
-
-function pendingPatches() {
-  return (state.notebook?.patches?.patches || []).filter((p) => !p.applied && !p.rejected);
-}
-
-/**
- * 把右栏的相机对准一个概念：只框那一张卡，其余压暗。
- * 'none' 是范围确认的哨兵值不是概念；图上没有的 id 一律拒——取景框不许对着不存在的目标过期挂着。
- *
- * 2026-10-04 撤掉了取景条那一行文字：它把下面那张卡片的原名重说一遍（同一面板里同一件事出现两次），
- * 两个控件又都能由点卡片本身完成。留下的只有框住 / 压暗——那是卡片自己给不出来的信息。
- * 既然没有文字了，"这一拍由谁定位"（question / taught / manual）也就没人消费，一并撤掉。
- */
+/** 取景：把镜头钉在某个概念上（台面顶部的现状条跟着重画）。 */
 function setCamera(conceptId) {
   const cid = String(conceptId || '').trim();
   if (!cid || cid === 'none') return false;
   if (!(state.notebook?.graph?.concepts || []).some((c) => c.id === cid)) return false;
   if (state.camera?.conceptId === cid) return true;
   state.camera = { conceptId: cid };
-  renderPanel();
+  renderDeskState();
   return true;
 }
 
 function releaseCamera() {
   if (!state.camera) return;
   state.camera = null;
-  renderPanel();
+  renderDeskState();
 }
 
-const SVG_NS = 'http://www.w3.org/2000/svg';
-function svgEl(tag, attrs, text) {
-  const n = document.createElementNS(SVG_NS, tag);
-  for (const [k, v] of Object.entries(attrs || {})) {
-    // class 走 className：真实 DOM 里对 SVG 元素两者等价，桩里也只有这一条路径会同步 classList
-    if (k === 'class') n.className = String(v);
-    else n.setAttribute(k, String(v));
-  }
-  if (text !== undefined) n.textContent = text;
-  return n;
+
+function pendingPatches() {
+  return (state.notebook?.patches?.patches || []).filter((p) => !p.applied && !p.rejected);
 }
 
-/**
- * 概念结构图（SVG）：把「讲解顺序」的依赖骨架画成一张可点的图。
- *
- * 为什么列表之外还要一张图：列表是"一个一个"读的，图是"一眼"看整体——谁是谁的前置、
- * 整块结构长什么样，扫一眼就懂。这是规则认可的结构呈现（protocols.md 把「结构图」列在
- * 表现语言里），不是进度可视化：节点只有概念名，没有任何数字（Invariant 4 违规指纹 ①）。
- *
- * 布局：按依赖分层（依赖最浅的在最上），层内保持拓扑顺序；箭头从「前置」指向概念。
- * Graph 校验保证无环、依赖必存在，所以布局不需要防御分支。节点点击 = 取景，和列表卡同一套。
- */
-function conceptGraphSvg(g, ordered, progress, framed) {
-  const GAP_X = 150;
-  const GAP_Y = 64;
-  const NODE_H = 30;
-  const PAD = 6;
-  const nodeW = (name) => Math.max(52, Math.min(148, name.length * 7.5 + 16));
-  const byId = new Map(g.concepts.map((c) => [c.id, c]));
-  const layer = new Map();
-  const layerOf = (c) => {
-    if (layer.has(c.id)) return layer.get(c.id);
-    const deps = (c.depends_on || []).filter((d) => byId.has(d));
-    const l = deps.length ? Math.max(...deps.map((d) => layerOf(byId.get(d)))) + 1 : 0;
-    layer.set(c.id, l);
-    return l;
-  };
-  for (const c of g.concepts) layerOf(c);
-  const cols = [];
-  for (const c of ordered) {
-    const l = layer.get(c.id);
-    (cols[l] || (cols[l] = [])).push(c);
-  }
-  const layerW = (l) => cols[l].reduce((w, c, i) => w + nodeW(c.name) + (i ? GAP_X : 0), 0);
-  const totalW = Math.max(...cols.map((_, l) => layerW(l)));
-  const pos = new Map();
-  for (const c of ordered) {
-    const l = layer.get(c.id);
-    const i = cols[l].indexOf(c);
-    const w = nodeW(c.name);
-    const startX = (totalW - layerW(l)) / 2;
-    let x = startX;
-    for (let k = 0; k < i; k++) x += nodeW(cols[l][k].name) + GAP_X;
-    pos.set(c.id, { x, y: PAD + l * (NODE_H + GAP_Y), w, h: NODE_H });
-  }
-  const height = PAD * 2 + (cols.length - 1) * (NODE_H + GAP_Y) + NODE_H;
-
-  const svg = svgEl('svg', {
-    class: 'concept-graph',
-    viewBox: `0 0 ${totalW} ${height}`,
-    role: 'img',
-    'aria-label': '概念依赖结构图，节点可点击取景',
-  });
-
-  const defs = svgEl('defs');
-  const marker = svgEl('marker', { id: 'graph-arrow', markerWidth: 8, markerHeight: 8, refX: 7, refY: 4, orient: 'auto' });
-  marker.append(svgEl('path', { d: 'M0,0 L8,4 L0,8 z', class: 'graph-arrow-head' }));
-  defs.append(marker);
-  svg.append(defs);
-
-  // 连线先画（垫在节点底下，不被盖住）
-  for (const c of ordered) {
-    for (const d of c.depends_on || []) {
-      if (!byId.has(d)) continue;
-      const from = pos.get(d); // depends_on 里是 id 字符串
-      const to = pos.get(c.id);
-      const sx = from.x + from.w / 2;
-      const sy = from.y + from.h;
-      const ex = to.x + to.w / 2;
-      const ey = to.y;
-      const my = (sy + ey) / 2;
-      svg.append(
-        svgEl('path', { d: `M ${sx} ${sy} C ${sx} ${my}, ${ex} ${my}, ${ex} ${ey}`, class: 'graph-edge', 'marker-end': 'url(#graph-arrow)' }),
-      );
-    }
-  }
-
-  for (const c of ordered) {
-    const p = pos.get(c.id);
-    const st = progress[c.id]?.state || 'unknown';
-    const on = framed?.conceptId === c.id;
-    const g = svgEl('g', {
-      class: `graph-node${on ? ' framed' : framed ? ' dimmed' : ''}`,
-      'data-concept-id': c.id,
-      role: 'button',
-      'aria-label': c.name,
-    });
-    g.append(svgEl('rect', { x: p.x, y: p.y, width: p.w, height: p.h, rx: 7, class: `g-box g-state-${stateWord(st)}` }));
-    g.append(
-      svgEl('text', { x: p.x + p.w / 2, y: p.y + p.h / 2, 'text-anchor': 'middle', 'dominant-baseline': 'central', class: 'g-name' }, c.name),
-    );
-    g.onclick = () => (state.camera?.conceptId === c.id ? releaseCamera() : setCamera(c.id));
-    svg.append(g);
-  }
-  return svg;
-}
-
-function renderGraphPanel(body) {
-  const g = state.notebook.graph;
-  const todos = state.todos || state.notebook?.todos || [];
-  body.append(el('div', 'panel-section-title', '讲解顺序（按依赖排）'));
-  if (todos.length) renderTodoBar(body, todos);
-  if (!g?.concepts?.length) {
-    // 结构没了，镜头就没有东西可指：静默松开，不摆一行"那一步没了"的解释
-    state.camera = null;
-    body.append(
-      el(
-        'div',
-        'empty-note',
-        '概念结构还没有建立。跟谈完目标之后，它会把主题拆成一组最小可教的概念，按依赖排好顺序，再请你确认。',
-      ),
-    );
-    return;
-  }
-  const ordered = topoOrder(g);
-  const progress = state.notebook.progress?.concepts || {};
-  // 取景目标必须当场在图上验一次：结构被改后旧 id 不许继续顶着取景框，也不许留在状态里
-  // （和上面空结构那一支同一条规则：图上没有 = 镜头当场松开，不靠一行文字向学习者解释）
-  if (state.camera && !ordered.some((c) => c.id === state.camera.conceptId)) state.camera = null;
-  const framed = state.camera;
-  // 一张概念就画不成"结构"：两个节点起才有依赖骨架可看（图里没有数字，Invariant 4）
-  if (ordered.length >= 2) body.append(conceptGraphSvg(g, ordered, progress, framed));
-  ordered.forEach((c, i) => {
-    const p = progress[c.id];
-    const on = framed?.conceptId === c.id;
-    const card = el('div', `concept${on ? ' framed' : framed ? ' dimmed' : ''}${(c.importance || 'core') === 'optional' ? ' importance-optional' : ''}`);
-    card.onclick = () => (state.camera?.conceptId === c.id ? releaseCamera() : setCamera(c.id));
-    const head = el('div', 'concept-head');
-    head.append(el('span', 'concept-idx', String(i + 1)));
-    head.append(el('span', 'concept-name', c.name));
-    head.append(el('span', `state-word ${p ? stateWordClass(p.state) : '待学'}`, p ? stateWord(p.state) : '待学'));
-    card.append(head);
-    card.append(el('div', 'concept-summary', c.summary));
-    if (c.depends_on?.length) {
-      const deps = el('div', 'concept-deps');
-      deps.append(el('span', null, '前置'));
-      for (const d of c.depends_on) {
-        deps.append(el('span', 'dep-chip', g.concepts.find((x) => x.id === d)?.name || d));
-      }
-      card.append(deps);
-    }
-    if (c.misconceptions?.length) {
-      const misc = el('div', 'concept-misc');
-      misc.append(el('div', null, '最容易踩的坑：'));
-      const ul = el('ul');
-      for (const m of c.misconceptions) ul.append(el('li', null, m));
-      misc.append(ul);
-      card.append(misc);
-    }
-    if (p?.unverified_self_report) {
-      card.append(el('div', 'concept-deps', '（你自己说已经会了，还没验证过）'));
-    }
-    body.append(card);
-  });
-}
-
-function topoOrder(graph) {
-  const concepts = graph.concepts;
-  const byId = new Map(concepts.map((c) => [c.id, c]));
-  const indeg = new Map(concepts.map((c) => [c.id, 0]));
-  const down = new Map(concepts.map((c) => [c.id, []]));
-  for (const c of concepts) {
-    for (const d of c.depends_on || []) {
-      if (!byId.has(d)) continue;
-      indeg.set(c.id, indeg.get(c.id) + 1);
-      down.get(d).push(c.id);
-    }
-  }
-  const q = concepts.filter((c) => indeg.get(c.id) === 0).map((c) => c.id);
-  const out = [];
-  while (q.length) {
-    const id = q.shift();
-    out.push(byId.get(id));
-    for (const k of down.get(id)) {
-      indeg.set(k, indeg.get(k) - 1);
-      if (indeg.get(k) === 0) q.push(k);
-    }
-  }
-  return out.length === concepts.length ? out : concepts;
-}
 
 function summarise(progress) {
   const concepts = Object.values(progress?.concepts || {});
@@ -4145,382 +3878,6 @@ function summarise(progress) {
 }
 
 /** 右栏唯一有副作用的入口：合并页里必须排在最上面。 */
-function renderPendingPatches(body) {
-  const patches = pendingPatches();
-  if (!patches.length) return;
-  body.append(el('div', 'panel-section-title', '待你确认的结构改动'));
-  for (const p of patches) body.append(renderPatchCard(p));
-}
-
-function renderEventsPanel(body) {
-  const events = state.notebook.progress?.events || [];
-  if (!events.length) return;
-  const g = state.notebook.graph;
-  body.append(el('div', 'panel-section-title', '最近发生的（只记录，不评分）'));
-  const list = el('div', 'state-note');
-  for (const e of events.slice(-14).reverse()) {
-    const name = g?.concepts?.find((c) => c.id === e.concept_id)?.name || e.concept_id;
-    list.append(el('div', null, `· ${name}：${e.summary}`));
-  }
-  body.append(list);
-}
-
-function renderNotesPanel(body) {
-  const notes = state.notebook.progress?.notes || [];
-  if (!notes.length) return;
-  body.append(el('div', 'panel-section-title', '这一段的备注'));
-  const list = el('div', 'state-note');
-  for (const n of notes.slice(-10).reverse()) list.append(el('div', null, `· ${n.text}`));
-  body.append(list);
-}
-
-/**
- * 整本备份：学习记录在这台机器的 data/ 里，导出让它可以离开这台机器（备份 / 迁移 / 分享）。
- * 导出 = 把整本（对话、概念、进度、笔记、制品、素材）打包成一个 JSON 下载；
- * 导入 = 选一份备份 JSON，校验后还原成一本**新的**学习（不动现有任何一本）。
- */
-function renderBackupPanel(body) {
-  if (!state.notebook) return;
-  body.append(el('div', 'panel-section-title', '整本备份'));
-  // 两行各有各的语义：上行是数据（导出/导入/体检），下行是带走物（小结 / 对话）。
-  // 都复用 backup-row（flex-wrap），测试按内容定位，不按行号。
-  const dataRow = el('div', 'backup-row');
-  const exportBtn = el('button', 'btn btn-ghost btn-sm', '导出整本');
-  const importBtn = el('button', 'btn btn-ghost btn-sm', '导入整本');
-  const healthBtn = el('button', 'btn btn-ghost btn-sm', '体检数据');
-  dataRow.append(exportBtn, importBtn, healthBtn);
-  body.append(dataRow);
-  body.append(
-    el('div', 'backup-hint', '导出把这一整本打包成一个 JSON 文件；导入把备份还原成一本新学习，原来的学习不动。'),
-  );
-
-  const takeawayRow = el('div', 'backup-row');
-  const summaryBtn = el('button', 'btn btn-ghost btn-sm', '导出小结');
-  const summaryHtmlBtn = el('button', 'btn btn-ghost btn-sm', '小结网页版');
-  const conversationBtn = el('button', 'btn btn-ghost btn-sm', '导出对话');
-  const artifactsZipBtn = el('button', 'btn btn-ghost btn-sm', '打包全部制品 (.zip)');
-  takeawayRow.append(summaryBtn, summaryHtmlBtn, conversationBtn, artifactsZipBtn);
-  body.append(takeawayRow);
-  body.append(
-    el('div', 'backup-hint', '小结是这一本的结论，对话是这一本的过程，zip 是全部制品的可打开集合——都能带走。'),
-  );
-  const healthResult = el('div', 'health-result hidden');
-  body.append(healthResult);
-
-  exportBtn.onclick = async () => {
-    try {
-      exportBtn.disabled = true;
-      const bundle = await api('GET', `/api/notebooks/${state.notebook.id}/export`);
-      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = el('a');
-      a.href = url;
-      const slug = String(state.notebook.title || '学习').replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'notebook';
-      a.download = `socratic-${slug}-${new Date().toISOString().slice(0, 10)}.json`;
-      document.body.append(a);
-      if (typeof a.click === 'function') a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      toast('已导出整本备份');
-    } catch (err) {
-      /*
-       * 备份受阻（第二十三轮）：服务端在家底有缺口时拒绝出货（409 + blockers）。
-       * 这里不许把它压成一句"导出失败"——学习者要的下一步是"到底哪份数据坏了、去哪看"，
-       * 而那句话服务端已经给了清单，前端只负责把它逐行念出来。
-       * 念清单这件事第二十四轮收进 blockedBackupToast：配置那扇门撞的是同一句形。
-       */
-      if (!blockedBackupToast(err, '没能备份')) {
-        toast(`导出失败：${err.message}`, true);
-      }
-    } finally {
-      exportBtn.disabled = false;
-    }
-  };
-
-  // 导出小结：不是 JSON 备份，是把这一本的结论编译成一份人可读的 Markdown（目标 / 概念结构 / 笔记 / 制品）。
-  // 状态只用词不出数字——它和整本导出的分工是：导出是数据，小结是文字。
-  summaryBtn.onclick = async () => {
-    try {
-      summaryBtn.disabled = true;
-      const { markdown } = await api('GET', `/api/notebooks/${state.notebook.id}/summary`);
-      const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = el('a');
-      a.href = url;
-      const slug = String(state.notebook.title || '学习').replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'notebook';
-      a.download = `socratic-${slug}-小结.md`;
-      document.body.append(a);
-      if (typeof a.click === 'function') a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      toast('已导出学习小结');
-    } catch (err) {
-      toast(`导出小结失败：${err.message}`, true);
-    } finally {
-      summaryBtn.disabled = false;
-    }
-  };
-
-  // 小结网页版：同一份小结的 HTML 出口（自包含、无外部资源、可打印、双击即开）。
-  // 数据源与 Markdown 版是同一个（store 的 buildSummarySections），两种格式不会长出不同的事实。
-  summaryHtmlBtn.onclick = async () => {
-    try {
-      summaryHtmlBtn.disabled = true;
-      const { html } = await api('GET', `/api/notebooks/${state.notebook.id}/summary?format=html`);
-      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = el('a');
-      a.href = url;
-      const slug = String(state.notebook.title || '学习').replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'notebook';
-      a.download = `socratic-${slug}-小结.html`;
-      document.body.append(a);
-      if (typeof a.click === 'function') a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      toast('已导出小结网页版');
-    } catch (err) {
-      toast(`导出小结网页版失败：${err.message}`, true);
-    } finally {
-      summaryHtmlBtn.disabled = false;
-    }
-  };
-
-  // 导出对话：把这一本从头到尾的对话（题卡 / 作答 / 制品 / 笔记按时间线还原）导出成 Markdown。
-  // 与小结的分工：小结是结论，对话是过程。这里只有过程与时间戳，没有状态数字（Invariant 4）。
-  conversationBtn.onclick = async () => {
-    try {
-      conversationBtn.disabled = true;
-      const { markdown } = await api('GET', `/api/notebooks/${state.notebook.id}/conversation`);
-      const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = el('a');
-      a.href = url;
-      const slug = String(state.notebook.title || '学习').replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'notebook';
-      a.download = `socratic-${slug}-对话.md`;
-      document.body.append(a);
-      if (typeof a.click === 'function') a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      toast('已导出对话');
-    } catch (err) {
-      toast(`导出对话失败：${err.message}`, true);
-    } finally {
-      conversationBtn.disabled = false;
-    }
-  };
-
-  // 制品 zip：全部制品一个包带走，解压后双击 index.html 直接看（第十四轮）。
-  // 二进制走裸 fetch 拿 blob，不经 api() 的 JSON 解析。
-  artifactsZipBtn.onclick = async () => {
-    try {
-      artifactsZipBtn.disabled = true;
-      const res = await fetch(`/api/notebooks/${state.notebook.id}/artifacts.zip`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = el('a');
-      a.href = url;
-      const slug = String(state.notebook.title || '学习').replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'notebook';
-      a.download = `socratic-${slug}-artifacts.zip`;
-      document.body.append(a);
-      if (typeof a.click === 'function') a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      toast('已打包全部制品');
-    } catch (err) {
-      toast(`打包失败：${err.message}`, true);
-    } finally {
-      artifactsZipBtn.disabled = false;
-    }
-  };
-
-  importBtn.onclick = () => {
-    const input = el('input');
-    input.type = 'file';
-    input.accept = '.json,application/json';
-    input.onchange = async () => {
-      const f = input.files && input.files[0];
-      if (!f) return;
-      importBtn.disabled = true;
-      try {
-        const text = typeof f.text === 'function' ? await f.text() : String(f);
-        const bundle = JSON.parse(text);
-        toast('正在导入…');
-        const { notebook } = await api('POST', '/api/notebooks/import', bundle);
-        state.notebooks = (await api('GET', '/api/notebooks')).notebooks;
-        await openNotebook(notebook.id);
-        renderNotebookList();
-        toast(`已导入「${notebook.title || '新学习'}」`);
-      } catch (err) {
-        toast(`导入失败：${err.message}`, true);
-      } finally {
-        importBtn.disabled = false;
-      }
-    };
-    input.click();
-  };
-
-  // 体检只读 + 处置台：先扫一遍 data/ 报告损坏的 JSON、孤儿制品、缺 HTML 的空壳；
-  // 报告之后能动手，但只搬走、不删除——孤儿制品送进隔离区，随时可放回原位。
-  // 这是文件/目录的事实报告，不是学习进度——报告里没有任何掌握度/理解度数字。
-  const renderHealth = async () => {
-    const report = await api('GET', '/api/health');
-    const issues = [];
-    if (report.corruptFiles.length) issues.push(`损坏文件 ${report.corruptFiles.length} 处：${report.corruptFiles.slice(0, 3).join('、')}${report.corruptFiles.length > 3 ? '…' : ''}`);
-    if (report.orphanArtifacts.length) issues.push(`孤儿制品 ${report.orphanArtifacts.length} 件（manifest 外）`);
-    if (report.missingHtml.length) issues.push(`缺 HTML 的制品 ${report.missingHtml.length} 件`);
-    /*
-     * 鬼目录（第二十轮）：被删掉的学习又被自己还在跑的分身从盘上 mkdir 回来，只剩一份
-     * jobs/*.json。以前体检只要看见目录就当一本书数进本数——这本"书"GET 整本是 404，
-     * 报告里却既不出问题也不点名。这里点名它，但不给"一键删除"的键：删除不可恢复，
-     * 这一处该由人自己确认了再动手（写盘那一侧的门已经堵住，新账不会再产生）。
-     */
-    const ghosts = Array.isArray(report.ghostDirs) ? report.ghostDirs : [];
-    if (ghosts.length) issues.push(`鬼目录 ${ghosts.length} 处（只有任务记录、没有 notebook.json，不算一本学习）`);
-    /*
-     * 身份这笔账（第二十二轮）：一本学习的地址是它的目录名，盘上 notebook.json 里那行 id
-     * 只是留档。两件事都要看得见：
-     * ① 目录名形状不合法（路由那道门先过 safeId，这种目录一律 400）——里面那份 notebook.json
-     *    是本应用打不开的死数据，所以它不进本数、也不进列表（列表不许发点不开的行）；
-     * ② 盘上那行 id 与目录名分家——现在读侧以地址为准，界面不会再被带偏，但这一处多半是
-     *    人手改过盘留下的，改回去之前它该被看见。
-     * 都不给"一键修"的键：改盘上那行 id 或删目录都是动数据，由人拍板（下一次写入会自己对齐）。
-     */
-    const unaddressable = Array.isArray(report.unaddressableDirs) ? report.unaddressableDirs : [];
-    if (unaddressable.length) issues.push(`打不开的目录 ${unaddressable.length} 处（名字不合本应用的规矩，不算一本学习）`);
-    const drift = Array.isArray(report.identityDrift) ? report.identityDrift : [];
-    if (drift.length) issues.push(`盘上写的 id 与目录名对不上 ${drift.length} 处（地址以目录名为准，那一行只是留档）`);
-    // 已修复文件的存证（第十八轮）：原件被下一次原子写治好后 corruptFiles 清空，
-    // 但 `.corrupt-*` 副本还在盘上。过去这条下载口只认"当下还坏着"的清单，治好了就查无实据——
-    // 人最想看"当时坏成什么样"的时刻，恰恰是修好之后。台账按盘上事实列，不看原件坏不坏。
-    const evidence = Array.isArray(report.corruptEvidence) ? report.corruptEvidence : [];
-    const healed = evidence.filter((e) => !e.sourceCorrupt);
-    healthResult.classList.remove('hidden');
-    healthResult.textContent = '';
-    healthResult.append(
-      el('div', null, issues.length
-        ? `数据体检：共 ${report.notebooks} 本学习，${issues.join('；')}。建议先导出备份再处理。`
-        : `数据体检：共 ${report.notebooks} 本学习，没有损坏、没有孤儿、没有空壳，一切正常。`),
-    );
-    // 损坏文件取证：体检点名之后原件拿得到。每个文件原样下载（字节不重写），
-    // 供诊断/发给维护者看——损坏文件可能正是"待诊断现场"，只读、不修。
-    const downloadCorrupt = async (rel, okToast) => {
-      try {
-        const res = await fetch(`/api/health/corrupt?path=${encodeURIComponent(rel)}`);
-        if (!res.ok) {
-          const text = await res.text();
-          let msg = text;
-          try { msg = JSON.parse(text).error || text; } catch { /* 保持原文 */ }
-          throw new Error(msg);
-        }
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const aEl = el('a');
-        aEl.href = url;
-        const name = rel.replace(/[^\w.\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '') || 'corrupt.json';
-        aEl.download = `corrupt-${name}`;
-        document.body.append(aEl);
-        if (typeof aEl.click === 'function') aEl.click();
-        aEl.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-        toast(okToast);
-      } catch (err) {
-        toast(`下载失败：${err.message}`, true);
-      }
-    };
-    if (report.corruptFiles.length) {
-      const list = el('div', 'health-list');
-      for (const rel of report.corruptFiles) {
-        const row = el('div', 'health-corrupt-row');
-        row.append(el('span', null, rel));
-        const dl = el('button', 'btn btn-ghost btn-sm', '下载原件');
-        dl.onclick = async () => {
-          dl.disabled = true;
-          await downloadCorrupt(rel, '已下载损坏文件原件');
-          dl.disabled = false;
-        };
-        row.append(dl);
-        list.append(row);
-      }
-      healthResult.append(list);
-    }
-    // 已修复文件的存证：原件好了、副本在案，同样给下载口（只读，字节不重写）
-    if (healed.length) {
-      healthResult.append(el('div', 'health-list', `已修复文件的损坏存证 ${healed.length} 份（原件已恢复正常，副本留在盘上）：`));
-      const eList = el('div', 'health-list');
-      for (const item of healed.slice(0, 12)) {
-        const row = el('div', 'health-corrupt-row');
-        row.append(el('span', null, item.rel));
-        const dl = el('button', 'btn btn-ghost btn-sm', '下载存证副本');
-        dl.onclick = async () => {
-          dl.disabled = true;
-          await downloadCorrupt(item.rel, '已下载损坏存证副本');
-          dl.disabled = false;
-        };
-        row.append(dl);
-        eList.append(row);
-      }
-      healthResult.append(eList);
-    }
-    if (ghosts.length) {
-      const names = ghosts.slice(0, 3).map((g) => `${g.notebook}/（${(g.contents || []).join('、') || '空'}）`).join('、');
-      healthResult.append(el('div', 'health-list', `鬼目录：${names}${ghosts.length > 3 ? '…' : ''}——确认没有要留的东西后再手动删掉这个目录。`));
-    }
-    if (unaddressable.length) {
-      const names = unaddressable.slice(0, 3).map((g) => `${g.notebook}/（${(g.contents || []).join('、') || '空'}）`).join('、');
-      healthResult.append(el('div', 'health-list', `打不开的目录：${names}${unaddressable.length > 3 ? '…' : ''}——名字里有本应用不许的字符，所以进不了列表；里面的东西还在盘上，要留就自己挪走。`));
-    }
-    if (drift.length) {
-      const names = drift.slice(0, 3).map((d) => `${d.notebook}（盘上写着 ${JSON.stringify(d.metaId)}）`).join('、');
-      healthResult.append(el('div', 'health-list', `身份对不上：${names}${drift.length > 3 ? '…' : ''}——访问这一本用的是目录名，盘上那一行改不改都不影响打开它。`));
-    }
-    if (report.orphanArtifacts.length) {
-      const names = report.orphanArtifacts.slice(0, 3).map((a) => `${a.notebook}/${a.id}`).join('、');
-      healthResult.append(el('div', 'health-list', `孤儿制品：${names}${report.orphanArtifacts.length > 3 ? '…' : ''}`));
-      const q = el('button', 'btn btn-ghost btn-sm', `把 ${report.orphanArtifacts.length} 件孤儿制品送进隔离区（不删除）`);
-      q.onclick = async () => {
-        try {
-          q.disabled = true;
-          const r = await api('POST', '/api/health/quarantine');
-          toast(`已送进隔离区 ${r.moved.filter((m) => !m.error).length} 件（随时可放回）`);
-          await renderHealth();
-        } catch (err) {
-          toast(`送进隔离区失败：${err.message}`, true);
-        } finally {
-          q.disabled = false;
-        }
-      };
-      healthResult.append(q);
-    }
-    if (report.quarantined > 0) {
-      const r = el('button', 'btn btn-ghost btn-sm', `从隔离区放回 ${report.quarantined} 件`);
-      r.onclick = async () => {
-        try {
-          r.disabled = true;
-          const res = await api('POST', '/api/health/restore');
-          toast(res.restored.length ? `已放回 ${res.restored.length} 件` : '隔离区没有可放回的东西');
-          await renderHealth();
-        } catch (err) {
-          toast(`放回失败：${err.message}`, true);
-        } finally {
-          r.disabled = false;
-        }
-      };
-      healthResult.append(r);
-    }
-  };
-  healthBtn.onclick = async () => {
-    try {
-      healthBtn.disabled = true;
-      await renderHealth();
-    } catch (err) {
-      toast(`体检失败：${err.message}`, true);
-    } finally {
-      healthBtn.disabled = false;
-    }
-  };
-}
-
 function renderPatchCard(p) {
   const card = el('div', `patch-card${p.applied ? ' applied' : ''}`);
   card.append(el('div', 'patch-target', `${p.operation} · ${p.target}`));
@@ -4537,7 +3894,7 @@ function renderPatchCard(p) {
       toast(action === 'apply' ? '已更新概念结构' : '已忽略这条改动');
       const { notebook } = await api('GET', `/api/notebooks/${state.notebook.id}`);
       state.notebook = notebook;
-      renderPanel();
+      renderDeskState();
     } catch (err) {
       toast(err.message, true);
     }
@@ -4548,9 +3905,12 @@ function renderPatchCard(p) {
 }
 
 function renderFilesPanel(body) {
-  body.append(el('div', 'panel-section-title', '上传的素材'));
   const uploads = state.notebook.uploads || [];
-  if (!uploads.length) body.append(el('div', 'empty-note', '还没有素材。可以上传文本、Markdown、代码或图片，我会把它们当作这次学习的事实依据。'));
+  const allArtifacts = state.notebook.artifacts || [];
+  // 现状条里没有素材也没有制品就不摆这一节（面板时代"还没有素材"是页签内容，
+  // 对话界面里那是常年挂着的空话——没东西就是没东西，不占一行）。
+  if (!uploads.length && !allArtifacts.length) return;
+  body.append(el('div', 'panel-section-title', '上传的素材'));
   for (const f of uploads) {
     const row = el('div', 'file-item');
     if (f.kind === 'image') {
@@ -4569,7 +3929,6 @@ function renderFilesPanel(body) {
   // 全部制品：这一本从开始到现在做出的每件东西都在这里——在台上的标「在台上」，
   // 已收起的给「放回台面」。制品只软退役、文件永远在，所以这里只有"放回"一个手势面。
   body.append(el('div', 'panel-section-title', '全部制品'));
-  const allArtifacts = state.notebook.artifacts || [];
   if (!allArtifacts.length) {
     body.append(el('div', 'empty-note', '还没有制品。讲到关键处它会把当前理解做成一件可以摆弄的东西，落进这一拍里。'));
   }
@@ -4653,7 +4012,7 @@ async function uploadToNotebook(file) {
   if (!res.ok) throw new Error(data.error || '上传失败');
   state.pendingAttachments.push({ name: data.upload.name, rel: data.upload.rel, kind: data.upload.kind });
   state.notebook.uploads = data.uploads;
-  if (state.panelTab === 'files') renderPanel();
+  renderDeskState();
 }
 
 /** 草稿态攒下的文件：会话一建好就补传，附件跟着进第一条消息。 */
@@ -4786,7 +4145,7 @@ function openNewNotebookDialog() {
   resetDesk();
   deskRootEl()?.append($('emptyState') || buildEmptyState());
   renderStarters();
-  renderPanel();
+  renderDeskState();
   renderNotebookList();
   applyComposer();
   $('input')?.focus?.();
@@ -5740,43 +5099,11 @@ function bindEvents() {
     if (files.length) await uploadFiles(files);
   });
 
-  // 窄屏（≤1180，右栏变成 position:fixed 覆盖层）一开就摊着会盖住会话列右边的按钮：
-  // 534px 实测计划卡第二颗「我要改一下」的中心 elementFromPoint 落在 panel-body 上，点不到。
-  // 所以窄屏默认收起——展开它本来就是学习者自己的动作（阈值跟 styles.css 的那条 MQ 保持一致）。
-  if (window.matchMedia?.('(max-width: 1180px)').matches) {
-    document.querySelector('.layout')?.classList.add('panel-collapsed');
-  }
-  $('togglePanel').onclick = () => {
-    const layout = document.querySelector('.layout');
-    layout.classList.toggle('panel-collapsed');
-    if (!layout.classList.contains('panel-collapsed')) renderPanel();
-  };
-  const closePanel = $('closePanel');
-  if (closePanel) {
-    closePanel.onclick = () => document.querySelector('.layout').classList.add('panel-collapsed');
-  }
+  // 第三十九轮起没有右栏了：待确认改动 / 界面回看 / 后台任务 / 素材全部长在台面顶部的
+  // 现状条里（renderDeskState），不需要展开/收起、不需要页签。窄屏那条 MQ 随之退休。
   const toggleRail = $('toggleRail');
   if (toggleRail) {
     toggleRail.onclick = () => document.querySelector('.layout').classList.toggle('rail-open');
-  }
-  const panelTabs = document.querySelectorAll('.tab[data-tab]');
-  if (!panelTabs.length && $('panelBody')) {
-    // 测试桩里 tab 元素可能没解析出来：兜底一个按钮，保证有办法重新展开面板
-    const btn = el('button', 'tab', '概念结构');
-    btn.dataset.tab = 'graph';
-    btn.onclick = () => {
-      state.panelTab = 'learn';
-      document.querySelector('.layout').classList.remove('panel-collapsed');
-      renderPanel();
-    };
-    $('panelBody').append(btn);
-  }
-  for (const tab of panelTabs) {
-    tab.onclick = () => {
-      state.panelTab = tab.dataset.tab;
-      document.querySelector('.layout').classList.remove('panel-collapsed');
-      renderPanel();
-    };
   }
   document.addEventListener('keydown', handleGlobalKeydown);
 }
@@ -5845,9 +5172,8 @@ export const __hooks = {
   toast,
   consumeSse,
   drainTurnStream,
-  renderPanel,
+  renderDeskState,
   renderPlanCard,
-  renderBackupPanel,
   markPlanDecided,
   updateMentionPopup,
   applyMention,
