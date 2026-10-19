@@ -715,6 +715,29 @@ html, body {
 .ui-step-name { font-weight: 620; color: var(--ink); }
 .ui-step-why { display: block; font-size: 12.5px; color: var(--ink-2); }
 
+/* 带时刻锚点的事件时间线：时刻是这一档的核心锚点，竖线 + 圆点把它读成"沿着时间走"。 */
+.ui-timeline { list-style: none; margin: 0 0 1em; padding: 0; }
+.ui-timeline li {
+  display: flex; align-items: baseline; gap: 12px;
+  position: relative; padding: 0 0 14px 20px;
+}
+.ui-timeline li::before {
+  content: ""; position: absolute; left: 3px; top: 8px; bottom: -6px;
+  border-left: 2px solid var(--border);
+}
+.ui-timeline li:last-child::before { display: none; }
+.ui-timeline li::after {
+  content: ""; position: absolute; left: 0; top: 5px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--surface-2); border: 2px solid var(--accent);
+}
+.ui-tl-time {
+  flex: 0 0 auto; font-variant-numeric: tabular-nums;
+  font-size: 12.5px; font-weight: 640; color: var(--accent-2, var(--accent));
+}
+.ui-tl-event { font-weight: 620; color: var(--ink); }
+.ui-tl-why { display: block; font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+
 /* 勾选态住在宿主那份 Map 里，不住在这里的 DOM 上：正文每帧会被重画。 */
 .ui-checklist { margin: 0 0 1em; }
 .ui-check {

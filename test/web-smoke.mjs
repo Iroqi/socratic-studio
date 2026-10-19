@@ -4036,7 +4036,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('退回时说明为什么（一句"没能编译"不给原因=白屏另一种写法）',
     /没有「pie」这一档界面/.test(unknown.html), unknown.html.slice(0, 220));
   check('降级理由里带可用档（让人一眼知道能写什么，不用猜）',
-    unknown.html.includes('compare / steps / checklist / calculator / diagram'), unknown.html.slice(0, 300));
+    unknown.html.includes('compare / steps / timeline / checklist / calculator / diagram'), unknown.html.slice(0, 300));
   check('对齐不上的 compare 不硬编（每行格数不同就别画表）',
     Boolean(compile(['kind: compare', 'row: a | b', 'row: c | d | e']).degraded));
 
@@ -4109,6 +4109,28 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const progMd = md39.renderMarkdown('```ui\nkind: checklist\nitem: 备份数据\nitem: 关掉服务\n', { partial: true });
   check('渲染器那一路同样渐进：流里清单已写项上台、无占位',
     progMd.includes('ui-check') && !progMd.includes('ui-skeleton'), progMd.slice(0, 200));
+  ui.resetUiState();
+
+  // 6a2) 第四十三轮：timeline 档——带时刻锚点的事件时间线
+  // 博文 Sunday roast 例子里 "cooking timeline"（12:30 准备羊肉 / 1:30 开始烤制…）的对应档。
+  const tl = ui.compileUiBlock(['kind: timeline', 'title: 烤羊腿', 'time: 准备羊肉 | 12:30 | 腌料冷藏', 'time: 开始烤制 | 1:30'], false);
+  check('timeline 编译成带时刻锚点的事件序列（时刻是这一档的核心锚点）',
+    tl.html.includes('class="ui-timeline"') && tl.html.includes('>12:30<') && tl.html.includes('>准备羊肉<') && tl.html.includes('ui-tl-why'), tl.html.slice(0, 220));
+  check('timeline 进封闭词表', ui.UI_KINDS.includes('timeline'), ui.UI_KINDS.join(','));
+  const tlNoTime = ui.compileUiBlock(['kind: timeline', 'time: 准备羊肉'], false);
+  check('缺时刻的 time 行终态是硬错（没时刻就不是时间线，跟 steps 的"第二段可省"不同）',
+    Boolean(tlNoTime.degraded) && tlNoTime.degraded.includes('时刻没写'), tlNoTime.degraded);
+  const tlNoEvent = ui.compileUiBlock(['kind: timeline', 'time: | 12:30'], false);
+  check('缺事件的 time 行终态也是硬错', Boolean(tlNoEvent.degraded) && tlNoEvent.degraded.includes('事件是空的'), tlNoEvent.degraded);
+  const tlGrow = ui.compileUiBlock(['kind: timeline', 'time: 准备羊肉', 'time: 开始烤制 | 1:30'], true);
+  check('流里时刻还没落的那行先不长，已写出的行照常上台（timeline 也在渐进渲染体系里）',
+    tlGrow.pending === true && tlGrow.html.includes('开始烤制') && !tlGrow.html.includes('准备羊肉') && tlGrow.html.includes('ui-timeline'), tlGrow.html.slice(0, 200));
+  const tlHandoff = ui.compileUiBlock(['kind: timeline', 'time: 一 | 1:00', 'handoff: 接下来呢'], false);
+  check('timeline 没有可交回的状态：handoff 拒绝（展示型同 steps）',
+    Boolean(tlHandoff.degraded) && tlHandoff.degraded.includes('handoff'), tlHandoff.degraded);
+  const tlEvil = ui.compileUiBlock(['kind: timeline', 'time: <img src=x onerror=alert(1)> | 12:00'], false);
+  check('timeline 里的正文同样转义（新档不破 XSS 那条线）',
+    tlEvil.html.includes('&lt;img') && !/<img/.test(tlEvil.html), tlEvil.html.slice(0, 160));
   ui.resetUiState();
 
   // 6b) 收尾那一刷：settled 之后不许还摆着"正在长"

@@ -22,7 +22,7 @@
 import { escapeHtml } from './escape.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'checklist', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'deck', 'question', 'canvas'];
+export const UI_KINDS = ['compare', 'steps', 'timeline', 'checklist', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'deck', 'question', 'canvas'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -269,6 +269,44 @@ function compileSteps(fields, lines, partial) {
     return { html: `${cap}<ol class="ui-steps">${keep.join('')}</ol>`, shape: 'steps', pending: true };
   }
   return { html: `${cap}<ol class="ui-steps">${lis.join('')}</ol>`, shape: 'steps' };
+}
+
+/**
+ * timeline：`time: 事件 | 时刻 | 补充`（时刻必填，补充可省）。带时刻锚点的有序事件序列——
+ * 博文 Sunday roast 例子里 "cooking timeline"（12:30 准备羊肉 / 1:30 开始烤制…）那一组件的
+ * 对应档。纯展示、无状态，同 steps：不进 UI_STATEFUL、不落 artifact_state。
+ * 时刻是这一档的核心锚点（没时刻就不是时间线），所以它跟 steps 的"第二段可省"不一样：
+ * `time: 事件 | 时刻` 两段都必填；第三段补充可有可无。
+ */
+function compileTimeline(fields, lines, partial) {
+  if (pick(fields, 'handoff').length) return { error: 'timeline 没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (gameWords(fields)) return { error: GAME_ONLY };
+  if (walkWords(fields)) return { error: WALK_ONLY };
+  if (questionWords(fields)) return { error: QUESTION_ONLY };
+  if (canvasWords(fields)) return { error: CANVAS_ONLY };
+  const items = pick(fields, 'time');
+  if (items.length < 1) return { error: '没有一行 time' };
+  const title = pick(fields, 'title')[0] || '';
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const rows = items.map((s) => {
+    const [first, ...rest] = s.split('|').map((c) => c.trim());
+    if (!first) return { bad: '有一行事件是空的' };
+    const when = rest[0];
+    if (!when) return { bad: '有一行时刻没写（time 行要「事件 | 时刻」）' };
+    const why = rest.slice(1).filter(Boolean).join(' ');
+    return { html: `<li><span class="ui-tl-time">${cell(when)}</span><span class="ui-tl-event">${cell(first)}</span>${why ? `<span class="ui-tl-why">${cell(why)}</span>` : ''}</li>` };
+  });
+  const bad = rows.find((r) => r.bad);
+  if (bad) {
+    // 流里有一行只写到「time: 事件」或「time: | 时刻」（另一半还没落）——这行先不长，
+    // 已写出的行照常上台；终态再撞就是真写坏了，当场报错不骗人。渐进是流里的宽容。
+    if (!partial) return { error: bad.bad };
+    const keep = rows.filter((r) => !r.bad).map((r) => r.html);
+    if (!keep.length) return { error: '没有一行 time' };
+    return { html: `${cap}<ol class="ui-timeline">${keep.join('')}</ol>`, shape: 'timeline', pending: true };
+  }
+  return { html: `${cap}<ol class="ui-timeline">${rows.map((r) => r.html).join('')}</ol>`, shape: 'timeline' };
 }
 
 /**
@@ -1588,7 +1626,7 @@ function compileQuestion(fields) {
 /** question 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
 const QUESTION_FIELDS = new Set(['id', 'question', 'header', 'option', 'multiSelect', 'allowText', 'conceptId']);
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, checklist: compileChecklist, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
 
 /**
  * 编译器入口。partial = 这一段还在流里长（围栏未闭合）。
