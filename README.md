@@ -1796,6 +1796,25 @@ decide how the pieces fit together"**——旗舰演示全都是"一个界面由
 - 全量 `npm run test:all` = **2661 项 / 6 套件全绿**（run 695 / runtime-unit 92 / contract 391 /
   web-smoke 1191 / http 249 / artifact-evidence 43）。详细判决在 `docs/iteration-2026-10-18.md`。
 
+### 把自己的数/话填进界面：```ui 那一档加了 form（2026-10-20 第四十四轮）
+
+博文把 IUI 的组件清单列为四族：**graphics / tappable buttons / forms / charts / interactive
+experiences**，且"just by asking"给了三个并列例子（calculator、**bill splitter**、game）——
+`calculator` 档 ✓、`game` 档 ✓，**bill splitter（表单）是唯一缺口**：组件库里"点 / 滑 / 勾"
+都做全了，唯独没有"填"这一格。第四十四轮补上它：
+
+- **`field: 名字 | text | 提示` 或 `field: 名字 | number | 提示`**（1–8 个，名字是身份、
+  不能重复；提示进 placeholder）。可选 `compute: 输出名 = 表达式`（复用 `calculator` 的公式
+  词法，**只许引用 number 字段**——text 字段没数可算，写进去点名掉回原文）。
+- **第八个交互档**（`id` 必填）：填进去的值按 id 存着，重画 / 刷新 / 下一回合续得回来；
+  number 字段一动就**就地重算** compute 输出（整块不重画——重画会把正在输入的框换掉）。
+- **表单记"填了哪些值"，不记"填对没"**：界面里没有任何判分词，拼句与状态里也没有
+  （Invariant 4 那条线照旧——字段值本身是学习者自己的输入，不是学情指标；判分仍是对话里的事）。
+- 渐进渲染（第 42 轮体系）、handoff 出口、右栏回看卡、deck 拼块，全部按交互档既有契约接入；
+  `field` / `compute` 写在别的档 = 语义词写错档（12 处守卫）。
+- 全量 `npm run test:all` = **2746 项 / 6 套件全绿**（web-smoke 1264 / contract-consistency 403）。
+  详细判决在 `docs/iteration-2026-10-20.md`。
+
 ## 已知边界
 
 - **没有音频旁白（TTS）。** 原版的 `narration.py` + 时间轴那一整套没搬，需要先做完整套件才能支持。

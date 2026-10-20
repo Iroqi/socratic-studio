@@ -760,6 +760,22 @@ html, body {
 .ui-out-name { font-size: 12.5px; color: var(--ink-2); }
 .ui-out-value { font-size: 15px; font-weight: 640; }
 
+/* 表单（第四十四轮，学 IUI 的 "forms"）：与 .ui-calc 同一把尺——surface-2 底、border、
+   radius-sm、名字 ink-2、焦点只借 --accent。表单记"填了哪些值"，不记"填对没"，
+   所以这里没有对/错/分数那一族样式（Invariant 4 那条线照旧）。输入框透明底 + 边框：
+   内联界面段背景只许 --surface-2，一格里再垫一格不另造底色。 */
+.ui-form { margin: 0 0 1em; padding: 11px 13px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.ui-field { display: grid; grid-template-columns: 5.5em 1fr; align-items: center; gap: 3px 9px; margin: 0 0 7px; }
+.ui-field-name { font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-field input {
+  min-width: 0; width: 100%; box-sizing: border-box;
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px;
+  background: transparent; color: var(--ink); font-size: 13.5px;
+}
+.ui-field input::placeholder { color: var(--ink-3); }
+.ui-field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-field input[disabled] { opacity: 0.55; cursor: not-allowed; }
+
 /* 图解：节点与连线。几何（坐标、尺寸）全部由编译器按输入决定，这里只负责用已量过的
    token 上色。静态形状没有交互态，样式里也就没有 hover/active 那一族。 */
 .ui-diagram { display: block; max-width: 100%; height: auto; margin: 0 0 1em; }

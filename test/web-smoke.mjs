@@ -4036,7 +4036,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('退回时说明为什么（一句"没能编译"不给原因=白屏另一种写法）',
     /没有「pie」这一档界面/.test(unknown.html), unknown.html.slice(0, 220));
   check('降级理由里带可用档（让人一眼知道能写什么，不用猜）',
-    unknown.html.includes('compare / steps / timeline / checklist / calculator / diagram'), unknown.html.slice(0, 300));
+    unknown.html.includes('compare / steps / timeline / checklist / form / calculator / diagram'), unknown.html.slice(0, 300));
   check('对齐不上的 compare 不硬编（每行格数不同就别画表）',
     Boolean(compile(['kind: compare', 'row: a | b', 'row: c | d | e']).degraded));
 
@@ -5957,6 +5957,205 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     r9.handled === true && r9.kind === 'checklist' && ui50.readUiState('ck9')?.state?.done?.['核对甲'] === true, JSON.stringify(r9));
 
   check('这一节无异常', errors.length === errsBefore50, errors.slice(errsBefore50).join(' | '));
+}
+
+// ─── 51. form：把自己的数/话填进界面（第四十四轮，学 IUI 的 "forms"——
+// 博文组件清单里与 graphics / tappable buttons / charts / interactive experiences 并列的
+// 第一类组件；官方旗舰演示的 bill splitter 就是它：客名文本输入 + 价格数字输入 +
+// 实时算出分摊）。form 是第八交互档：id 必填、field 1–8 个（名字是身份、不能重复）、
+// text/number 两型、compute 只许引用 number 字段、状态 {字段名: 值} 落盘续回、
+// number 字段一动就地重算输出、handoff 拼句、右栏回看卡可见；表单记"填了哪些值"，
+// 不记"填对没"——界面里没有判分（Invariant 4 一条不破）。
+{
+  console.log('\n51. form（把自己的数/话填进界面：填进去、结果跟着算，判分留在对话里）');
+  const errsBefore51 = errors.length;
+  const ui51 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { state: st51, handleUiDeskEvent, renderDeskState: renderPanel } = appModule.__hooks;
+  const compile51 = (lines, partial) => ui51.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  ui51.resetUiState();
+  const input51 = doc.getElementById('input');
+  const sheet = ['kind: form', 'id: feast1', 'title: 周末聚餐',
+    'field: 人数 | number | 几位朋友',
+    'field: 每份单价 | number | 元',
+    'field: 备注 | text',
+    'compute: 合计 = 人数 * 每份单价',
+    'handoff: 把填好的表带回对话'];
+
+  // 1) 编译形状：字段行（名字 + 输入框 + 归属 id）+ compute 输出 + title 帽 + handoff
+  const c = compile51(sheet).html;
+  check('form 编译成字段表（每个字段一个输入框，带名字与归属 id）',
+    c.includes('class="ui-field"') && (c.match(/<input /g) || []).length === 3 &&
+    c.includes('data-ui-field="feast1"') && c.includes('data-ui-name="人数"'), c.slice(0, 500));
+  check('number 与 text 两型落到 input type（数收数、话收话）',
+    (c.match(/type="number"/g) || []).length === 2 && (c.match(/type="text"/g) || []).length === 1, c.slice(0, 500));
+  check('提示进 placeholder（提示是给填表的人看的，不是常驻第二行文字）',
+    c.includes('placeholder="几位朋友"') && c.includes('placeholder="元"'), c.slice(0, 500));
+  check('输入框带 aria-label（读屏按字段名认，不靠 placeholder）',
+    (c.match(/aria-label="人数"/g) || []).length >= 1, c.slice(0, 500));
+  check('compute 输出照 calculator 的 .ui-out 一族（名字 + 读数）',
+    c.includes('class="ui-out"') && c.includes('<output class="ui-out-value">'), c.slice(0, 300));
+  check('title 帽 + handoff 按钮（沿交互档的既有出口）',
+    c.includes('ui-cap') && c.includes('class="ui-handoff" data-ui-handoff="feast1"'), c.slice(-300));
+  check('整块带着归属 id（重画/续状态能找到这份表单）',
+    c.includes('<div class="ui-form" data-ui-form="feast1"'), c.slice(0, 200));
+  check('编译输出没有判分词（Invariant 4：表单记"填了哪些"，没对错、没得分）',
+    !/score|percent|mastery|correct|incorrect/i.test(c), c.slice(0, 400));
+  check('spec 里字段与公式都存下了（就地重算要用的那份表只有编译时见过）',
+    Boolean(ui51.readUiState('feast1')?.spec?.fields?.length === 3 && ui51.readUiState('feast1')?.spec?.formulas?.length === 1),
+    JSON.stringify(ui51.readUiState('feast1')?.spec));
+  ui51.resetUiState();
+
+  // 2) 确定性：同一份输入两次编译一模一样（状态没动过，不许跳）
+  check('form 两次编译一模一样', compile51(sheet).html === c, '');
+
+  // 3) 状态续回：上次填到哪儿，重画就回到哪儿（值按 id 存）
+  compile51(sheet); // spec 进 Map（setUiValues 只改 state、不动 spec）
+  ui51.setUiValues('feast1', 'form', { 人数: 6, 每份单价: 20, 备注: '朋友聚餐', uiKind: 'form' });
+  const c3 = compile51(sheet).html;
+  check('重画续回上次填的值（数字与文字都回来）',
+    c3.includes('value="6"') && c3.includes('value="20"') && c3.includes('value="朋友聚餐"'), c3.slice(0, 500));
+  check('续回的值照旧进公式（6 × 20 = 120 当场算出来）',
+    c3.includes('>120<'), c3.slice(-300));
+  ui51.resetUiState();
+
+  // 4) 降级路径：不静默吞——逐条点名
+  const deg51 = (lines) => ui51.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  check('没有 id：掉回原文并点名（填进去的值没地方续）',
+    Boolean(deg51(['kind: form', 'field: 人数 | number']).includes('没有 id')), '');
+  check('一行 field 都没有：掉回原文并点名',
+    Boolean(deg51(['kind: form', 'id: a']).includes('field')), '');
+  check('field 行格式错（缺类型）：掉回原文并点名',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数']).includes('名字 | text | 提示')), '');
+  check('类型只认 text / number：掉回原文并点名',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | 数字']).includes('只认 text / number')), '');
+  check('字段名不合法（中间有空格）：掉回原文并点名',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人 数 | number']).includes('不合法')), '');
+  check('两个字段同名：掉回原文并点名（填进去的值分不清是谁的）',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'field: 人数 | text']).includes('同名')), '');
+  const nineFields = ['kind: form', 'id: a', ...Array.from({ length: 9 }, (_, i) => `field: 字段${i} | text`)];
+  check('超过 8 个字段：掉回原文并点名（再多是问卷，不是表单）',
+    Boolean(deg51(nineFields).includes('最多')), '');
+  check('compute 格式错：掉回原文并点名',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'compute: 合计 人数']).includes('输出名 = 表达式')), '');
+  check('compute 引了 text 字段：掉回原文并点名（text 字段没数可算）',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'field: 备注 | text', 'compute: 总量 = 备注 * 2']).includes('只认 number 字段')), '');
+  check('compute 引了没声明的名字：掉回原文并点名',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'compute: 总量 = 别的 * 2']).includes('只认 number 字段')), '');
+  check('form 里写 item（checklist 档的字段）：掉回原文并点名',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'item: 一项']).includes('不是 form 的字段')), '');
+  check('form 里写 table：掉回原文并点名',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'table: 一张表']).includes('table 只配带 slider')), '');
+  check('form 里写 try：掉回原文并点名',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'try: 丙']).includes('只配带 id 的 game')), '');
+  check('form 里写 move：掉回原文并点名',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'move: 甲 = x']).includes('只配带 id 的 walkthrough')), '');
+  check('form 里写 question：掉回原文并点名',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'question: 问什么']).includes('只配 question')), '');
+  check('handoff 超 24 字：掉回原文并点名',
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'handoff: ' + '发'.repeat(25)]).includes('24')), '');
+  // 语义词写错档：field / compute 写在别的档，掉回原文并点名（与 table / game / walk 同一把尺）
+  check('field 写在 compare：掉回原文并点名',
+    Boolean(deg51(['kind: compare', 'row: 甲 | 乙', 'field: 人数 | number']).includes('只配带 id 的 form')), '');
+  check('compute 写在 calculator：掉回原文并点名',
+    Boolean(deg51(['kind: calculator', 'id: a', 'param: 人数 | 5', 'formula: 总量 = 人数 * 2', 'compute: 合计 = 人数 * 2']).includes('只配带 id 的 form')), '');
+  check('compute 写在 checklist：掉回原文并点名',
+    Boolean(deg51(['kind: checklist', 'id: a', 'item: 一项', 'compute: 合计 = 1 + 1']).includes('只配带 id 的 form')), '');
+  check('field 写在 walkthrough：掉回原文并点名',
+    Boolean(deg51(['kind: walkthrough', 'id: a', 'move: 甲 = x', 'move: 乙 = y', 'field: 备注 | text']).includes('只配带 id 的 form')), '');
+
+  // 5) 宿主接线：填一格 → state 落对 + 报回（判分一个字都不发生）
+  st51.notebook = sampleNotebook();
+  st51.uiReported.clear();
+  const posts51 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const before51 = posts51();
+  compile51(sheet); // spec 进 Map（宿主点击要靠 spec.fields 判型、spec.formulas 重算）
+  const r51 = handleUiDeskEvent({ target: { dataset: { uiField: 'feast1', uiName: '人数' }, value: '8' } });
+  check('填一格被接住（返回是哪一档、哪份表单）',
+    r51.handled === true && r51.kind === 'form' && r51.id === 'feast1', JSON.stringify(r51));
+  const st51a = ui51.readUiState('feast1');
+  check('number 字段落成数字（8 不是字符串）',
+    st51a.state.人数 === 8 && typeof st51a.state.人数 === 'number', JSON.stringify(st51a.state));
+  check('状态走 artifact-message 报回（与其它交互档同一条通道）', posts51() === before51 + 1, `posts ${before51} → ${posts51()}`);
+  check('状态里没有判分的位置（报回来的只有填了哪些值，没有对错分数）',
+    !/correct|incorrect|score|result/.test(JSON.stringify(st51a.state)), JSON.stringify(st51a.state));
+  const r51b = handleUiDeskEvent({ target: { dataset: { uiField: 'feast1', uiName: '备注' }, value: '朋友聚餐' } });
+  check('text 字段落成原文（话就是话，不转数）',
+    r51b.handled === true && ui51.readUiState('feast1').state.备注 === '朋友聚餐', JSON.stringify(ui51.readUiState('feast1').state));
+  const r51c = handleUiDeskEvent({ target: { dataset: { uiField: 'feast1', uiName: '人数' }, value: 'abc' } });
+  check('number 框里填了不是数的：照空处理（不猜、不落脏值）',
+    ui51.readUiState('feast1').state.人数 === '', JSON.stringify(ui51.readUiState('feast1').state));
+  const r51d = handleUiDeskEvent({ target: { dataset: { uiField: 'nope', uiName: '人数' }, value: '5' } });
+  check('不认得的 id 填不响（没 spec 就不知道有哪些字段）', r51d.handled === false, JSON.stringify(r51d));
+
+  // 6) repaint：number 字段一动，只换输出值（整块不重画；正文那一刷会跳滚动）
+  ui51.resetUiState();
+  compile51(sheet); // 重新编译，从空值起步
+  const formBox51 = doc.createElement('div'); formBox51.className = 'ui-form'; formBox51.dataset.uiForm = 'feast1';
+  const outP51 = doc.createElement('p'); outP51.className = 'ui-out';
+  const outV51 = doc.createElement('output'); outV51.className = 'ui-out-value';
+  outP51.append(outV51);
+  formBox51.append(outP51);
+  domRoot.append(formBox51);
+  handleUiDeskEvent({ target: { dataset: { uiField: 'feast1', uiName: '人数' }, value: '6' } });
+  handleUiDeskEvent({ target: { dataset: { uiField: 'feast1', uiName: '每份单价' }, value: '20' } });
+  check('repaint 就地换掉输出值（6 × 20 = 120，编译时算好的公式）', outV51._text === '120', outV51._text);
+  check('repaint 只换输出（块还在原处）', domRoot._kids.includes(formBox51), '');
+  handleUiDeskEvent({ target: { dataset: { uiField: 'feast1', uiName: '人数' }, value: '' } });
+  check('number 字段清空：输出按 0 算（空着就是没填，不是脏数）', outV51._text === '0', outV51._text);
+  formBox51.remove();
+
+  // 7) handoff：把"填了哪些"机械地拼成话递回对话（不自动发）
+  const spec51 = ui51.readUiState('feast1')?.spec;
+  const boxBefore51 = input51.value;
+  ui51.writeUiState('feast1', 'form', { 人数: 6, 每份单价: 20, 备注: '朋友聚餐', uiKind: 'form' }, spec51);
+  const r51h = handleUiDeskEvent({ target: { dataset: { uiHandoff: 'feast1' } } });
+  check('form 的 handoff 被接住（返回是哪个 id）',
+    r51h.handled === true && r51h.kind === 'handoff' && r51h.id === 'feast1', JSON.stringify(r51h));
+  check('拼句：我在表单「标题」里填了：人数=6、每份单价=20、备注=朋友聚餐（不露内部 id）',
+    input51.value === '我在表单「周末聚餐」里填了：人数=6、每份单价=20、备注=朋友聚餐', input51.value);
+  ui51.writeUiState('feast1', 'form', { 人数: '', 每份单价: '', 备注: '', uiKind: 'form' }, spec51);
+  handleUiDeskEvent({ target: { dataset: { uiHandoff: 'feast1' } } });
+  check('什么都没填：照实说还没有填任何一项', input51.value === '我在表单「周末聚餐」里还没有填任何一项', input51.value);
+  check('拼句里没有判分词（Invariant 4：话里不出对错/分数）',
+    !/score|percent|mastery|correct|incorrect/.test(input51.value), input51.value);
+  input51.value = boxBefore51;
+
+  // 8) 右栏回看卡：form 出现在「这局动过的界面」（与 hydrate 同一条筛子）
+  st51.notebook.progress.artifact_state = { 'ui:feast1': { uiKind: 'form', 人数: 6, 备注: '朋友聚餐' } };
+  renderPanel();
+  const card51 = deepAll(deskBody(), 'ui-state-card')[0] || null;
+  const notes51 = card51 ? deepAll(card51, 'state-note').map((n) => n.textContent) : [];
+  check('右栏卡把 form 排进来（只出现象：填了哪些值）',
+    notes51.includes('表单「feast1」') && notes51.includes('· 人数 = 6') && notes51.includes('· 备注 = 朋友聚餐'), notes51.join(' / '));
+
+  // 9) 渐进：流里 id 没落——已写出的字段先长出来（禁用，值没处续）；终态缺 id 是硬错
+  const prog = ui51.compileUiBlock(['kind: form', 'field: 人数 | number', 'field: 备注 | text'], true);
+  check('流里缺 id：已写字段先上台、input 禁用（诚实表达"还在长"）',
+    Boolean(prog.pending) && prog.html.includes('class="ui-field"') && prog.html.includes('disabled'), prog.html.slice(0, 300));
+  const progEnd = ui51.compileUiBlock(['kind: form', 'field: 人数 | number', 'field: 备注 | text'], false);
+  check('同样的内容闭合后（终态）缺 id 是硬错',
+    Boolean(progEnd.degraded) && progEnd.degraded.includes('没有 id'), String(progEnd.degraded));
+
+  // 10) XSS：id 与填进去的值照旧转义（引号不能长出脚本）
+  const xss51 = ui51.compileUiBlock(['kind: form', 'id: a" onfocus=alert(1) x="', 'field: 人数 | number'], false).html;
+  check('id 里的引号被转义', xss51.includes('&quot;'), xss51.slice(0, 200));
+  ui51.setUiValues('a" onfocus=alert(1) x="', 'form', { 人数: '"><script>alert(1)</script>', uiKind: 'form' });
+  const xss51b = ui51.compileUiBlock(['kind: form', 'id: a" onfocus=alert(1) x="', 'field: 人数 | number'], false).html;
+  check('填进去的值照旧转义（不能在 value 里长出脚本）',
+    !xss51b.includes('<script>') && xss51b.includes('&quot;&gt;&lt;script&gt;'), xss51b.slice(0, 400));
+
+  // 11) deck 组合：form 是可拼块（怎么买 + 填一张采购单）
+  const deckForm = ['kind: deck', 'title: 采购单',
+    'part: form', '  id: f2', '  field: 人数 | number', '  field: 备注 | text',
+    'part: checklist', '  id: ck2', '  item: 核对清单'];
+  const df = compile51(deckForm).html;
+  check('deck 里能拼 form（子块照旧按自己的 id 走）',
+    df.includes('data-ui-form="f2"') && df.includes('data-ui-check="ck2"'), df.slice(0, 400));
+  const dfr = handleUiDeskEvent({ target: { dataset: { uiField: 'f2', uiName: '人数' }, value: '8' } });
+  check('deck 内 form 子块照旧被接住（按子块自己的 id，走同一条通道）',
+    dfr.handled === true && dfr.kind === 'form' && ui51.readUiState('f2')?.state?.人数 === 8, JSON.stringify(dfr));
+
+  check('这一节无异常', errors.length === errsBefore51, errors.slice(errsBefore51).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

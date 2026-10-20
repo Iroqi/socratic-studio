@@ -2958,6 +2958,33 @@ function evalUiTerms(groups, values) {
   return Math.round(total * 1000) / 1000;
 }
 
+/** 台面上现在的内联表单（按 class 找：桩与浏览器在这一手上语义一致）。 */
+function uiFormNodes(id) {
+  return (document.querySelectorAll('.ui-form') || []).filter((n) => n.dataset?.uiForm === id);
+}
+
+/**
+ * form（第四十四轮）：字段动了一格，只重算 compute 输出、只改写该动的那几个字，
+ * **不重画整块**（整块重画会把正在输入的框换掉——敲一个字被换掉，手感当场没了；
+ * 这一档的全部意义就在于"填进去，结果跟着算"）。
+ * 读数按**发出去的顺序**对上 spec：输出与 spec.formulas 同序落一次，同序是可靠依据。
+ * 求值沿 evalUiTerms 同一口径：number 字段空着时 '' 参与乘除是 0、参与加法按 0，
+ * 不会拼出字符串。
+ */
+function repaintUiForm(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return;
+  for (const box of uiFormNodes(id)) {
+    const outs = box.querySelectorAll('.ui-out') || [];
+    rec.spec.formulas.forEach((f, i) => {
+      const holder = outs[i];
+      if (!holder) return;
+      const target = kids(holder).find((c) => c.classList?.contains('ui-out-value')) || holder;
+      target.textContent = String(evalUiTerms(f.terms, rec.state));
+    });
+  }
+}
+
 /**
  * handoff（第二十九轮，学 Intelligent UI 的 issueNewTurn 不学自动发言）：
  * 交互档把学习者当前的状态递回对话的唯一出口。点了把「勾了哪几项 / 参数滑到哪 /
@@ -2986,6 +3013,14 @@ function handoffUiState(id) {
   } else if (kind === 'calculator') {
     const parts = (rec.spec?.params || []).map((p) => `${p.name}=${rec.state?.[p.name] ?? p.def}`);
     text = `我在计算器「${name}」里调到：${parts.join('、')}`;
+  } else if (kind === 'form') {
+    const fitVal = (v) => { const t = String(v ?? ''); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
+    const filled = (rec.spec?.fields || [])
+      .filter((f) => { const v = rec.state?.[f.name]; return v !== '' && v !== undefined && v !== null; })
+      .map((f) => `${f.name}=${fitVal(rec.state[f.name])}`);
+    text = filled.length
+      ? `我在表单「${name}」里填了：${filled.slice(0, 5).join('、')}${filled.length > 5 ? '…' : ''}`
+      : `我在表单「${name}」里还没有填任何一项`;
   } else if (kind === 'diagram') {
     const active = rec.state?.active;
     const viewed = Object.keys(rec.state?.viewed || {}).filter((k) => rec.state.viewed[k]);
@@ -3117,6 +3152,32 @@ function handleUiDeskEvent(evt) {
     setUiValues(listId, 'checklist', { uiKind: 'checklist', done });
     forwardArtifactMessage({ type: 'state', state: { uiKind: 'checklist', done } }, uiStateKey(listId));
     return { handled: true, kind: 'checklist', id: listId };
+  }
+
+  // form（第四十四轮，学 IUI 的 "forms"——bill splitter 那一手）：填一个格子 =
+  // 学习者把自己的数 / 话放进界面。值按 id 存着（重画 / 刷新 / 下一回合续得回来），
+  // number 字段一动就重算 compute 输出——判分一个字都不在这儿发生（表单记"填了哪些值"，
+  // 不记"填对没"，对错仍是对话里的事）。
+  const formId = node.dataset?.uiField;
+  if (formId) {
+    const name = node.dataset?.uiName;
+    if (!name) return { handled: false };
+    const rec = readUiState(formId);
+    if (!rec?.spec) return { handled: false };
+    const field = rec.spec.fields.find((f) => f.name === name);
+    if (!field) return { handled: false };
+    let value;
+    if (field.type === 'number') {
+      const n = Number(node.value);
+      value = node.value === '' ? '' : (Number.isFinite(n) ? n : '');
+    } else {
+      value = String(node.value ?? '');
+    }
+    const state = { ...rec.state, [name]: value, uiKind: 'form' };
+    setUiValues(formId, 'form', state);
+    repaintUiForm(formId);
+    forwardArtifactMessage({ type: 'state', state }, uiStateKey(formId));
+    return { handled: true, kind: 'form', id: formId };
   }
 
   const calcId = node.dataset?.uiSlider;
@@ -3801,7 +3862,7 @@ function renderUiStatePanel(body) {
   );
   if (!entries.length) return;
   const fit = (s) => { const t = String(s); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
-  const word = { checklist: '清单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍' };
+  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍' };
   const card = el('div', 'ui-state-card');
   card.append(el('div', 'panel-section-title', '这局动过的界面'));
   for (const [key, s] of entries) {
@@ -3812,6 +3873,10 @@ function renderUiStatePanel(body) {
       const done = Object.keys(s.done || {}).filter((k) => s.done[k]);
       if (!done.length) card.append(el('div', 'state-note', '· 还没勾'));
       for (const k of done) card.append(el('div', 'state-note', `· ✓ ${fit(k)}`));
+    } else if (s.uiKind === 'form') {
+      const filled = Object.entries(s).filter(([k, v]) => k !== 'uiKind' && v !== '' && v !== undefined && v !== null);
+      if (filled.length) for (const [k, v] of filled) card.append(el('div', 'state-note', `· ${fit(k)} = ${fit(v)}`));
+      else card.append(el('div', 'state-note', '· 还没填'));
     } else if (s.uiKind === 'calculator') {
       for (const [k, v] of Object.entries(s)) {
         if (k === 'uiKind') continue;
@@ -5319,6 +5384,7 @@ export const __hooks = {
   applyUiMode,
   currentUiMode,
   repaintUiCalc,
+  repaintUiForm,
   evalUiTerms,
   textBlock,
   // 配置备份（第十四轮）：设置面板里的导出/导入设置块
