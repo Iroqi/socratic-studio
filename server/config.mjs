@@ -16,10 +16,14 @@ export const NOTEBOOKS_DIR = path.join(DATA_DIR, 'notebooks');
 export const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 export const CREDENTIALS_FILE = path.join(DATA_DIR, 'credentials.json');
 export const WEB_DIR = path.join(APP_DIR, 'web');
-// 对话窗口：模型输入侧只保留"开头一句 + 最近一段"（超过此条数才启用）。
+// 对话窗口：模型输入侧只保留"开头一句 + 窗口外学习者亲口的话 + 最近一段"（超过此条数才启用）。
 // 对话是最近发生的事，不是工作记忆——工作记忆是 Graph + Progress + 笔记（每回合注入）。
 // 窗口只作用于喂给模型的消息，落盘的对话一字不少。见 agent.mjs `windowHistory`。
 export const MAX_DIALOGUE_MESSAGES = 40;
+// 窗口外最多再保全多少条学习者亲口的话（role=user 且有实质内容的旧轮）。
+// 学习者的自述/解释/质疑是结构化层不捕获的证据（作答另由事件账本持有），
+// 讲解轮可以让位（结构在图谱/笔记里），学习者自己的话让位了模型就真不知道了。
+export const MAX_KEPT_LEARNER_MESSAGES = 8;
 // 教学规则全文：应用的运行时数据，每个回合原样注入 system prompt。
 // 放在 server/ 里是因为它只服务于这个应用——它不是文档，也不是可独立加载的 skill。
 export const RULES_DIR = path.join(path.dirname(__filename), 'rules');

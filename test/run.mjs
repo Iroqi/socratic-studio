@@ -3026,10 +3026,10 @@ check('让路后新文件原样还在', fs.existsSync(path.join(orphanDir, 'inde
 
 // ─────────────────────────────────────── 12e. 对话治理：模型输入的上下文窗口
 
-section('12e. 对话治理：模型输入只保留开头 + 最近一段，落盘一字不少');
+section('12e. 对话治理：模型输入保留开头 + 学习者亲口的话 + 最近一段，落盘一字不少');
 
 const { windowHistory } = await import('../server/agent.mjs');
-const { MAX_DIALOGUE_MESSAGES } = await import('../server/config.mjs');
+const { MAX_DIALOGUE_MESSAGES, MAX_KEPT_LEARNER_MESSAGES } = await import('../server/config.mjs');
 // buildSystemPrompt 已在第 7b 节正名导入（同一模块同一份缓存），这里直接用
 
 // 窗口只在历史超长时启用
@@ -3040,17 +3040,44 @@ const shortHistory = [
 ];
 check('短历史原样通过（窗口不动它）', windowHistory(shortHistory) === shortHistory, 'window 返回了别的对象');
 
-// 超长历史：保留开头第一条用户消息（锚点）+ 最近一段
+// 超长历史：保留开头第一条用户消息（锚点）+ 窗口外学习者亲口的话 + 最近一段
 const longHistory = [];
 for (let i = 0; i < 60; i += 1) {
   longHistory.push(i % 2 === 0 ? { role: 'user', content: `第 ${i} 句`, timestamp: i } : { role: 'assistant', content: `答 ${i}`, timestamp: i });
 }
 const windowed = windowHistory(longHistory);
+const winIdx = (m) => windowed.indexOf(m);
 check('超长历史被收到窗口上限', windowed.length === MAX_DIALOGUE_MESSAGES, `${windowed.length}/${MAX_DIALOGUE_MESSAGES}`);
 check('锚点保留：开头那条用户消息一定在窗口里', windowed[0] === longHistory[0], windowed[0]?.content);
 check('最近的对话在窗口里', windowed[windowed.length - 1] === longHistory[longHistory.length - 1], windowed[windowed.length - 1]?.content);
 check('锚点不重复（窗口里没有两条"第 0 句"）', windowed.filter((m) => m === longHistory[0]).length === 1, '重复了');
-check('窗口里没有中间那些旧轮', !windowed.some((m) => m === longHistory[10]), '中间轮溜进来了');
+// 第四十六轮起，窗口不只留"开头 + 最近"：窗口外学习者亲口的话（role=user 且非空）也要保全。
+// 讲解轮（assistant）照样让位——结构状态在图谱/笔记里，学习者自己的话让位了才是真丢。
+check('窗口外最近的学习者原话保全', windowed.includes(longHistory[28]), '第 28 句被丢了');
+check('保全的学习者原话按时间序', winIdx(longHistory[14]) < winIdx(longHistory[28]), '顺序乱了');
+check('窗口外讲解轮不进（assistant 让位）', !windowed.includes(longHistory[11]), 'assistant 混进来了');
+check('窗口外超预算的旧学习者轮不进来', !windowed.includes(longHistory[2]), '超预算旧轮进来了');
+check('窗口里没有重复消息', new Set(windowed).size === windowed.length, '有重复');
+
+// 学习者原话特别密的会话：保全预算必须封顶，窗口仍严格等于上限
+const denseUsers = [];
+for (let i = 0; i < 80; i += 1) {
+  denseUsers.push({ role: i === 0 ? 'user' : (i % 2 ? 'assistant' : 'user'), content: `d${i}`, timestamp: i });
+}
+const dw = windowHistory(denseUsers);
+const dwKept = dw.filter((m) => m !== denseUsers[0] && !denseUsers.slice(-31).includes(m));
+check('保全预算封顶（≤ MAX_KEPT_LEARNER_MESSAGES）', dwKept.length <= MAX_KEPT_LEARNER_MESSAGES, String(dwKept.length));
+check('预算封顶后窗口仍是上限', dw.length === MAX_DIALOGUE_MESSAGES, String(dw.length));
+
+// 预算没用满（窗口外学习者原话很少）时，省下的额度还给最近段——总条数仍等于上限
+const sparse = [];
+for (let i = 0; i < 45; i += 1) {
+  sparse.push(i === 0 ? { role: 'user', content: '目标', timestamp: i } : i === 5 ? { role: 'user', content: '唯一一条窗口外自述', timestamp: i } : { role: 'assistant', content: `答${i}`, timestamp: i });
+}
+const sw = windowHistory(sparse);
+check('预算没用满时最近段变长（总条数仍=上限）', sw.length === MAX_DIALOGUE_MESSAGES, String(sw.length));
+check('唯一那条窗口外自述被保全', sw.includes(sparse[5]), '窗口外自述丢了');
+check('自述插在锚点之后、最近段之前', sw.indexOf(sparse[5]) > 0 && sw.indexOf(sparse[5]) < sw.length - 30, `pos=${sw.indexOf(sparse[5])}`);
 
 // 锚点恰好也在最近一段里时不重复
 const overlapHistory = [];
@@ -3066,6 +3093,7 @@ check('短对话时 prompt 不出现窗口说明（不吓模型）', !slimPrompt
 const fatPrompt = buildSystemPrompt({ topic: 't', chat: { messages: longHistory } });
 check('窗口启用时 prompt 明说旧轮不在上下文（报告诚实）', fatPrompt.includes('对话窗口说明') && fatPrompt.includes('不要凭印象编造'), '没说明');
 check('窗口说明是"去笔记/图谱找"，不是让模型硬想', fatPrompt.includes('笔记') && fatPrompt.includes('图谱'), '没指向持久记忆');
+check('窗口说明告知学习者原话已保全', fatPrompt.includes('学习者亲口说过的话'), '没提保全');
 
 // ─────────────────────────────────────── 13. JEV 判定外包
 

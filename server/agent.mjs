@@ -9,7 +9,7 @@
 import { validateToolCall, Type } from '@earendil-works/pi-ai';
 import { topoSortConcepts, GraphValidationError, validateGraph } from './graph.mjs';
 import { appendPatch, applyPatchToGraph, patchError, stateWord, saveSceneState, appendDecisionJournal } from './store.mjs';
-import { MAX_DIALOGUE_MESSAGES } from './config.mjs';
+import { MAX_DIALOGUE_MESSAGES, MAX_KEPT_LEARNER_MESSAGES } from './config.mjs';
 import { saveNote } from './notes.mjs';
 import { jevDecide, DecisionError } from './decision.mjs';
 import {
@@ -1655,14 +1655,46 @@ function answerText(payload) {
  *
  * 锚点：开头第一条用户消息（学习目标/起点）。别的旧消息都可以让位，它不能让——
  * 模型得知道自己这一本在学什么，哪怕翻了场。
+ *
+ * 窗口外再保全学习者亲口的话（第四十六轮）：被让位的旧轮里最不该丢的是学习者自己
+ * 的输入——自述背景、答过的问题、自己说出的误解，这些是结构化层不捕获的证据
+ * （提问作答另由事件账本持有，自由输入只有对话里有）。讲解轮可以让位：结构状态在
+ * Graph + Progress + 笔记里，模型读得到。所以窗口从"开头 + 最近一段"扩成
+ * "开头 + 窗口外学习者亲口的话（至多 MAX_KEPT_LEARNER_MESSAGES 条，按时间序）+
+ * 最近一段"，总条数仍恒等于窗口上限。确定性选取：不看语义、不调模型，只看
+ * role=user 且内容非空；预算用不满时把省下的额度还给最近段（固定点收敛，
+ * 最近段尽可能长）。锚点永不去重、不重复。
  */
 export function windowHistory(history, cap = MAX_DIALOGUE_MESSAGES) {
   if (!history || !history.length) return [];
   if (history.length <= cap) return history;
   const firstUser = history.find((m) => m.role === 'user');
-  const rest = history.slice(-(cap - (firstUser ? 1 : 0)));
+  const keepBudget = Math.max(1, Math.min(MAX_KEPT_LEARNER_MESSAGES, cap - 2));
+  let recentLen = cap - 1 - keepBudget;
+  let kept = [];
+  // 固定点：先按"预算全用满"切最近段，收集窗口外的学习者原话；
+  // 预算没用满就把省下的额度还给最近段（最近段变长），再对变长的最近段重新收集
+  // （只会更少、不会更多）。kept 非增、recentLen 非减，≤ keepBudget 次后收敛。
+  for (;;) {
+    const recent = history.slice(-recentLen);
+    kept = [];
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+      const m = history[i];
+      if (m === firstUser || recent.includes(m)) continue;
+      if (m && m.role === 'user' && String(m.content || '').trim().length && kept.length < keepBudget) {
+        kept.unshift(m); // 倒序扫 + unshift = 按时间序
+      }
+    }
+    const nextLen = cap - 1 - kept.length;
+    if (nextLen === recentLen) break;
+    recentLen = nextLen;
+  }
+  const recent = history.slice(-recentLen);
   const out = firstUser ? [firstUser] : [];
-  for (const m of rest) {
+  for (const m of kept) {
+    if (m !== firstUser) out.push(m); // 保全的学习者原话插在锚点之后
+  }
+  for (const m of recent) {
     if (m !== firstUser) out.push(m); // 锚点已经在窗口里了就别重复
   }
   return out;
