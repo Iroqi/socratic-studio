@@ -1,6 +1,6 @@
-// 第四十五轮起验证：README 迭代年表 ↔ docs/ 档案 双向核对（第四十六轮把行数上限推进到 46）。
+// 第四十五轮起验证：README 迭代年表 ↔ docs/ 档案 双向核对（第四十八轮把行数上限推进到 48）。
 // 逐行断言：① 指针文件存在；② docs 文件名的日期与年表日期列完全一致（文件名日期是权威，
-// 每个日期+后缀唯一对应一轮）；③ docs 文件头声明了"第X轮"；④ 年表行数 = 22（25–46）。
+// 每个日期+后缀唯一对应一轮）；③ docs 文件头声明了"第X轮"；④ 年表行数 = 24（25–48）。
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
 const m = readme.match(/## 迭代年表（第二十五轮至今）\n([\s\S]*?)\n### 第四十五轮/);
 if (!m) throw new Error('年表节未找到');
 const rows = m[1].split('\n').filter((l) => /^\| \d+ \|/.test(l));
-if (rows.length !== 22) throw new Error(`年表行数 ${rows.length} ≠ 22（25–46）`);
+if (rows.length !== 24) throw new Error(`年表行数 ${rows.length} ≠ 24（25–48）`);
 
 let ok = 0;
 for (const row of rows) {
@@ -31,4 +31,4 @@ for (const row of rows) {
   if (fnameDate !== date) throw new Error(`行 ${round} 日期不一致: 表=${date} 文件=${fnameDate}`);
   ok += 1;
 }
-console.log(`年表 ↔ docs 双向核对：${ok}/22 行全部一致（文件存在、日期与文件名一致、档案头有轮次声明）`);
+console.log(`年表 ↔ docs 双向核对：${ok}/24 行全部一致（文件存在、日期与文件名一致、档案头有轮次声明）`);

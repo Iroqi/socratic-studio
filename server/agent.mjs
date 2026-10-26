@@ -363,10 +363,10 @@ export function buildTools() {
     {
       name: TOOL_NAMES.GET_GRAPH,
       description:
-        '读取当前 Learning Graph 与学习状态快照。续学、写讲解或制品、判断下一步之前调用，确认概念范围、误解与当前 state。',
+        '读取当前 Learning Graph 与学习状态快照（Graph / 进度 / 全部结构化笔记 / 补丁日志）。续学、写讲解或制品、判断下一步之前调用，确认概念范围、误解与当前 state。需要回想早先收过的笔记时，include=notes（或 all）会把学生「笔记」页上**全部**结构化笔记带回（含 key_points、example 与〔学生改过〕标记）——回读是准的，不要凭印象。',
       parameters: Type.Object({
         include: Type.Optional(
-          Type.String({ description: 'graph | progress | patch_log | all，默认 all' }),
+          Type.String({ description: 'graph | progress | notes | patch_log | all，默认 all' }),
         ),
       }),
     },
@@ -1101,6 +1101,22 @@ export class TeachingSession {
         })),
         notes: this.progress.notes || [],
       };
+    }
+    // 第四十七轮：回读路径补全。快照只被动注入最近 10 条笔记（title+summary），
+    // 更早的笔记（往往是打底定义）与 key_points/example 模型一直读不到，而 prompt 却承诺
+    // 「要回想先读笔记」——一句没有工具的承诺。现在 get_learning_graph 的 include=notes / all
+    // 把**全部**结构化笔记带回（含〔学生改过〕出处戳），「读笔记」从此是真实可做的动作。
+    if (include === 'all' || include === 'notes') {
+      out.handout = (this.notebook.notes || []).map((n) => ({
+        id: n.id,
+        title: n.title,
+        summary: n.summary,
+        key_points: n.key_points || [],
+        example: n.example || '',
+        concepts: n.concepts || [],
+        edited_by: n.edited_by || null,
+        createdAt: n.createdAt,
+      }));
     }
     if (include === 'all' || include === 'patch_log') {
       out.patch_log = (this.notebook.patches?.patches || []).map((p) => ({

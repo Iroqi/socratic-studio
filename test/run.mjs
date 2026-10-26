@@ -3095,6 +3095,66 @@ check('窗口启用时 prompt 明说旧轮不在上下文（报告诚实）', fa
 check('窗口说明是"去笔记/图谱找"，不是让模型硬想', fatPrompt.includes('笔记') && fatPrompt.includes('图谱'), '没指向持久记忆');
 check('窗口说明告知学习者原话已保全', fatPrompt.includes('学习者亲口说过的话'), '没提保全');
 
+// ─────────────────────────────────────── 12f. 回读路径：get_learning_graph 能带回全部结构化笔记
+
+section('12f. 回读路径：契约承诺的「读笔记」机制真实存在（第四十七轮）');
+
+// 第四十六轮让讲解轮让位的依据是「结构状态在图谱/笔记里，模型读得到」——但模型唯一能读的
+// get_learning_graph 此前并不带结构化笔记：快照只注入最近 10 条（title+summary），更早的笔记
+// （往往是打底定义）与 key_points/example 模型既看不见也读不回，prompt 却写「要回想先读笔记」——
+// 一句没有工具的承诺。本轮把回读路径补齐：include=notes / all 返回全部结构化笔记。
+const recallNotes = [];
+for (let i = 1; i <= 12; i += 1) {
+  recallNotes.push({
+    id: `note-${i}`,
+    title: `第 ${i} 课${i === 1 ? '（打底定义：闭包是什么）' : ''}`,
+    summary: `第 ${i} 课的摘要`,
+    key_points: [`要点 ${i}a`, `要点 ${i}b`],
+    example: `第 ${i} 课的例子`,
+    concepts: [`c${i}`],
+    createdAt: `2026-10-0${i}T00:00:00Z`,
+    ...(i === 3 ? { edited_by: 'user', edited_at: '2026-10-05T00:00:00Z' } : {}),
+  });
+}
+const recallSession = new TeachingSession({
+  registry,
+  notebook: {
+    notes: recallNotes,
+    graph: { meta: {}, concepts: [{ id: 'c1', name: '闭包', summary: 's', depends_on: [] }] },
+    progress: { concepts: {}, session_open: true },
+    patches: { patches: [] },
+    todos: [],
+    scene: null,
+    chat: { messages: [] },
+  },
+  emit: () => {},
+  systemPrompt: '',
+});
+const notesRead = await recallSession.execGetGraph({ include: 'notes' });
+check('include=notes 带回全部结构化笔记（12 条一条不少）',
+  notesRead.ok !== false && Array.isArray(notesRead.handout) && notesRead.handout.length === 12,
+  `got ${notesRead.handout?.length}`);
+check('打底定义（第 1 条，早于快照 10 条窗口）也在回读里',
+  notesRead.handout?.some((n) => n.id === 'note-1' && n.title.includes('打底定义')), 'note-1 丢了');
+check('回读比快照更全：key_points 与 example 都在（快照只给 title+summary）',
+  notesRead.handout?.some((n) => n.id === 'note-1' && n.key_points?.length === 2 && n.example?.includes('例子')), '字段不全');
+check('〔学生改过〕的出处戳跟着走（模型要知道以谁的版本为准）',
+  notesRead.handout?.some((n) => n.id === 'note-3' && n.edited_by === 'user'), 'edited_by 丢了');
+const allRead = await recallSession.execGetGraph({ include: 'all' });
+check('include=all 同样带回全部笔记（默认路径不落下）',
+  Array.isArray(allRead.handout) && allRead.handout.length === 12, `got ${allRead.handout?.length}`);
+const graphOnly = await recallSession.execGetGraph({ include: 'graph' });
+check('include=graph 不带笔记（窄读不被动变重）', !('handout' in graphOnly), JSON.stringify(Object.keys(graphOnly)));
+const progressOnlyRecall = await recallSession.execGetGraph({ include: 'progress' });
+check('include=progress 不带笔记', !('handout' in progressOnlyRecall), JSON.stringify(Object.keys(progressOnlyRecall)));
+const recallGraphTool = buildTools().find((t) => t.name === TOOL_NAMES.GET_GRAPH);
+check('工具描述明说「全部结构化笔记」（模型知道回读路径存在）',
+  recallGraphTool?.description.includes('全部结构化笔记'), '描述没提笔记');
+check('工具 include 参数列了 notes',
+  recallGraphTool?.parameters?.properties?.include?.description.includes('notes'), 'include 没列 notes');
+check('窗口说明把「读笔记」落成真机制（点名 get_learning_graph，承诺有工具）',
+  fatPrompt.includes('get_learning_graph'), '承诺仍是无工具承诺');
+
 // ─────────────────────────────────────── 13. JEV 判定外包
 
 section('13. JEV 判定外包（决策模型做判定，状态机不做法官）');
