@@ -6,7 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { RULES_DIR, MAX_DIALOGUE_MESSAGES } from './config.mjs';
+import { RULES_DIR, MAX_DIALOGUE_MESSAGES, MAX_KEPT_LEARNER_MESSAGES } from './config.mjs';
 import { topoSortConcepts } from './graph.mjs';
 import { stateWord, retestCandidates } from './store.mjs';
 import { renderSceneSnapshot } from './scene.mjs';
@@ -453,16 +453,23 @@ export function renderStateSnapshot(notebook) {
 export function buildSystemPrompt(notebook) {
   const parts = [loadRulesText(), APP_ADAPTER, renderStateSnapshot(notebook)];
   // 对话治理必须明说：窗口只作用于模型输入，落盘的对话一字不少，但**模型读不到窗口外
-  // 的旧轮**。不说明白，模型可能凭印象编造学习者早先说过的话；要回想，先读「笔记」页
-  // 与图谱。窗口外学习者亲口说过的话会原样保全（role=user 且有实质内容的旧轮），
-  // 讲解与讨论会让位——那是可查的，学习者自己的话让位了才是真丢。
+  // 的旧轮**。不说明白，模型可能凭印象编造学习者早先说过的话。窗口外学习者亲口说过的话
+  // 至多保全 MAX_KEPT_LEARNER_MESSAGES 条（role=user 且有实质内容的旧轮），讲解与讨论会让位——
+  // 那是可查的，学习者自己的话让位了才是真丢。所以这段话必须同时说清三件事：① 窗口的事实；
+  // ② 什么读得到（你写进「笔记」页 / 图谱 / 进度备注的）与什么读不到（窗口外的原话，盘上有
+  // 但你读不到）；③ 对策——学习者给出关键自述/背景/约束/误解时当场写进结构层，别等窗口丢掉。
+  // 第四十九轮把旧文案里「一字未删，都在「笔记」页与概念图谱里」这句假话删了：自由输入不在
+  // 结构层，承诺它读得到就是让模型凭假设编造。
   if ((notebook.chat?.messages?.length || 0) > MAX_DIALOGUE_MESSAGES) {
     parts.push(
       '\n===== 对话窗口说明 =====\n\n' +
         '本会话的对话在模型输入侧做了窗口化：只保留开头一句（学习起点）、最近一段，' +
-        '以及窗口外学习者亲口说过的话（自己的话优先保全）。更早的讲解与讨论不在你的上下文里。' +
-        '那些内容**一字未删**，都在「笔记」页与概念图谱里。' +
-        '需要回想早先说过的话时，用 get_learning_graph 读回（include=notes 或 all 会把全部结构化笔记一起带回），不要凭印象编造。',
+        '以及窗口外学习者亲口说过的话（至多 ' + MAX_KEPT_LEARNER_MESSAGES + ' 条，自己的话优先保全）。' +
+        '更早的讲解与讨论不在你的上下文里——那些原话盘上有，但你读不到。\n' +
+        '你写进「笔记」页、概念图谱与进度备注的内容都读得到：用 get_learning_graph 读回（include=notes 或 all 会把全部结构化笔记一起带回）。' +
+        '不要凭印象编造学习者早先说过的话。\n' +
+        '所以学习者说出关键自述 / 背景 / 约束 / 误解时，**当场写进结构层**：知识点用 compile_notes，' +
+        '观察与记仇用 set_progress_state 的 session_note 或概念 note——别等窗口把它丢掉，丢了你读不到，也不能装作记得。',
     );
   }
   return parts.join('\n\n');

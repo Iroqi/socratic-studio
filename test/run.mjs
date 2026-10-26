@@ -3937,6 +3937,33 @@ section('12m. 配置备份要过同一道闸：坏的时候不许出货');
 }
 
 
+// ─────────────────────────────────────── 12n. 窗口说明的诚实性：承诺 ≤ 能力 + 写协议（第四十九轮）
+{
+  // 第四十六轮定下窗口 = 锚点 + 窗口外学习者亲口的话（至多 MAX_KEPT_LEARNER_MESSAGES 条）+ 最近一段；
+  // 第四十八轮让「读笔记」成为真实动作。但窗口说明当时还写着「那些内容一字未删，都在「笔记」页
+  // 与概念图谱里」——学习者自由输入（自述/解释/质疑）不在结构层，这句是假话：8 条预算之外的原话
+  // 盘上有、模型读不到，而它却被教成「都在笔记里，先读笔记」。本轮把它改成诚实版：
+  // ① 窗口事实 + 至多 N 条（N 取自 config，单一事实源）；② 什么读得到（写进结构层的）vs 什么读不到
+  // （窗口外原话）；③ 写协议——关键自述/背景/约束/误解当场写进结构层（compile_notes /
+  // set_progress_state session_note / 概念 note），别等窗口丢掉。
+  const nSlim = buildSystemPrompt({ topic: 't', chat: { messages: shortHistory } });
+  check('12n 短对话不出现窗口说明（照旧不吓模型）', !nSlim.includes('对话窗口说明'), '短对话带了窗口说明');
+  const nFat = buildSystemPrompt({ topic: 't', chat: { messages: longHistory } });
+  // 断言全部收窄到「对话窗口说明」块本身（nNote）：整份 prompt 里"至多 8 条"在 question 档
+  // 语法里也有，不切块就会假绿——判据没钉住对象，变异抓不出来（本轮变体 B 就栽在这）。
+  const nNote = (nFat.split('===== 对话窗口说明 =====')[1] || '');
+  check('12n 窗口说明不再承诺「都在笔记页与图谱里」', !nNote.includes('都在「笔记」页与概念图谱里') && !nNote.includes('一字未删'), '假话还在');
+  check('12n 窗口说明明说原话上限（至多 N 条，与 config 同源）', nNote.includes(`至多 ${MAX_KEPT_LEARNER_MESSAGES} 条`), '上限没写或与 config 漂移');
+  check('12n 窗口说明明说更早原话盘上有但你读不到', nNote.includes('盘上有，但你读不到'), '没说读不到');
+  check('12n 窗口说明给「当场写进结构层」的写协议', nNote.includes('当场写进结构层') && nNote.includes('compile_notes') && nNote.includes('session_note'), '没给写协议');
+  check('12n 回读路径仍然点名 get_learning_graph', nNote.includes('get_learning_graph') && nNote.includes('include=notes 或 all'), '回读指向没了');
+  // 12e 四钉子原样保留：笔记 / 图谱 / 不要凭印象编造 / 学习者亲口说过的话
+  check('12n 钉子：不要凭印象编造', nFat.includes('不要凭印象编造'), '钉子掉了');
+  check('12n 钉子：笔记与图谱', nFat.includes('笔记') && nFat.includes('图谱'), '钉子掉了');
+  check('12n 钉子：学习者亲口说过的话', nFat.includes('学习者亲口说过的话'), '钉子掉了');
+}
+
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);
