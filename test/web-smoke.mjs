@@ -4036,7 +4036,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('退回时说明为什么（一句"没能编译"不给原因=白屏另一种写法）',
     /没有「pie」这一档界面/.test(unknown.html), unknown.html.slice(0, 220));
   check('降级理由里带可用档（让人一眼知道能写什么，不用猜）',
-    unknown.html.includes('compare / steps / timeline / checklist / form / calculator / diagram'), unknown.html.slice(0, 300));
+    unknown.html.includes('compare / steps / timeline / map / checklist / form / calculator / diagram'), unknown.html.slice(0, 300));
   check('对齐不上的 compare 不硬编（每行格数不同就别画表）',
     Boolean(compile(['kind: compare', 'row: a | b', 'row: c | d | e']).degraded));
 
@@ -6156,6 +6156,254 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     dfr.handled === true && dfr.kind === 'form' && ui51.readUiState('f2')?.state?.人数 === 8, JSON.stringify(dfr));
 
   check('这一节无异常', errors.length === errsBefore51, errors.slice(errsBefore51).join(' | '));
+}
+
+// ─── 52. map：把"谁在哪儿、沿一条线怎么走"摆进界面（第四十七轮，学 IUI 官方举例里
+// "the stops on a road trip can appear on a map"那一格——博文点名的组件形状里，唯一在这版还没有
+// 对应档的那一个。缺的是**空间**这一维：timeline 管"什么时候"、compare 管"逐项对上"、
+// diagram 管"谁连着谁"，没有一档管"在哪儿"。map 是第九交互档：id 必填、stop 2–12 个
+// （名字是身份、位置是 `x,y` 两个 0–100 的整数）、route 是**一条有序线**（不是网）、
+// 状态 {active, viewed} 落盘续回、点一个点就地换面板、handoff 拼句、右栏回看卡可见。
+// 宿主不画底图、不接瓦片、不发一个请求：位置是写进去的教学内容；坐标学习者看不见、
+// 界面里没对错没分数（Invariant 4 一条不破），"他看了哪个点"是现象不是判分。
+{
+  console.log('\n52. map（把位置摆进界面：点一个点看它在哪儿，看过哪个点记进状态，判分留在对话里）');
+  const errsBefore52 = errors.length;
+  const ui52 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { state: st52, handleUiDeskEvent: handle52, handleUiDeskKey: key52, renderDeskState: renderPanel52 } = appModule.__hooks;
+  const compile52 = (lines, partial) => ui52.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const deg52 = (lines) => ui52.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  ui52.resetUiState();
+  const input52 = doc.getElementById('input');
+  const trip = ['kind: map', 'id: g318', 'title: 318 国道东段',
+    'stop: 成都 | 6,90 | 起点，平原上的菜市场',
+    'stop: 康定 | 38,62 | 折多山从这里开始',
+    'stop: 林芝 | 72,34 | 三月桃花',
+    'stop: 拉萨 | 94,18 | 终点',
+    'route: 成都 > 康定 > 林芝 > 拉萨',
+    'handoff: 把看过的点带回对话'];
+
+  // 1) 编译形状：一块示意框 + 一条折线 + 四个点（圈 + 名字）+ 一块面板
+  const c52 = compile52(trip).html;
+  check('map 编译成一块示意框（svg 带归属 id，点各自带 id 与名字）',
+    c52.includes('<div class="ui-map" data-ui-map="g318"') &&
+    (c52.match(/<g class="ui-pin/g) || []).length === 4 &&
+    c52.includes('data-ui-map-stop="g318"') && c52.includes('data-ui-name="康定"'), c52.slice(0, 500));
+  check('点是可点的（role=button + tabindex，键盘走同一条路）',
+    (c52.match(/role="button"/g) || []).length === 4 && (c52.match(/tabindex="0"/g) || []).length === 4, c52.slice(0, 500));
+  check('route 编译成一条折线（压在点底下，线只在声明过的点之间走）',
+    c52.includes('<polyline class="ui-map-route" points="') &&
+    (c52.match(/<polyline/g) || []).length === 1, c52.slice(0, 500));
+  check('几何由位置决定、与输入顺序无关（同一个点永远落在同一个像素上）',
+    c52.includes('cx="' + (26 + (38 / 100) * 288).toFixed(1) + '"'), c52.slice(0, 500));
+  check('名字标签的锚点跟着点在框里的位置走（贴西边的左对齐、贴东边的右对齐）',
+    c52.includes('text-anchor="start"') && c52.includes('text-anchor="end"') && c52.includes('text-anchor="middle"'), c52.slice(0, 600));
+  check('面板开局给一句引导（还没点过，就说"点一个点"）',
+    c52.includes('<p class="ui-map-pane-hint">点一个点，看它在哪儿；位置是示意的，不按比例</p>'), c52.slice(-500));
+  check('title 帽 + handoff 按钮（沿交互档的既有出口）',
+    c52.includes('class="ui-cap"') && c52.includes('class="ui-handoff" data-ui-handoff="g318"'), c52.slice(-300));
+  check('读屏名里说清"不按比例"（示意的框不能读成真地图）',
+    c52.includes('aria-label="示意地图：318 国道东段（不按比例）"'), c52.slice(0, 400));
+  check('编译输出没有判分词，学习者也不看得见原始坐标（Invariant 4：位置不进学情）',
+    !/score|percent|mastery|correct|incorrect/.test(c52) && !c52.includes('38,62'), c52.slice(0, 400));
+  check('spec 里点与路线都存下了（点击时要取现成的那份，不重解析围栏）',
+    ui52.readUiState('g318')?.spec?.stops?.length === 4 && ui52.readUiState('g318')?.spec?.route?.length === 4,
+    JSON.stringify(ui52.readUiState('g318')?.spec).slice(0, 200));
+  ui52.resetUiState();
+
+  // 2) 确定性：同一份输入两次编译一模一样（流式每帧重编，跳来跳去的图没法对着问）
+  check('map 两次编译一模一样', compile52(trip).html === c52, '');
+
+  // 3) 状态续回：上次停在哪个点，重画就回到哪个点（active 驱动 class 与面板）
+  compile52(trip);
+  ui52.setUiValues('g318', 'map', { active: '康定', viewed: { 康定: true }, uiKind: 'map' });
+  const c52b = compile52(trip).html;
+  check('重画续回上次点开的点（class + aria-pressed）',
+    c52b.includes('class="ui-pin ui-pin-active" data-ui-map-stop="g318" data-ui-name="康定"') &&
+    c52b.includes('aria-pressed="true"'), c52b.slice(0, 600));
+  check('面板换上那个点的那句话（名字 + 一句话，来自编译时存下的 spec）',
+    c52b.includes('<p class="ui-map-pane-name">康定</p>') && c52b.includes('折多山从这里开始'), c52b.slice(-500));
+  ui52.resetUiState();
+
+  // 4) 降级路径：不静默吞——每条都点名为什么不行
+  check('没有 id：掉回原文并点名（点开看过哪个点没地方续）',
+    Boolean(deg52(['kind: map', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18']).includes('这张图没有 id')), '');
+  check('一行 stop 都没有：掉回原文并点名',
+    Boolean(deg52(['kind: map', 'id: a']).includes('一行 stop 都没有')), '');
+  check('只有一个点：掉回原文并点名（一个点没有位置关系可言）',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90']).includes('至少 2 个点')), '');
+  const thirteen = ['kind: map', 'id: a', ...Array.from({ length: 13 }, (_, i) => 'stop: 点' + i + ' | ' + i * 7 + ',' + i * 5)];
+  check('超过 12 个点：掉回原文并点名（那是名录，逐项查数值用 compare）',
+    Boolean(deg52(thirteen).includes('点太多了')), '');
+  check('stop 行少一段（没写位置）：掉回原文并点名',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都', 'stop: 拉萨 | 94,18']).includes('名字 | x,y')), '');
+  check('位置不是「x,y」两个整数：掉回原文并点名（小数、带单位一律不猜）',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 38.5,62', 'stop: 拉萨 | 94,18']).includes('0–100 的整数')), '');
+  check('位置越界（x=120）：掉回原文并点名',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 120,62', 'stop: 拉萨 | 94,18']).includes('0–100 的整数')), '');
+  check('两个点同名：掉回原文并点名（点了说不清是哪个）',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 成都 | 94,18']).includes('写了两遍')), '');
+  check('两个点落在同一个位置上：掉回原文并点名（叠在一起分不出谁是谁）',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 拉萨 | 6, 90']).includes('同一个位置')), '');
+  check('点名太长：掉回原文并点名',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: ' + '名'.repeat(21) + ' | 6,90', 'stop: 拉萨 | 94,18']).includes('太长了')), '');
+  const longNote = 'stop: 成都 | 6,90 | ' + '一'.repeat(81);
+  check('一句话太长：掉回原文并点名',
+    Boolean(deg52(['kind: map', 'id: a', longNote, 'stop: 拉萨 | 94,18']).includes('一句话太长')), '');
+  check('route 只写一个名字：掉回原文并点名',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18', 'route: 成都']).includes('至少两段')), '');
+  check('route 里有个空名字：掉回原文并点名',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18', 'route: 成都 >']).includes('空的名字')), '');
+  check('route 引了没声明的点：掉回原文并点名（线只能连已声明的点）',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18', 'route: 成都 > 昌都']).includes('没在 stop 里声明')), '');
+  check('route 走回同一个点：掉回原文并点名（一条线不许是回路，那是 diagram）',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18', 'route: 成都 > 拉萨 > 成都']).includes('回路')), '');
+  check('写两行 route：掉回原文并点名（一张图一条线）',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18', 'route: 成都 > 拉萨', 'route: 拉萨 > 成都']).includes('route 只写一行')), '');
+  check('map 里写 item（checklist 档的字段）：掉回原文并点名',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18', 'item: 一项']).includes('不是 map 的字段')), '');
+  check('map 里写 node / edge：掉回原文并点名（谁连着谁用 diagram）',
+    Boolean(deg52(['kind: map', 'id: a', 'node: 甲', 'node: 乙', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18']).includes('diagram 的字段')), '');
+  check('map 里写 table：掉回原文并点名',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18', 'table: 一张表']).includes('table 只配带 slider')), '');
+  check('handoff 超 24 字：掉回原文并点名',
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18', 'handoff: ' + '发'.repeat(25)]).includes('24')), '');
+  // 语义词写错档：stop / route 是 map 的词，写在别的档 = 掉回原文并点名（同一把尺）
+  check('stop 写在 compare：掉回原文并点名',
+    Boolean(deg52(['kind: compare', 'row: 甲 | 乙', 'row: 丙 | 丁', 'stop: 成都 | 6,90']).includes('只配带 id 的 map')), '');
+  check('route 写在 timeline：掉回原文并点名',
+    Boolean(deg52(['kind: timeline', 'time: 事件 | 1990', 'route: 甲 > 乙']).includes('只配带 id 的 map')), '');
+  check('stop 写在 diagram：掉回原文并点名（位置不是连线）',
+    Boolean(deg52(['kind: diagram', 'id: g9', 'node: 甲', 'node: 乙', 'edge: 甲 > 乙 | 关系', 'stop: 成都 | 6,90']).includes('只配带 id 的 map')), '');
+  check('stop 写在 checklist：掉回原文并点名',
+    Boolean(deg52(['kind: checklist', 'id: a', 'item: 一项', 'stop: 成都 | 6,90']).includes('只配带 id 的 map')), '');
+
+  // 5) 宿主接线：点一个点 → active/viewed 落对 + 报回（判分一个字都不发生）
+  st52.notebook = sampleNotebook();
+  st52.uiReported.clear();
+  const posts52 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const before52 = posts52();
+  compile52(trip); // spec 进 Map（宿主点击要靠 spec.stops 认点名）
+  const r52 = handle52({ target: { dataset: { uiMapStop: 'g318', uiName: '康定' } } });
+  check('点一个点被接住（返回是哪一档、哪张图）',
+    r52.handled === true && r52.kind === 'map' && r52.id === 'g318', JSON.stringify(r52));
+  const st52a = ui52.readUiState('g318');
+  check('active 落在点的那个点、viewed 记下看过它',
+    st52a.state.active === '康定' && st52a.state.viewed['康定'] === true, JSON.stringify(st52a.state));
+  check('状态走 artifact-message 报回（与其它交互档同一条通道）', posts52() === before52 + 1, 'posts ' + before52 + ' → ' + posts52());
+  check('报回去的state里没有判分的位置（只有看了哪，没有对错分数）',
+    !/correct|incorrect|score|percent/.test(JSON.stringify(st52a.state)), JSON.stringify(st52a.state));
+  const r52b = handle52({ target: { dataset: { uiMapStop: 'g318', uiName: '林芝' } } });
+  check('再点另一个点：active 换过去、viewed 追加',
+    r52b.handled === true && ui52.readUiState('g318').state.active === '林芝' && ui52.readUiState('g318').state.viewed['林芝'] === true,
+    JSON.stringify(ui52.readUiState('g318').state));
+  const r52c = handle52({ target: { dataset: { uiMapStop: 'g318', uiName: '林芝' } } });
+  check('再点当前那个点：收回去（没有"停在哪儿"了，看过的还在状态里）',
+    r52c.handled === true && ui52.readUiState('g318').state.active === null && ui52.readUiState('g318').state.viewed['林芝'] === true,
+    JSON.stringify(ui52.readUiState('g318').state));
+  const r52d = handle52({ target: { dataset: { uiMapStop: 'nope', uiName: '康定' } } });
+  check('不认得的 id 点不响（没 spec 就不知道有哪些点）', r52d.handled === false, JSON.stringify(r52d));
+  const r52e = handle52({ target: { dataset: { uiMapStop: 'g318', uiName: '西昌' } } });
+  check('点了没声明过的名字：点不响（不拿没见过的名字去拼状态）', r52e.handled === false, JSON.stringify(r52e));
+  const k52 = key52({ key: 'Enter', target: { dataset: { uiMapStop: 'g318', uiName: '成都' } }, preventDefault: () => {} });
+  check('回车在点上就是一次点击（SVG 的 g 不是原生按钮，宿主接键盘）',
+    k52.handled === true && ui52.readUiState('g318').state.active === '成都', JSON.stringify(k52));
+
+  // 6) repaint：只换点的激活态与面板（整块不重画；正文那一刷会跳滚动）
+  ui52.resetUiState();
+  compile52(trip);
+  const mapBlock52 = doc.createElement('div'); mapBlock52.className = 'ui-map'; mapBlock52.dataset.uiMap = 'g318';
+  const pinA52 = doc.createElement('g'); pinA52.className = 'ui-pin'; pinA52.dataset.uiMapStop = 'g318'; pinA52.dataset.uiName = '成都';
+  const pinB52 = doc.createElement('g'); pinB52.className = 'ui-pin'; pinB52.dataset.uiMapStop = 'g318'; pinB52.dataset.uiName = '康定';
+  const pane52 = doc.createElement('div'); pane52.className = 'ui-map-pane';
+  const hint52 = doc.createElement('p'); hint52.className = 'ui-map-pane-hint';
+  hint52.textContent = '点一个点，看它在哪儿；位置是示意的，不按比例';
+  pane52.append(hint52);
+  mapBlock52.append(pinA52, pinB52, pane52);
+  domRoot.append(mapBlock52);
+  handle52({ target: { dataset: { uiMapStop: 'g318', uiName: '康定' } } });
+  check('repaint 把激活态换过去（class + aria-pressed）',
+    pinB52.classList.contains('ui-pin-active') && pinB52.attributes.get('aria-pressed') === 'true' &&
+    !pinA52.classList.contains('ui-pin-active'), '');
+  check('repaint 只换面板内容（块还在原处、点没被换掉）',
+    domRoot._kids.includes(mapBlock52) && pane52._kids.length === 2 && pane52._kids[0]._text === '康定', '');
+  check('面板那句与编译器写的是同一句（回收时不重新组织语言）',
+    pane52._kids[0].className === 'ui-map-pane-name' && pane52._kids[1]?.className === 'ui-map-pane-note' &&
+    pane52._kids[1]?._text === '折多山从这里开始', '');
+  handle52({ target: { dataset: { uiMapStop: 'g318', uiName: '康定' } } });
+  check('收回去时面板换回引导语（同一句话，两边逐字一致）',
+    pane52._kids.length === 1 && pane52._kids[0].className === 'ui-map-pane-hint' &&
+    pane52._kids[0]._text === '点一个点，看它在哪儿；位置是示意的，不按比例', '');
+  mapBlock52.remove();
+
+  // 7) handoff：把"点开看了哪个点"机械地拼成话递回对话（不自动发）
+  const spec52 = ui52.readUiState('g318')?.spec;
+  const boxBefore52 = input52.value;
+  ui52.writeUiState('g318', 'map', { active: '拉萨', viewed: { 康定: true, 拉萨: true }, uiKind: 'map' }, spec52);
+  const r52h = handle52({ target: { dataset: { uiHandoff: 'g318' } } });
+  check('map 的 handoff 被接住（返回是哪个 id）',
+    r52h.handled === true && r52h.kind === 'handoff' && r52h.id === 'g318', JSON.stringify(r52h));
+  check('拼句：我在地图「318 国道东段」里点开看了：拉萨（说的是看了哪，不是会了）',
+    input52.value === '我在地图「318 国道东段」里点开看了：拉萨', input52.value);
+  ui52.writeUiState('g318', 'map', { active: null, viewed: { 康定: true }, uiKind: 'map' }, spec52);
+  handle52({ target: { dataset: { uiHandoff: 'g318' } } });
+  check('收回去了但看过：照实说看过哪个点', input52.value === '我在地图「318 国道东段」里看过：康定', input52.value);
+  ui52.writeUiState('g318', 'map', { active: null, viewed: {}, uiKind: 'map' }, spec52);
+  handle52({ target: { dataset: { uiHandoff: 'g318' } } });
+  check('一个点都没点开：照实说还没有点开任何点',
+    input52.value === '我在地图「318 国道东段」里还没有点开任何点', input52.value);
+  check('拼句里没有判分词（Invariant 4：话里不出对错/分数）',
+    !/score|percent|mastery|correct|incorrect/.test(input52.value), input52.value);
+  input52.value = boxBefore52;
+
+  // 8) 右栏回看卡：map 出现在「这局动过的界面」（与 hydrate 同一条筛子）
+  st52.notebook.progress.artifact_state = { 'ui:g318': { uiKind: 'map', active: '康定', viewed: { 康定: true } } };
+  renderPanel52();
+  const card52 = deepAll(deskBody(), 'ui-state-card')[0] || null;
+  const notes52 = card52 ? deepAll(card52, 'state-note').map((n) => n.textContent) : [];
+  check('右栏卡把 map 排进来（只出现象：看过哪个点、现在停在哪个点）',
+    notes52.includes('地图「g318」') && notes52.includes('· 看过：康定') && notes52.includes('· 现在停在：康定'), notes52.join(' / '));
+  st52.notebook.progress.artifact_state = { 'ui:g318': { uiKind: 'map', active: null, viewed: {} } };
+  renderPanel52();
+  const card52b = deepAll(deskBody(), 'ui-state-card')[0] || null;
+  const notes52b = card52b ? deepAll(card52b, 'state-note').map((n) => n.textContent) : [];
+  check('一个点都没点开：卡上照实说还没点过', notes52b.includes('· 还没点过'), notes52b.join(' / '));
+
+  // 9) 渐进：id 没落——点先上台但不响；路线走在点前面——这一帧先不画线
+  const prog52 = ui52.compileUiBlock(['kind: map', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18'], true);
+  check('流里缺 id：点先上台、但不带 data-*（点了没处存，与 form 的 disabled 同一手法）',
+    Boolean(prog52.pending) && prog52.html.includes('class="ui-pin') && !prog52.html.includes('data-ui-map-stop'),
+    prog52.html.slice(0, 300));
+  check('同样的内容闭合后（终态）缺 id 是硬错',
+    Boolean(ui52.compileUiBlock(['kind: map', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18'], false).degraded?.includes('这张图没有 id')), '');
+  const progHalf = ui52.compileUiBlock(['kind: map', 'id: m9', 'stop: 成都 | 6,90', 'stop: 康定 | 3'], true);
+  check('半行 stop：那一行先不长，已写出的点照常上台（流里的宽容，不是判失败）',
+    Boolean(progHalf.html) && !progHalf.degraded && progHalf.html.includes('成都') && !progHalf.html.includes('康定'),
+    String(progHalf.degraded || progHalf.html).slice(0, 300));
+  const progRoute = ui52.compileUiBlock(['kind: map', 'id: m9', 'route: 成都 >', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18'], true);
+  check('半条 route：这一帧不画线（已经写出的点照常上台）',
+    Boolean(progRoute.html) && !progRoute.html.includes('<polyline') && progRoute.html.includes('data-ui-name="成都"'),
+    String(progRoute.degraded || progRoute.html).slice(0, 200));
+
+  // 10) XSS：id、点名、一句话照旧转义（引号不能长出脚本）
+  const xss52 = ui52.compileUiBlock(['kind: map', 'id: a" onfocus=alert(1) x="', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18'], false).html;
+  check('id 里的引号被转义', xss52.includes('&quot;'), xss52.slice(0, 200));
+  const xss52b = ui52.compileUiBlock(['kind: map', 'id: m2', 'stop: ' + '"><img x=1>' + ' | 6,90', 'stop: 拉萨 | 94,18'], false).html;
+  check('点名里的标签被转义（不能在 svg 里长出脚本）',
+    !xss52b.includes('<img') && xss52b.includes('&lt;img'), xss52b.slice(0, 500));
+
+  // 11) deck 组合：map 是可拼块（一张图 + 一份清单：沿线的点与要带的水）
+  const deckMap = ['kind: deck', 'title: 走一趟',
+    'part: map', '  id: m3', '  stop: 成都 | 6,90 | 起点', '  stop: 拉萨 | 94,18 | 终点', '  route: 成都 > 拉萨',
+    'part: checklist', '  id: ck3', '  item: 带上水'];
+  const dm = compile52(deckMap).html;
+  check('deck 里能拼 map（子块照旧按自己的 id 走）',
+    dm.includes('data-ui-map="m3"') && dm.includes('data-ui-check="ck3"'), dm.slice(0, 400));
+  const dmr = handle52({ target: { dataset: { uiMapStop: 'm3', uiName: '拉萨' } } });
+  check('deck 内 map 子块照旧被接住（按子块自己的 id，走同一条通道）',
+    dmr.handled === true && dmr.kind === 'map' && ui52.readUiState('m3')?.state?.active === '拉萨', JSON.stringify(dmr));
+
+  check('这一节无异常', errors.length === errsBefore52, errors.slice(errsBefore52).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

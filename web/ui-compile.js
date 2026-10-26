@@ -22,7 +22,7 @@
 import { escapeHtml } from './escape.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'timeline', 'checklist', 'form', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'deck', 'question', 'canvas'];
+export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'deck', 'question', 'canvas'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -41,8 +41,9 @@ export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'met
  * explore 第三十三轮："点开看了哪一面"就是状态（一个整体拆成几面，分段按钮逐面看）。
  * walkthrough 第三十六轮："走到哪一步"就是状态（一次只露一步，逐步走完一个问题）。
  * form 第四十四轮："填进去的值"就是状态（学习者的数/话放进界面，按 id 续着）。
+ * map 第四十七轮："点开看了哪个点"就是状态（点位落在示意框里，点一个看它的那句话）。
  */
-export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough'];
+export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map'];
 
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
@@ -220,6 +221,7 @@ function compileCompare(fields, lines) {
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (mapWords(fields)) return { error: MAP_ONLY };
   const rows = pick(fields, 'row');
   if (rows.length < 2) return { error: '并排对照至少两行' };
   const grid = rows.map((r) => r.split('|').map((c) => c.trim()));
@@ -253,6 +255,7 @@ function compileSteps(fields, lines, partial) {
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (mapWords(fields)) return { error: MAP_ONLY };
   const items = pick(fields, 'step');
   if (items.length < 1) return { error: '没有一行 step' };
   const title = pick(fields, 'title')[0] || '';
@@ -289,6 +292,7 @@ function compileTimeline(fields, lines, partial) {
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (mapWords(fields)) return { error: MAP_ONLY };
   const items = pick(fields, 'time');
   if (items.length < 1) return { error: '没有一行 time' };
   const title = pick(fields, 'title')[0] || '';
@@ -312,6 +316,231 @@ function compileTimeline(fields, lines, partial) {
   }
   return { html: `${cap}<ol class="ui-timeline">${rows.map((r) => r.html).join('')}</ol>`, shape: 'timeline' };
 }
+
+/**
+ * map（第四十七轮，学 Intelligent UI 官方举的那个形状——"the stops on a road trip can
+ * appear on a map, with notes on what's worth a detour"（公路旅行的停靠点出现在地图上，
+ * 旁边写着哪一处值得绕过去看一眼））：
+ * `stop: 名字 | x,y | 一句话`（2–12 个点，名字是身份不能重复，位置也不许撞在同一个格上）
+ * + 可选 `route: 甲 > 乙 > 丙`（一条**有序路线**，不是一张网——有网的用 diagram）
+ * + `id:`（必填）+ 可选 `title` / `handoff`。
+ *
+ * 它补的是词表里缺的那一维：**位置**。steps / timeline 管先后、diagram 管谁连着谁、
+ * explore 管一个整体的几面，都没有"谁在哪儿、离谁远"这件事——而 diagram 自己的报错原文
+ * 就写着"图解不是一张地图"，这一格早就在词表里被点名了，只是没人补上。
+ *
+ * 点位落进一块**示意框**（x：0 最西 → 100 最东；y：0 最北 → 100 最南）。宿主不知道任何
+ * 真实地理：不画底图、不接瓦片、不发一个请求（这是规定，不是限制不够——离线是本仓的物理边界）。
+ * 位置是模型写进去的教学内容，对不对仍是老师的活；界面只负责把它摆出来让人看。
+ *
+ * 点一个点 = 面板换上它的那句话，"看过哪个点"记进状态读回给模型——那是「他看了哪」，
+ * 不是「他会了」。状态 {active, viewed} 与 explore / diagram 同一族，同一把尺。
+ */
+const MAP_MIN_STOPS = 2;
+const MAP_MAX_STOPS = 12;
+const MAP_NAME_MAX = 20;
+const MAP_NOTE_MAX = 80;
+const MAP_FIELDS = new Set(['id', 'title', 'stop', 'route', 'handoff']);
+/** 示意框的画布尺寸：点位按 0–100 落进这块框，框的长宽与任何真实比例无关。 */
+const MAP_W = 340;
+const MAP_H = 210;
+const MAP_PAD = 26;
+const MAP_PIN_R = 6;
+
+/** 位置只认「整数,整数」，两个数都要在 0–100 里。小数、负数、带单位一律不猜。 */
+function parseMapPos(raw) {
+  const m = /^(\d{1,3})\s*,\s*(\d{1,3})$/.exec(String(raw).trim());
+  if (!m) return null;
+  const x = Number(m[1]);
+  const y = Number(m[2]);
+  if (x > 100 || y > 100) return null;
+  return { x, y };
+}
+
+// 0–100 → 画布坐标（四周留白，名字标签不会被框裁掉）
+const mapPx = (x) => MAP_PAD + (x / 100) * (MAP_W - MAP_PAD * 2);
+const mapPy = (y) => MAP_PAD + (y / 100) * (MAP_H - MAP_PAD * 2);
+
+/**
+ * 框 → 路线（折线，压在点底下）→ 点（圈 + 名字）。几何全部由输入决定，与"第几个输入"
+ * 无关：同一份 stop 永远落在同一个位置上（流式那一路每帧重编，跳来跳去的图没法对着问）。
+ * interactive=false 是流里那一帧（id 还没落，点了没处存）：不加 role / tabindex / data-*，
+ * 与 form 的 disabled 输入框同一手法——诚实表达"还在长"。
+ * 名字标签的锚点跟着点在框里的位置走（贴着西边左对齐、贴着东边右对齐），
+ * 长名字因此不会顶出框外——位置是内容给的，不拿截断去将就它。
+ */
+function mapInner(stops, route, active, id, interactive) {
+  const byName = new Map(stops.map((s) => [s.name, s]));
+  const pts = route
+    .map((n) => byName.get(n))
+    .filter(Boolean)
+    .map((s) => `${mapPx(s.x).toFixed(1)},${mapPy(s.y).toFixed(1)}`)
+    .join(' ');
+  const pins = stops
+    .map((s) => {
+      const cx = mapPx(s.x).toFixed(1);
+      const cy = mapPy(s.y).toFixed(1);
+      const on = interactive && s.name === active;
+      const anchor = s.x <= 14 ? 'start' : s.x >= 86 ? 'end' : 'middle';
+      const attrs = interactive
+        ? ` data-ui-map-stop="${escapeHtml(id)}" data-ui-name="${escapeHtml(s.name)}" tabindex="0" role="button"` +
+          ` aria-pressed="${on ? 'true' : 'false'}" aria-label="看看「${escapeHtml(s.name)}」在哪儿（点击）"`
+        : ' aria-hidden="true"';
+      return (
+        `<g class="ui-pin${on ? ' ui-pin-active' : ''}"${attrs}>` +
+        (s.note ? `<title>${escapeHtml(s.name)}：${escapeHtml(s.note)}</title>` : '') +
+        `<circle cx="${cx}" cy="${cy}" r="${MAP_PIN_R}"/>` +
+        `<text class="ui-pin-label" x="${cx}" y="${(Number(cy) + MAP_PIN_R + 12).toFixed(1)}" text-anchor="${anchor}">${escapeHtml(s.name)}</text>` +
+        `</g>`
+      );
+    })
+    .join('');
+  return (
+    `<rect class="ui-map-frame" x="8" y="8" width="${MAP_W - 16}" height="${MAP_H - 16}" rx="8"/>` +
+    (pts ? `<polyline class="ui-map-route" points="${pts}"/>` : '') +
+    pins
+  );
+}
+
+function compileMap(fields, lines, partial) {
+  const id = pick(fields, 'id')[0];
+  const rawStops = pick(fields, 'stop');
+  if (!rawStops.length) return { error: '一行 stop 都没有（地图靠两个以上的点才看得出位置）' };
+  const title = pick(fields, 'title')[0] || '';
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
+  if (pick(fields, 'node').length || pick(fields, 'edge').length) {
+    return { error: 'node / edge 是 diagram 的字段：谁连着谁用 diagram，谁在哪儿用 map' };
+  }
+  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (gameWords(fields)) return { error: GAME_ONLY };
+  if (walkWords(fields)) return { error: WALK_ONLY };
+  if (questionWords(fields)) return { error: QUESTION_ONLY };
+  if (canvasWords(fields)) return { error: CANVAS_ONLY };
+  if (formWords(fields)) return { error: FORM_ONLY };
+
+  // 逐行收点：名字是身份，位置是内容。流里那一行还没写完（`stop: 康定 | 3`）不算写坏——
+  // 那一行先不长，已写出的点照常上台（与 steps / timeline 同一把尺：渐进是流里的宽容）。
+  const stops = [];
+  const spots = new Set();
+  for (const raw of rawStops) {
+    const parts = String(raw).split('|').map((x) => x.trim());
+    const bad = (why) => {
+      if (!partial) return { error: why };
+      return null;
+    };
+    if (parts.length < 2 || parts.length > 3) {
+      const e = bad(`stop「${String(raw).slice(0, 40)}」要写成「名字 | x,y | 一句话」（一句话可省）`);
+      if (e) return e;
+      continue;
+    }
+    const [name, pos] = parts;
+    const note = (parts[2] || '').trim();
+    if (!name) {
+      const e = bad('有一个点名是空的');
+      if (e) return e;
+      continue;
+    }
+    if (name.length > MAP_NAME_MAX) {
+      const e = bad(`点名「${name}」太长了（≤${MAP_NAME_MAX} 字）`);
+      if (e) return e;
+      continue;
+    }
+    if (stops.some((s) => s.name === name)) {
+      const e = bad(`「${name}」写了两遍：两个点重名，点了说不清是哪个`);
+      if (e) return e;
+      continue;
+    }
+    const xy = parseMapPos(pos);
+    if (!xy) {
+      const e = bad(`「${name}」的位置「${pos}」不是「x,y」两个 0–100 的整数（x 从西到东、y 从北到南）`);
+      if (e) return e;
+      continue;
+    }
+    if (note.length > MAP_NOTE_MAX) {
+      const e = bad(`「${name}」的一句话太长了（≤${MAP_NOTE_MAX} 字）`);
+      if (e) return e;
+      continue;
+    }
+    const spot = `${xy.x},${xy.y}`;
+    if (spots.has(spot)) {
+      const e = bad(`「${name}」和别的点落在同一个位置上：叠在一起就分不出谁是谁`);
+      if (e) return e;
+      continue;
+    }
+    spots.add(spot);
+    stops.push({ name, x: xy.x, y: xy.y, note });
+  }
+  if (!stops.length) return { error: '没有一行写得完整的 stop' };
+  if (stops.length > MAP_MAX_STOPS) {
+    if (!partial) return { error: `点太多了（最多 ${MAP_MAX_STOPS} 个，逐项查数值用 compare，这是一张示意框不是名录）` };
+  } else if (stops.length < MAP_MIN_STOPS && !partial) {
+    return { error: `至少 ${MAP_MIN_STOPS} 个点（一个点没有位置关系可言）` };
+  }
+
+  // route：一条有序路线（不是网）。线只能连声明过的点，走回同一个点是回路——那是 diagram 的形状。
+  const rawRoute = pick(fields, 'route');
+  let route = [];
+  if (rawRoute.length > 1) return { error: 'route 只写一行（一条线）' };
+  if (rawRoute.length) {
+    const parts = rawRoute[0].split('>').map((n) => n.trim());
+    const missing = parts.find((n) => n && !stops.some((s) => s.name === n));
+    let why = '';
+    if (parts.length < 2) why = 'route 要写成「甲 > 乙 > 丙」（一条线至少两段）';
+    else if (parts.some((n) => !n)) why = 'route 里有一个空的名字';
+    else if (missing) why = `route 里的「${missing}」没在 stop 里声明（线只能连已声明的点）`;
+    else if (new Set(parts).size !== parts.length) why = 'route 里有点写了两遍：一条线走回同一个点是回路，用 diagram';
+    if (why) {
+      // 流里那一行可能写在点前面（`route: 成都 >` 刚写半个名字）：这一帧先不画线，
+      // 闭合时再判——半条线不是写坏了，与 stop 那一路同一把尺。
+      if (!partial) return { error: why };
+      route = [];
+    } else route = parts;
+  }
+
+  const stray = fields.filter(([k]) => !MAP_FIELDS.has(k)).map(([k]) => k);
+  if (stray.length) return { error: `「${stray[0]}」不是 map 的字段（map 只认 id / title / stop / route / handoff）` };
+
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+
+  // 流里 id 还没落：已写出的点先上台，但点不加 role / tabindex / data-*（点了没处存）——
+  // 与 form 的 disabled 输入框同一手法，诚实表达"还在长"。闭合了还缺 id 是硬错。
+  if (!id) {
+    if (!partial) return { error: '这张图没有 id：点开看过哪个点没地方续' };
+    return {
+      html: `${cap}<div class="ui-map"><svg class="ui-map-canvas" role="img" aria-label="这张图还在长" viewBox="0 0 ${MAP_W} ${MAP_H}" width="${MAP_W}" height="${MAP_H}">` +
+        `${mapInner(stops, [], null, '', false)}</svg><div class="ui-map-pane"><p class="ui-map-pane-hint">这张图还在长</p></div></div>`,
+      shape: 'map',
+      pending: true,
+    };
+  }
+
+  // 状态从宿主侧续：上次点到谁，重画就把谁带回来；viewed 是学情态，下一轮读给模型。
+  // spec 存 stops / route / title：repaint 与 handoff 都要在点击发生时取现成的那份，不重解析围栏。
+  const stored = readUiState(id)?.state || {};
+  const active = stored.active || null;
+  writeUiState(id, 'map', stored, { stops, route, title });
+
+  const hit = active ? stops.find((s) => s.name === active) : null;
+  const pane = hit
+    ? `<p class="ui-map-pane-name">${cell(hit.name)}</p>` + (hit.note ? `<p class="ui-map-pane-note">${cell(hit.note)}</p>` : '')
+    : `<p class="ui-map-pane-hint">点一个点，看它在哪儿；位置是示意的，不按比例</p>`;
+  // 读屏名里刻意不放点的个数：结构数量不是学情指标，但连 aria 里也不出现数字（同 diagram）。
+  const aria = (title ? `示意地图：${title}` : '示意地图：点与点之间的相对位置') + '（不按比例）';
+  const body =
+    `<div class="ui-map" data-ui-map="${escapeHtml(id)}">` +
+    `<svg class="ui-map-canvas" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${MAP_W} ${MAP_H}" width="${MAP_W}" height="${MAP_H}">` +
+    `<title>${escapeHtml(aria)}</title>${mapInner(stops, route, active, id, true)}</svg>` +
+    `<div class="ui-map-pane" aria-live="polite">${pane}</div>` +
+    `</div>`;
+  return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'map' };
+}
+
+/** map 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game / walk / form 同一把尺）。 */
+function mapWords(fields) {
+  return pick(fields, 'stop').length > 0 || pick(fields, 'route').length > 0;
+}
+const MAP_ONLY = 'stop / route 只配带 id 的 map（谁在哪儿、沿着一条线怎么走，别的档没有"位置"这回事）';
 
 /**
  * checklist：`item: 一行`。勾选态存在宿主侧（id 必须自报）——DOM 每帧可能被重画，
@@ -343,6 +572,7 @@ function compileChecklist(fields, lines, partial) {
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (mapWords(fields)) return { error: MAP_ONLY };
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
   if (items.some((s) => !s)) return { error: '有一行是空的' };
@@ -500,6 +730,7 @@ function compileCalculator(fields, lines, partial) {
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (mapWords(fields)) return { error: MAP_ONLY };
   const params = [];
   for (const p of pick(fields, 'param')) {
     const parts = p.split('|').map((s) => s.trim());
@@ -647,6 +878,7 @@ function compileDiagram(fields) {
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (mapWords(fields)) return { error: MAP_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -881,6 +1113,7 @@ function compileExplore(fields) {
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (mapWords(fields)) return { error: MAP_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -957,6 +1190,7 @@ function compileGame(fields) {
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (mapWords(fields)) return { error: MAP_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -1055,6 +1289,7 @@ function compileWalkthrough(fields) {
     return { error: 'step 是 steps 档的字段：走查每步写「move: 这一步的动作 = 这一步之后到哪」' };
   }
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (mapWords(fields)) return { error: MAP_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -1255,6 +1490,7 @@ function compileSuggest(fields) {
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (mapWords(fields)) return { error: MAP_ONLY };
   const picks = pick(fields, 'pick').map((s) => s.trim()).filter(Boolean);
   if (!picks.length) return { error: '至少写一行 pick（一句想让学习者接着问的话）' };
   if (picks.length > SUGGEST_MAX) return { error: `最多 ${SUGGEST_MAX} 个分支（多了就是菜单，不是建议）` };
@@ -1344,6 +1580,7 @@ function compileChart(fields) {
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (mapWords(fields)) return { error: MAP_ONLY };
   if (pick(fields, 'slider').length) return compileInteractiveChart(fields, { type, title, handoff });
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (handoff.length) {
@@ -1687,6 +1924,7 @@ function compileQuestion(fields) {
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (mapWords(fields)) return { error: MAP_ONLY };
   const ids = pick(fields, 'id');
   if (ids.length > 1) return { error: 'id 写了两遍' };
   if (!ids.length) return { error: '提问要有一个 id（服务端按它收作答，缺了没人接得住）' };
@@ -1754,7 +1992,7 @@ function compileQuestion(fields) {
 /** question 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
 const QUESTION_FIELDS = new Set(['id', 'question', 'header', 'option', 'multiSelect', 'allowText', 'conceptId']);
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
 
 /**
  * 编译器入口。partial = 这一段还在流里长（围栏未闭合）。

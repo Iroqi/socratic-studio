@@ -793,6 +793,29 @@ html, body {
 .ui-diagram .ui-node-adjacent rect { stroke: var(--accent); stroke-width: 1.5; }
 .ui-diagram .ui-edge-active { stroke: var(--accent); stroke-width: 2; }
 
+/* map（第四十七轮）：示意框与点位，学 IUI 官方举的那个形状（"the stops on a road trip can appear on a map"）。
+   几何（框、点位、折线）全部由编译器按输入决定，这里只负责上色，零新十六进制：
+   框是描边 + 那张量过的 --surface-2 纸面，路线是虚线（它是"沿哪条线走"，不是粗细关系），
+   点是 ink-2 描边的圆，被点的那个借 --accent 一族——与图解的点击高亮同一把尺。
+   名字标签用 --ink-2 落 --surface-2（实测 7.49 / 6.78，两套主题都过 AA）。 */
+.ui-map { margin: 0 0 1em; }
+.ui-map-canvas { display: block; max-width: 100%; height: auto; }
+.ui-map-frame { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1; }
+.ui-map-route { fill: none; stroke: var(--ink-3); stroke-width: 1.4; stroke-dasharray: 4 3; }
+.ui-pin { cursor: pointer; }
+.ui-pin:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ui-pin circle { fill: var(--surface-2); stroke: var(--ink-2); stroke-width: 1.6; }
+.ui-pin-label { fill: var(--ink-2); font-size: 11.5px; }
+.ui-pin-active circle { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2.4; }
+.ui-pin-active .ui-pin-label { fill: var(--ink); }
+.ui-map-pane {
+  margin: 6px 0 0; padding: 10px 12px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.ui-map-pane-name { margin: 0 0 2px; font-size: 13.5px; font-weight: 620; color: var(--ink); }
+.ui-map-pane-note { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+.ui-map-pane-hint { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+
 /* handoff（第二十九轮）：交互档把状态递回对话的按钮。底色仍只借 --surface-2
    （那条"底色全用量过的 surface-2"的账不许破），hover 只换文字与描边，不引新背景。 */
 .ui-handoff {
