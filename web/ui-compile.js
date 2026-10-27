@@ -53,6 +53,24 @@ const MAX_TEXT = 240;
 const HANDOFF_MAX = 24;
 
 /**
+ * 可核对的那几行（第五十轮，学 Intelligent UI 的"知道界面为什么长这样"那一面，
+ * 不学它把过程藏起来那一面）：算式、代入过程、前提、来源。
+ *
+ * 为什么要有这一档：IUI 把答案做成漂亮的界面，界面越像官方控件，错答案越难被发现
+ * （博文自己把 clarity / usefulness / completeness 列为评估项，但漂亮的界面会替错误
+ * 背书）。算数这一族必须把"怎么算的"摆在结果下面：学习者是拿它核对，不是拿它判分。
+ *   · assume：影响结论的前提（每人一份、不含服务费），≤3 条、每条 ≤80 字；
+ *   · source：外部数据 / 常数的来源与口径，一句话 ≤120 字；
+ *   · 算式与代入过程由宿主从同一份公式表生成，模型不用再抄一遍（抄的那遍没法保证不漂）。
+ * 只配 calculator / form / chart——这三档才有"算出来的数"可核对。别的档写了掉回原文。
+ * 这几行只摆事实，不写判词（Invariant 4：界面里没有对错、分数、掌握度）。
+ */
+const ASSUME_MAX = 3;
+const ASSUME_TEXT_MAX = 80;
+const SOURCE_TEXT_MAX = 120;
+const UI_META_KINDS = ['calculator', 'form', 'chart'];
+
+/**
  * suggest（第三十轮，学 Intelligent UI 回答末尾的「If you want, I can:」建议动作条，
  * 不学它点一下直接发出那一手）：讲完一段后，把"往哪走"的几个中性分支摆成可点的小条。
  * 点一条，宿主把那句话**填进输入框、不自动发**——和 handoff 同一把尺：话是学习者的，
@@ -610,7 +628,7 @@ function compileChecklist(fields, lines, partial) {
  */
 const FORM_MAX_FIELDS = 8;
 const FORM_HINT_MAX = 40;
-const FORM_FIELDS = new Set(['id', 'title', 'field', 'compute', 'handoff']);
+const FORM_FIELDS = new Set(['id', 'title', 'field', 'compute', 'handoff', 'assume', 'source']);
 
 function compileForm(fields, lines, partial) {
   const id = pick(fields, 'id')[0];
@@ -675,7 +693,12 @@ function compileForm(fields, lines, partial) {
     }
   }
   const bad = fields.filter(([k]) => !FORM_FIELDS.has(k)).map(([k]) => k);
-  if (bad.length) return { error: `「${bad[0]}」不是 form 的字段（form 只认 id / title / field / compute / handoff）` };
+  if (bad.length) return { error: `「${bad[0]}」不是 form 的字段（form 只认 id / title / field / compute / handoff / assume / source）` };
+
+  const meta = readAssumes(fields);
+  if (meta.error) return { error: meta.error };
+  const src = readSource(fields);
+  if (src.error) return { error: src.error };
 
   // 值从宿主侧续：上次填到哪儿，重画就回到哪儿（缺 id 的那份新出现时用空值）。
   const stored = readUiState(id)?.state || {};
@@ -684,7 +707,7 @@ function compileForm(fields, lines, partial) {
     const v = stored[f.name];
     values[f.name] = v === undefined || v === null ? '' : String(v);
   }
-  const spec = { fields: parsed, formulas, title };
+  const spec = { fields: parsed, formulas, title, assumes: meta.assumes, source: src.source };
   writeUiState(id, 'form', { ...values, uiKind: 'form' }, spec);
   const inputs = parsed
     .map((f) => {
@@ -697,9 +720,10 @@ function compileForm(fields, lines, partial) {
     .join('');
   const outs = formulas
     .map((f) => `<p class="ui-out"><span class="ui-out-name">${escapeHtml(f.out)}</span>` +
-      `<output class="ui-out-value">${calcTerms(f.terms, values)}</output></p>`)
+      `<output class="ui-out-value">${uiEval(f.terms, values)}</output></p>`)
     .join('');
-  return { html: `${cap}<div class="ui-form" data-ui-form="${escapeHtml(id)}">${inputs}${outs}</div>${handoff ? handoffButton(id, handoff) : ''}`, shape: 'form' };
+  const math = mathHtml(formulas, values, '');
+  return { html: `${cap}<div class="ui-form" data-ui-form="${escapeHtml(id)}">${inputs}${outs}${math}${assumeHtml(meta.assumes)}${sourceHtml(src.source)}</div>${handoff ? handoffButton(id, handoff) : ''}`, shape: 'form' };
 }
 
 /** form 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game / walk 同一把尺）。 */
@@ -707,6 +731,57 @@ function formWords(fields) {
   return pick(fields, 'field').length > 0 || pick(fields, 'compute').length > 0;
 }
 const FORM_ONLY = 'field / compute 只配带 id 的 form（填一张表，让学习者把自己的数/话放进界面）';
+
+/**
+ * 第五十轮：assume / source 只配"算出来的数"那三档。
+ * 写错档要掉回原文并点名——前提与来源不是装饰，放到并排表/步骤里只会变成第二段正文。
+ */
+function metaWordsError(fields, kind) {
+  if (pick(fields, 'assume').length && !UI_META_KINDS.includes(kind)) {
+    return `「assume」只配 ${UI_META_KINDS.join(' / ')}（把影响结论的前提摆在结果旁边）`;
+  }
+  if (pick(fields, 'source').length && !UI_META_KINDS.includes(kind)) {
+    return `「source」只配 ${UI_META_KINDS.join(' / ')}（外部数据 / 常数的来源与口径要交代）`;
+  }
+  return null;
+}
+
+function readAssumes(fields) {
+  const assumes = pick(fields, 'assume').map((s) => s.trim()).filter(Boolean);
+  if (assumes.length > ASSUME_MAX) {
+    return { error: `assume 最多 ${ASSUME_MAX} 条（前提写多了就成正文了）` };
+  }
+  if (assumes.some((s) => s.length > ASSUME_TEXT_MAX)) {
+    return { error: `assume 的一条太长了（≤${ASSUME_TEXT_MAX} 字）` };
+  }
+  if (new Set(assumes).size !== assumes.length) return { error: '两条 assume 一模一样' };
+  return { assumes };
+}
+
+function readSource(fields) {
+  const raw = pick(fields, 'source');
+  if (raw.length > 1) return { error: 'source 写了两遍（一句话交代来源与口径就够）' };
+  const source = (raw[0] || '').trim();
+  if (source.length > SOURCE_TEXT_MAX) {
+    return { error: `source 太长了（≤${SOURCE_TEXT_MAX} 字，一句话交代来源与口径）` };
+  }
+  return { source };
+}
+
+/** 前提清单：只摆事实，不写判词。空的时候一个字都不出现（没有前提就是没有）。 */
+function assumeHtml(assumes) {
+  if (!assumes.length) return '';
+  return (
+    `<div class="ui-assume"><p class="ui-assume-label">假设</p><ul>` +
+    assumes.map((a) => `<li>${cell(a)}</li>`).join('') +
+    `</ul></div>`
+  );
+}
+
+/** 来源一行：外部数据 / 常数从哪来、按什么口径。 */
+function sourceHtml(source) {
+  return source ? `<p class="ui-source">来源：${cell(source)}</p>` : '';
+}
 
 /**
  * 参数名允许的"标识符"形状：字母 / 下划线 / 汉字起头，后接字母数字下划线汉字。
@@ -770,7 +845,11 @@ function compileCalculator(fields, lines, partial) {
   const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
-  const spec = { params, formulas, unit, title };
+  const meta = readAssumes(fields);
+  if (meta.error) return { error: meta.error };
+  const src = readSource(fields);
+  if (src.error) return { error: src.error };
+  const spec = { params, formulas, unit, title, assumes: meta.assumes, source: src.source };
   writeUiState(id, 'calculator', values, spec);
   const sliders = params
     .map((p) => {
@@ -787,10 +866,11 @@ function compileCalculator(fields, lines, partial) {
     .map(
       (f) =>
         `<p class="ui-out"><span class="ui-out-name">${escapeHtml(f.out)}</span>` +
-        `<output class="ui-out-value">${calcTerms(f.terms, values)}${unit ? ` ${escapeHtml(unit)}` : ''}</output></p>`,
+        `<output class="ui-out-value">${uiEval(f.terms, values)}${unit ? ` ${escapeHtml(unit)}` : ''}</output></p>`,
     )
     .join('');
-  return { html: `${cap}<div class="ui-calc" data-ui-calc="${escapeHtml(id)}">${sliders}${outs}</div>${handoff ? handoffButton(id, handoff) : ''}`, shape: 'calculator' };
+  const math = mathHtml(formulas, values, unit);
+  return { html: `${cap}<div class="ui-calc" data-ui-calc="${escapeHtml(id)}">${sliders}${outs}${math}${assumeHtml(meta.assumes)}${sourceHtml(src.source)}</div>${handoff ? handoffButton(id, handoff) : ''}`, shape: 'calculator' };
 }
 
 /** 表达式的形状：积项之和。`a * b + 3 * c` → [[{p:'a'},{p:'b'}],[{n:3},{p:'c'}]]。不认这个形状就返回 null。 */
@@ -819,14 +899,101 @@ function compileFormula(src) {
   return out;
 }
 
-function calcTerms(groups, values) {
+/** 与编译器同一份求值口径（积项之和）。app.js 也 import 这一份，不在宿主侧重写。 */
+export function uiEval(groups, values) {
   let total = 0;
   for (const terms of groups) {
     let prod = 1;
-    for (const t of terms) prod *= t.n !== undefined ? t.n : (values[t.p] ?? 0);
+    for (const t of terms) prod *= t.n !== undefined ? t.n : (values?.[t.p] ?? 0);
     total += prod;
   }
   return Math.round(total * 1000) / 1000;
+}
+
+/**
+ * 数在算式里的写法：最多三位小数、去尾零；负号用 U+2212（读起来是"减"，不是连字符）。
+ * 与 chartNum 同一套精度，但这里不换科学计数——算式要让人一眼读出来。
+ */
+function fmtNum(n) {
+  if (Object.is(n, -0)) n = 0;
+  const r = Math.round(n * 1000) / 1000;
+  return r < 0 ? `−${Math.abs(r)}` : String(r);
+}
+
+/** 积项之和的字符串：`2 × 人数 + 3`；负项接到后面时读成 `− 3`，不写 `+ -3`。 */
+function joinGroups(groups) {
+  let out = '';
+  groups.forEach((terms, i) => {
+    const body = terms.join(' × ');
+    if (i === 0) {
+      out = body;
+      return;
+    }
+    if (body.startsWith('−')) out += ` − ${body.slice(1)}`;
+    else out += ` + ${body}`;
+  });
+  return out;
+}
+
+/**
+ * 符号算式：`肉 = 人数 × 0.4`。从编译器自己解析出的那份积项表生成，
+ * 与求值、代入过程共用一份词法——三处各写一遍，迟早有一处漂。
+ */
+export function uiFormula(groups) {
+  return joinGroups(
+    groups.map((terms) =>
+      terms.map((t) => (t.n !== undefined ? fmtNum(t.n) : t.p)),
+    ),
+  );
+}
+
+/**
+ * 代入过程：`= 8 × 0.4 = 3.2 公斤`。
+ *
+ * 只在"真能核对"时出现：公式里没引参数（没什么可代入）、或引用的表单字段空着 / 不是数
+ * （没东西可代入）时返回空串——不拿 0 冒充学习者填过的值。参数引用了就逐项替换，
+ * 结果与 .ui-out 用同一个 uiEval，保证两行永远对得上。
+ */
+export function uiWork(groups, values, unit = '') {
+  let hasParam = false;
+  let missing = false;
+  const subst = groups.map((terms) =>
+    terms.map((t) => {
+      if (t.n !== undefined) return fmtNum(t.n);
+      hasParam = true;
+      const raw = values?.[t.p];
+      const n =
+        typeof raw === 'number' && Number.isFinite(raw)
+          ? raw
+          : typeof raw === 'string' && raw.trim() !== '' && Number.isFinite(Number(raw))
+            ? Number(raw)
+            : null;
+      if (n === null) missing = true;
+      return n === null ? '?' : fmtNum(n);
+    }),
+  );
+  if (!hasParam || missing) return '';
+  const text = joinGroups(subst);
+  const total = uiEval(groups, values);
+  const suffix = unit ? ` ${unit}` : '';
+  // 裸参数（`输出 = 人数`）没有运算可展示，只报结果，不写 `= 8 = 8`。
+  if (!/[+−]|×/.test(text)) return `= ${fmtNum(total)}${suffix}`;
+  return `= ${text} = ${fmtNum(total)}${suffix}`;
+}
+
+/** 计算过程块：每条输出一行算式 + 一行代入。结果在 .ui-out 里，这里回答"怎么来的"。
+ *  代入行**每条都占一个位**（哪怕这一刻空着，CSS 把 :empty 藏掉）：宿主重画按
+ *  spec.formulas 的同序改字，少一个位就会把下一条的代入改到上一条的坑里。 */
+function mathHtml(formulas, values, unit) {
+  if (!formulas.length) return '';
+  const rows = formulas
+    .map(
+      (f) =>
+        `<p class="ui-math-formula">${escapeHtml(f.out)} = ${escapeHtml(uiFormula(f.terms))}</p>` +
+        `<p class="ui-math-work">${escapeHtml(uiWork(f.terms, values, unit))}</p>`,
+    )
+    .join('');
+  return `<div class="ui-math"><p class="ui-math-label">怎么算的</p>${rows}</div>`;
 }
 
 // ── 图解 ─────────────────────────────────────────────────────────────
@@ -1451,6 +1618,8 @@ function compileDeck(fields, lines) {
       if (seenIds.has(cid)) return { error: `两个 part 用了同一个 id「${cid}」：状态会互相覆盖` };
       seenIds.add(cid);
     }
+    const metaErr = metaWordsError(child.fields, part.kind);
+    if (metaErr) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${metaErr}` };
     const r = COMPILERS[part.kind](child.fields, part.body);
     if (r.error) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${r.error}` };
     blocks.push(`<div class="ui-deck-part">${r.html}</div>`);
@@ -1581,7 +1750,13 @@ function compileChart(fields) {
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
-  if (pick(fields, 'slider').length) return compileInteractiveChart(fields, { type, title, handoff });
+  const meta = readAssumes(fields);
+  if (meta.error) return { error: meta.error };
+  const src = readSource(fields);
+  if (src.error) return { error: src.error };
+  if (pick(fields, 'slider').length) {
+    return compileInteractiveChart(fields, { type, title, handoff, assumes: meta.assumes, source: src.source });
+  }
   if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (handoff.length) {
     return { error: '静态 chart 没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
@@ -1676,7 +1851,7 @@ function compileChart(fields) {
   const body =
     `<svg class="ui-chart-svg" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
     `<title>${escapeHtml(aria)}</title>${frameEls}${yLabels}${xEls}${seriesEls}</svg>${legend}`;
-  return { html: `${cap}<div class="ui-chart">${body}</div>`, shape: 'chart' };
+  return { html: `${cap}<div class="ui-chart">${body}${sourceHtml(src.source)}${assumeHtml(meta.assumes)}</div>`, shape: 'chart' };
 }
 
 /** 交互档：`slider: 维度名` + `snap: 情形名 = 数值,数值,…`（2–8 条）+ `id:`。
@@ -1684,7 +1859,7 @@ function compileChart(fields) {
  *  键盘天然可走，展开态归浏览器、不引宿主状态），跟着快照走——图看形状、表查数值，
  *  读屏用户也拿得到完整数据。 */
 function compileInteractiveChart(fields, shared) {
-  const { type, title, handoff } = shared;
+  const { type, title, handoff, assumes, source } = shared;
   const id = pick(fields, 'id')[0];
   if (!id) return { error: '带 slider 的 chart 必须有 id：滑到哪一档没有地方续' };
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -1766,6 +1941,7 @@ function compileInteractiveChart(fields, shared) {
       ? `<details class="ui-chart-table"><summary class="ui-chart-table-summary">${cell(tableName)}</summary>` +
         `<div class="ui-chart-table-body">${chartSnapTable(current, xLabels)}</div></details>`
       : '') +
+    `${sourceHtml(source)}${assumeHtml(assumes)}` +
     `</div>`;
   return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'chart' };
 }
@@ -2024,6 +2200,11 @@ export function compileUiBlock(lines, partial) {
   }
   if (!UI_KINDS.includes(kind)) {
     return fail(`没有「${kind}」这一档界面（可用：${UI_KINDS.join(' / ')}）`);
+  }
+  // deck 的 part 字段也躺在 lines 里，顶层这一道会误伤——它的每一块在 compileDeck 里逐块查。
+  if (kind !== 'deck') {
+    const metaErr = metaWordsError(parsed.fields, kind);
+    if (metaErr) return fail(metaErr);
   }
   if (lines.length > MAX_ITEMS + 6) return fail('这一段太长了，回到正文来说');
   try {

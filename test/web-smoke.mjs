@@ -6406,6 +6406,165 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore52, errors.slice(errsBefore52).join(' | '));
 }
 
+// ─── 53. 可核对的界面：算式、代入、前提、来源（第五十轮，学 IUI 的"界面要经得起核对"
+// 那一面——它自己把 clarity / usefulness / completeness 列为评估项，但漂亮的界面会让
+// 错答案更难被发现。结果下面自动摆同一份公式表生成的算式与代入，前提与外部来源各占
+// 一行；只摆事实、不写判词（Invariant 4 一条不破）。
+{
+  console.log('\n53. 可核对的界面（算式、代入、前提、来源：结果是算出来的，不是长出来的）');
+  const errsBefore53 = errors.length;
+  const ui53 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { handleUiDeskEvent } = appModule.__hooks;
+  const compile53 = (lines, partial) => ui53.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  ui53.resetUiState();
+
+  // 1) calculator：算式 + 代入 + 前提 + 来源
+  const calc53 = ['kind: calculator', 'id: stew53', 'title: 炖肉', 'unit: 公斤',
+    'param: 人数 | 8 | 1 | 20',
+    'formula: 肉 = 人数 * 0.4',
+    'assume: 每个人都吃肉',
+    'assume: 不含汤底',
+    'source: 每公斤按 2026 年市价'];
+  const c53 = compile53(calc53).html;
+  check('calculator 结果下面摆出算式（从同一份公式表生成，模型不用在正文里抄）',
+    c53.includes('class="ui-math"') && c53.includes('class="ui-math-label">怎么算的') &&
+    c53.includes('>肉 = 人数 × 0.4<'), c53.slice(0, 700));
+  check('代入过程把当前值代进去、并给出结果（8 × 0.4 = 3.2 公斤）',
+    c53.includes('class="ui-math-work"') && c53.includes('= 8 × 0.4 = 3.2 公斤'), c53.slice(0, 900));
+  check('前提按行摆出来、来源单独一行（外部数据 / 常数要交代口径）',
+    c53.includes('class="ui-assume-label">假设') && c53.includes('<li>每个人都吃肉</li>') &&
+    c53.includes('<li>不含汤底</li>') && c53.includes('class="ui-source">来源：每公斤按 2026 年市价'), c53.slice(-500));
+  check('算式 / 代入 / 前提 / 来源里没有判分词（核对不是判分，Invariant 4 不破）',
+    !/score|percent|mastery|correct|incorrect/i.test(c53), c53.slice(0, 600));
+  check('新标记不写 data-*（没有新状态通道，契约那张 data-* 清单不该多一项）',
+    !/data-ui-(assume|source|math)/.test(c53), '');
+  const spec53 = ui53.readUiState('stew53')?.spec;
+  check('spec 里存下前提与来源（重画与下一回合读回都得有出处）',
+    spec53?.assumes?.length === 2 && spec53.assumes[1] === '不含汤底' && spec53.source === '每公斤按 2026 年市价',
+    JSON.stringify(spec53));
+
+  // 2) 确定性
+  check('同样的输入两次编译一模一样（流式重画不跳）', compile53(calc53).html === c53, '');
+
+  // 3) 滑杆一动：结果与代入同一次重算
+  const calcBox53 = doc.createElement('div'); calcBox53.className = 'ui-calc'; calcBox53.dataset.uiCalc = 'stew53';
+  const readout53 = doc.createElement('output'); readout53.className = 'ui-param-value';
+  const outP53 = doc.createElement('p'); outP53.className = 'ui-out';
+  const outV53 = doc.createElement('output'); outV53.className = 'ui-out-value';
+  outP53.append(outV53);
+  const workP53 = doc.createElement('p'); workP53.className = 'ui-math-work';
+  calcBox53.append(readout53, outP53, workP53);
+  domRoot.append(calcBox53);
+  const rCalc53 = handleUiDeskEvent({ target: { dataset: { uiSlider: 'stew53', uiParam: '人数' }, value: '10' } });
+  check('滑杆被接住（走的是既有的 calculator 通道）',
+    rCalc53.handled === true && rCalc53.kind === 'calculator', JSON.stringify(rCalc53));
+  check('结果与代入同一次重算（10 × 0.4 = 4 公斤，两行不会各说各话）',
+    outV53._text === '4 公斤' && workP53._text === '= 10 × 0.4 = 4 公斤', `${outV53._text} / ${workP53._text}`);
+  handleUiDeskEvent({ target: { dataset: { uiSlider: 'stew53', uiParam: '人数' }, value: '20' } });
+  check('代入行跟着参数走（再滑到 20：= 20 × 0.4 = 8 公斤）',
+    workP53._text === '= 20 × 0.4 = 8 公斤', workP53._text);
+  calcBox53.remove();
+
+  // 4) form：compute 也摆算式与代入；空字段不拿 0 冒充
+  ui53.resetUiState();
+  const form53 = ['kind: form', 'id: feast53', 'field: 人数 | number', 'field: 单价 | number',
+    'compute: 合计 = 人数 * 单价', 'assume: 每人一份', 'source: 单价按菜单'];
+  const f53 = compile53(form53).html;
+  check('form 的 compute 也摆算式（合计 = 人数 × 单价）与代入位',
+    f53.includes('class="ui-math"') && f53.includes('>合计 = 人数 × 单价<') && f53.includes('class="ui-math-work"'), f53.slice(0, 800));
+  check('字段空着时代入行是空的（不拿 0 冒充学习者填过的值）',
+    f53.includes('<p class="ui-math-work"></p>') && !f53.includes('= 0 × 0'), f53.slice(-500));
+  check('form 也能带前提与来源', f53.includes('class="ui-assume"') && f53.includes('class="ui-source"'), f53.slice(-400));
+  const formBox53 = doc.createElement('div'); formBox53.className = 'ui-form'; formBox53.dataset.uiForm = 'feast53';
+  const fOutP53 = doc.createElement('p'); fOutP53.className = 'ui-out';
+  const fOutV53 = doc.createElement('output'); fOutV53.className = 'ui-out-value';
+  fOutP53.append(fOutV53);
+  const fWorkP53 = doc.createElement('p'); fWorkP53.className = 'ui-math-work';
+  formBox53.append(fOutP53, fWorkP53);
+  domRoot.append(formBox53);
+  compile53(form53);
+  handleUiDeskEvent({ target: { dataset: { uiField: 'feast53', uiName: '人数' }, value: '6' } });
+  handleUiDeskEvent({ target: { dataset: { uiField: 'feast53', uiName: '单价' }, value: '20' } });
+  check('表单填完，输出与代入同时更新（6 × 20 = 120）',
+    fOutV53._text === '120' && fWorkP53._text === '= 6 × 20 = 120', `${fOutV53._text} / ${fWorkP53._text}`);
+  handleUiDeskEvent({ target: { dataset: { uiField: 'feast53', uiName: '人数' }, value: '' } });
+  check('清空一格：输出按 0 算（旧口径），代入行藏掉（不说 = 0 × 20）',
+    fOutV53._text === '0' && fWorkP53._text === '', `${fOutV53._text} / ${fWorkP53._text}`);
+  formBox53.remove();
+
+  // 5) 多条公式的同序对位：没有代入的那条不占错坑
+  ui53.resetUiState();
+  const multi53 = ['kind: form', 'id: multi53', 'field: 甲 | number', 'field: 乙 | number',
+    'compute: 固定 = 5', 'compute: 欠 = 甲 * 2', 'compute: 有 = 乙 * 2'];
+  compile53(multi53);
+  const mBox53 = doc.createElement('div'); mBox53.className = 'ui-form'; mBox53.dataset.uiForm = 'multi53';
+  const w0 = doc.createElement('p'); w0.className = 'ui-math-work';
+  const w1 = doc.createElement('p'); w1.className = 'ui-math-work';
+  const w2 = doc.createElement('p'); w2.className = 'ui-math-work';
+  mBox53.append(w0, w1, w2); domRoot.append(mBox53);
+  handleUiDeskEvent({ target: { dataset: { uiField: 'multi53', uiName: '乙' }, value: '3' } });
+  check('按公式同序对位：没参数的那条留空、空字段那条留空、填了的那条才出代入',
+    w0._text === '' && w1._text === '' && w2._text === '= 3 × 2 = 6', [w0._text, w1._text, w2._text].join(' | '));
+  mBox53.remove();
+
+  // 6) 负常数与裸参数：算式别写成 + -3，也别写 = 8 = 8
+  ui53.resetUiState();
+  const neg53 = compile53(['kind: calculator', 'id: neg53', 'param: 收入 | 100', 'formula: 净额 = 收入 + -50']).html;
+  check('负常数写成减号（净额 = 收入 − 50，代入 = 100 − 50 = 50）',
+    neg53.includes('>净额 = 收入 − 50<') && neg53.includes('= 100 − 50 = 50'), neg53.slice(-400));
+  const bare53 = compile53(['kind: calculator', 'id: bare53', 'param: 人数 | 8', 'formula: 人数 = 人数']).html;
+  check('裸参数只报结果（= 8，不写 = 8 = 8）',
+    bare53.includes('>人数 = 人数<') && bare53.includes('>= 8<') && !bare53.includes('= 8 = 8'), bare53.slice(-300));
+
+  // 7) chart：静态与交互都带前提 / 来源；来源是数据出处不是判词
+  ui53.resetUiState();
+  const chart53 = compile53(['kind: chart', 'series: 甲 = 1,2,3', 'source: 某年统计年鉴', 'assume: 口径不含税']).html;
+  check('静态 chart 也能交代来源与前提（图看形状，来源交代口径）',
+    chart53.includes('class="ui-source">来源：某年统计年鉴') && chart53.includes('<li>口径不含税</li>'), chart53.slice(-400));
+  const ichart53 = compile53(['kind: chart', 'id: ch53', 'slider: 样本量', 'snap: 小 = 1,2,3', 'snap: 大 = 2,3,4',
+    'source: 模拟数据', 'assume: 正态']).html;
+  check('交互 chart 也带来源与前提（滑杆换快照不会把它们冲掉）',
+    ichart53.includes('class="ui-source">来源：模拟数据') && ichart53.includes('<li>正态</li>'), ichart53.slice(-400));
+
+  // 8) 写错档 / 写坏了：点名掉回原文
+  const deg53 = (lines) => ui53.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  check('assume 写在 compare：掉回原文并点名（前提只配算数那三档）',
+    deg53(['kind: compare', 'row: 甲 | 乙', 'row: 丙 | 丁', 'assume: 前提']).includes('只配 calculator / form / chart'), '');
+  check('source 写在 steps：掉回原文并点名',
+    deg53(['kind: steps', 'step: 先做', 'source: 某年统计']).includes('只配 calculator / form / chart'), '');
+  check('assume 超过 3 条：掉回原文并点名（前提写多了就成正文）',
+    deg53(['kind: calculator', 'id: a', 'param: x | 1', 'formula: y = x * 2', 'assume: 1', 'assume: 2', 'assume: 3', 'assume: 4']).includes('最多 3 条'), '');
+  check('assume 单条超过 80 字：掉回原文并点名',
+    deg53(['kind: calculator', 'id: a', 'param: x | 1', 'formula: y = x * 2', 'assume: ' + '前'.repeat(81)]).includes('80'), '');
+  check('两条 assume 一模一样：掉回原文并点名',
+    deg53(['kind: calculator', 'id: a', 'param: x | 1', 'formula: y = x * 2', 'assume: 同一句', 'assume: 同一句']).includes('一模一样'), '');
+  check('source 写两遍：掉回原文并点名（来源一句话就够）',
+    deg53(['kind: chart', 'series: 甲 = 1,2', 'source: 甲', 'source: 乙']).includes('写了两遍'), '');
+  check('source 超过 120 字：掉回原文并点名',
+    deg53(['kind: chart', 'series: 甲 = 1,2', 'source: ' + '来'.repeat(121)]).includes('120'), '');
+  check('form 里写 source 可以（来源是算数那一族的事）',
+    !deg53(['kind: form', 'id: a', 'field: 人数 | number', 'source: 菜单']), '');
+
+  // 9) XSS：前提与来源照旧转义
+  const xss53 = compile53(['kind: calculator', 'id: x53', 'param: x | 1', 'formula: y = x * 2',
+    'assume: <img src=x onerror=alert(1)>', 'source: <script>alert(1)</script>']).html;
+  check('前提与来源里的标签被转义（不能在界面里长出脚本 / 图片）',
+    !xss53.includes('<img') && !xss53.includes('<script>') && xss53.includes('&lt;img'), xss53.slice(-500));
+
+  // 10) deck：算数块能带，别的块写它照样点名
+  const deck53 = ['kind: deck', 'title: 炖一锅',
+    'part: calculator', '  id: d53', '  param: 人数 | 8', '  formula: 肉 = 人数 * 0.4', '  assume: 每人 400 克',
+    'part: steps', '  step: 先焯水'];
+  const d53 = compile53(deck53).html;
+  check('deck 里 calculator 子块能带前提（布局没变，多一行核对）',
+    d53.includes('data-ui-calc="d53"') && d53.includes('<li>每人 400 克</li>'), d53.slice(0, 600));
+  check('deck 里 compare 子块写 assume：整块掉回原文并点名第几块',
+    deg53(['kind: deck', 'part: compare', '  row: 甲 | 乙', '  row: 丙 | 丁', '  assume: x',
+      'part: checklist', '  id: c', '  item: a']).includes('第 1 块（compare）'), '');
+
+  check('这一节无异常', errors.length === errsBefore53, errors.slice(errsBefore53).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

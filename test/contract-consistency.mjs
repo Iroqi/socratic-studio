@@ -1238,6 +1238,27 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
       'styles.css 里没有这一条');
   }
 
+  // 2b) 可核对的界面（第五十轮）：算式 / 代入 / 前提 / 来源横跨编译器、宿主、提示三处
+  const metaM = /const UI_META_KINDS = \[([^\]]*)\]/.exec(uiSrc);
+  const metaKinds = metaM ? [...metaM[1].matchAll(/'([^']+)'/g)].map((x) => x[1]) : null;
+  check('assume / source 的归属只有一份名单（calculator / form / chart）',
+    (metaKinds || []).join(',') === 'calculator,form,chart', (metaKinds || []).join(','));
+  const promptLines25 = promptSrc25.split('\n');
+  const rowOf25 = (kind) => promptLines25.find((l) => l.includes('| \\`' + kind + '\\` |')) || '';
+  check('提示里算数那三档的每一行都写了 assume 与 source（教了才可能写对）',
+    ['calculator', 'form', 'chart'].every((kind) => /assume/.test(rowOf25(kind)) && /source/.test(rowOf25(kind))),
+    ['calculator', 'form', 'chart'].map((kind) => `${kind}:${/assume/.test(rowOf25(kind))}/${/source/.test(rowOf25(kind))}`).join(' '));
+  check('编译器导出求值 / 算式 / 代入三件套（宿主与编译器看同一份词法）',
+    /export function uiEval/.test(uiSrc) && /export function uiFormula/.test(uiSrc) && /export function uiWork/.test(uiSrc),
+    '缺一个导出');
+  check('宿主 import 了编译器的 uiEval / uiWork，且不再留第二份 evalUiTerms',
+    /uiEval,\s*\n\s*uiWork,/.test(hostSrc25) && !/function evalUiTerms/.test(hostSrc25),
+    'app.js 里还有第二份求值');
+  check('空的代入行由样式藏掉（表单空字段不占一行空白）',
+    /\.ui-math-work:empty\s*\{[^}]*display:\s*none/.test(stylesSrc), 'styles.css 里没有 .ui-math-work:empty');
+  check('提示里讲清了"正文不要再抄同一条算式"（抄的那遍没人保证跟结果一致）',
+    promptSrc25.includes('正文不要再抄一遍同一条算式'), '提示里没写这条分工');
+
   // 2) 否决名单：名单里每一档都必须在提示里被点名（禁而不说=模型只能撞上去才知道）
   const toldVeto = (vetoed || []).filter((bad) => promptSrc25.includes(bt(bad)));
   check('否决名单前四档提示都点名了（progress / percent / score / mastery 那一族）',

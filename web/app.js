@@ -13,6 +13,8 @@ import {
   getUiMode,
   setUiMode,
   UI_STATEFUL,
+  uiEval,
+  uiWork,
 } from './ui-compile.js';
 
 // ─────────────────────────────────────────────── 基础工具
@@ -2937,25 +2939,18 @@ function repaintUiCalc(id) {
       if (readouts[i]) readouts[i].textContent = String(rec.state[p.name]);
     });
     const outs = box.querySelectorAll('.ui-out') || [];
+    const works = box.querySelectorAll('.ui-math-work') || [];
     rec.spec.formulas.forEach((f, i) => {
       const holder = outs[i];
-      if (!holder) return;
-      // kids() 不是洁癖：children 是 HTMLCollection，没有 find——直接写会当场炸
-      const target = kids(holder).find((c) => c.classList?.contains('ui-out-value')) || holder;
-      target.textContent = `${evalUiTerms(f.terms, rec.state)}${unit}`;
+      if (holder) {
+        // kids() 不是洁癖：children 是 HTMLCollection，没有 find——直接写会当场炸
+        const target = kids(holder).find((c) => c.classList?.contains('ui-out-value')) || holder;
+        target.textContent = `${uiEval(f.terms, rec.state)}${unit}`;
+      }
+      // 算式与代入必须和结果同一次求值、同一份 spec：两行对不上比不摆更糟（第五十轮）。
+      if (works[i]) works[i].textContent = uiWork(f.terms, rec.state, rec.spec.unit || '');
     });
   }
-}
-
-/** 与编译器同一份求值口径（积项之和）；这里不重新解析表达式。 */
-function evalUiTerms(groups, values) {
-  let total = 0;
-  for (const terms of groups) {
-    let prod = 1;
-    for (const t of terms) prod *= t.n !== undefined ? t.n : (values?.[t.p] ?? 0);
-    total += prod;
-  }
-  return Math.round(total * 1000) / 1000;
 }
 
 /** 台面上现在的内联表单（按 class 找：桩与浏览器在这一手上语义一致）。 */
@@ -2968,19 +2963,24 @@ function uiFormNodes(id) {
  * **不重画整块**（整块重画会把正在输入的框换掉——敲一个字被换掉，手感当场没了；
  * 这一档的全部意义就在于"填进去，结果跟着算"）。
  * 读数按**发出去的顺序**对上 spec：输出与 spec.formulas 同序落一次，同序是可靠依据。
- * 求值沿 evalUiTerms 同一口径：number 字段空着时 '' 参与乘除是 0、参与加法按 0，
- * 不会拼出字符串。
+ * 求值沿 uiEval 同一口径（编译器导出的那一份）：number 字段空着时 '' 参与乘除是 0、
+ * 参与加法按 0，不会拼出字符串；代入行由 uiWork 从同一份公式表生成，空字段时留空。
  */
 function repaintUiForm(id) {
   const rec = readUiState(id);
   if (!rec?.spec) return;
   for (const box of uiFormNodes(id)) {
     const outs = box.querySelectorAll('.ui-out') || [];
+    const works = box.querySelectorAll('.ui-math-work') || [];
     rec.spec.formulas.forEach((f, i) => {
       const holder = outs[i];
-      if (!holder) return;
-      const target = kids(holder).find((c) => c.classList?.contains('ui-out-value')) || holder;
-      target.textContent = String(evalUiTerms(f.terms, rec.state));
+      if (holder) {
+        const target = kids(holder).find((c) => c.classList?.contains('ui-out-value')) || holder;
+        target.textContent = String(uiEval(f.terms, rec.state));
+      }
+      // 表单里空着的字段没有代入可言：uiWork 返回空串，CSS 把这一行藏掉——
+      // 不拿 0 冒充学习者填过的值（输出仍按 0 算，那是表单原有的口径）。
+      if (works[i]) works[i].textContent = uiWork(f.terms, rec.state, '');
     });
   }
 }
@@ -5458,7 +5458,6 @@ export const __hooks = {
   currentUiMode,
   repaintUiCalc,
   repaintUiForm,
-  evalUiTerms,
   textBlock,
   // 配置备份（第十四轮）：设置面板里的导出/导入设置块
   renderConfig,
