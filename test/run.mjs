@@ -3964,6 +3964,23 @@ section('12m. 配置备份要过同一道闸：坏的时候不许出货');
 }
 
 
+// ─────────────────────────────────────── 12o. 可核对界面的证据纪律：assume/source 只写真（第五十一轮）
+{
+  // 第五十轮给 calculator / form / chart 加了算式、代入、assume（前提）与 source（来源）——
+  // 宿主只校验条数与字数，不校验内容：assume/source 是模型写的话，真伪完全在模型这一侧。
+  // 契约里必须同时写清纪律（只写真前提/真出处，拿不准就省略）与诚实（宿主不校验内容），
+  // 否则"可核对"会变成"给编造的数据挂个官方外观"——第 50 轮治的病换个姿势复发。
+  const oPrompt = buildSystemPrompt({ topic: 't', chat: { messages: shortHistory } });
+  check('12o 硬规矩 15 仍在（算出来的结果要能被核对）', oPrompt.includes('算出来的结果要能被核对'), '硬规矩 15 没了');
+  check('12o 明说 assume/source 内容真伪是模型的责任', oPrompt.includes('assume 与 source 的内容真伪是你的责任'), '没划责任');
+  check('12o 诚实说明宿主只校验条数与字数、不校验内容', oPrompt.includes('宿主只校验条数与字数') && oPrompt.includes('不校验内容'), '没说不校验');
+  check('12o 前提只写真出现过的（学习者确认过或你讲过）', oPrompt.includes('真实出现过的') && oPrompt.includes('真出处'), '前提/来源没钉在事实上');
+  check('12o 拿不准就省略（宁可没来源，不写假来源）', oPrompt.includes('拿不准就省略') && oPrompt.includes('不写假来源'), '没给省略出口');
+  check('12o 写了就要经得起学习者追问', oPrompt.includes('经得起学习者追问'), '没绑核对义务');
+  check('12o 用法条目同纪律（只写真前提与真出处）', oPrompt.includes('assume / source 会被学习者追问'), '用法条目没跟上');
+}
+
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);
