@@ -3736,9 +3736,12 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   // 33b. 题卡播报：新题出现播一声（读屏知道冒出一道题），回放旧题不播；
   //      选项选中态不只靠视觉勾选（aria-pressed 同步）
   announce('');
-  const q = { questionId: 'q-a11y', question: '外层函数 return 了什么？', options: [{ label: '闭包' }, { label: '函数' }], multiSelect: false, allowText: false };
+  const q = { questionId: 'q-a11y', question: '外层函数 return 了什么？', options: [{ label: '闭包' }, { label: '函数' }], multiSelect: false, allowText: true };
   const card = showQuestion(q, null, null); // 新题，无 answer → 有人等，播报
   check('新题出现时播报「出一道题」', Boolean(card) && (ann().textContent || '').includes('出一道题'), ann().textContent);
+  check('题卡的补充框有 aria-label（读屏按用途认，不靠会消失的 placeholder）',
+    deepAll(card, 'ask-textarea')[0]?.getAttribute('aria-label') === '补充你的理由',
+    String(deepAll(card, 'ask-textarea')[0]?.getAttribute('aria-label')));
   check('播报词里没有数字（Invariant 4）', !/\d/.test(ann().textContent || ''), ann().textContent);
   // 选项点选检查必须在回放之前做：回放下一道题会把前一道封掉（sealUnanswered），
   // 封掉的卡不接点选——这正是真实行为，先点选再回放。
@@ -4028,6 +4031,12 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const calc = compile(['kind: calculator', 'id: feast', 'unit: 公斤', 'param: 人数 | 8 | 2 | 20', 'formula: 肉 = 人数 * 0.4']).html;
   check('calculator 编译成滑杆 + 读数（中文参数名认，这是中文课上的控件）',
     calc.includes('type="range"') && calc.includes('data-ui-param="人数"') && calc.includes('>3.2 公斤<'), calc.slice(0, 260));
+  const q39 = compile(['kind: question', 'id: q39', 'question: 换门之后胜率是多少？', 'option: 换 — 换一扇门']).html;
+  check('题卡的补充框有 aria-label（读屏按用途认，不靠会消失的 placeholder）',
+    q39.includes('<textarea class="ask-textarea" aria-label="补充你的理由"'), q39.slice(0, 500));
+  const q39b = compile(['kind: question', 'id: q39b', 'question: 用你自己的话说说看']).html;
+  check('没有选项的题卡，补充框的读屏名换成"用你自己的话回答"',
+    q39b.includes('aria-label="用你自己的话回答"'), q39b.slice(0, 400));
 
   // 2) 词表之外一律退回原文，且把「为什么」说给人看
   const unknown = compile(['kind: pie', 'row: a | b']);
@@ -4413,8 +4422,8 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     'edge: 光反应 -> 暗反应 | 提供 ATP', 'edge: 暗反应 -> 卡尔文循环',
   ];
   const dg = compile40(dgLines).html;
-  check('diagram 编成内联 SVG（不是灰底代码块）',
-    dg.includes('<svg class="ui-diagram"') && dg.includes('role="img"'), dg.slice(0, 120));
+  check('diagram 编成内联 SVG（不是灰底代码块），根节点是 group 不是 img',
+    dg.includes('<svg class="ui-diagram"') && dg.includes('role="group"') && !dg.includes('role="img"'), dg.slice(0, 160));
   check('节点长成矩形 + 名字（名字是形状的一部分，不是贴上去的标签）',
     (dg.match(/class="ui-node"/g) || []).length === 3 && dg.includes('>光反应</text>'), dg.slice(0, 260));
   check('连线带着箭头（方向是这张图的信息）',
@@ -4423,8 +4432,12 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     /<title>光反应：在类囊体膜上<\/title>/.test(dg), dg.slice(0, 220));
   check('svg 自带读屏名（<title> 在 svg 开头，读屏先念这一句）',
     /<svg[^>]*>[\s\S]{0,60}<title>关系图解：光合作用的两阶段<\/title>/.test(dg), dg.slice(0, 220));
-  check('读屏名里没有数字（结构数量不是学情指标，连 aria 里也不放）',
+  check('读屏名只是一句标题，不塞节点/边的数量（数量不是这张图的信息）',
     !/[0-9]/.test(/aria-label="[^"]*"/.exec(dg)?.[0] || ''), dg.slice(0, 160));
+  check('图外有一份读屏结构清单（节点与连线都写成句子，不是只活在像素里）',
+    dg.includes('<p class="sr-only">图里的节点：光反应（在类囊体膜上）、暗反应、卡尔文循环。</p>') &&
+    dg.includes('<p class="sr-only">图里的连线：光反应 → 暗反应（提供 ATP）；暗反应 → 卡尔文循环。</p>'),
+    dg.slice(0, 600));
   check('同一份输入两次编译长得一模一样（流式每帧重编，坐标不许跳）',
     compile40(dgLines).html === dg, '');
   check('没有 title 时读屏名是一句人话（不露内部计数）',
@@ -4493,6 +4506,8 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     dgEvil.includes('&lt;img') && !/<img/.test(dgEvil), dgEvil.slice(0, 200));
   check('属性位也转义（title / aria / data 里的引号挤不出事件处理器）',
     !/" onclick=/.test(dgEvil) && dgEvil.includes('&quot;'), dgEvil.slice(0, 200));
+  check('文字替代也走转义（结构清单不是绕过 XSS 的后门）',
+    dgEvil.includes('图里的节点：&lt;img') && (dgEvil.match(/class="sr-only"/g) || []).length === 2, dgEvil.slice(0, 300));
 
   // 6) 渲染器接线：diagram 走同一条 ```ui 围栏路，别的围栏不受影响
   const dgRendered = md40.renderMarkdown('先看图：\n\n```ui\nkind: diagram\nid: dg4\nnode: 甲\nnode: 乙\nedge: 甲 -> 乙\n```\n\n再解释', { partial: true });
@@ -5034,6 +5049,16 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const aria45 = (ch.match(/aria-label="([^"]*)"/) || [])[1] || '';
   check('读屏名只放标题与系列名，不塞数字',
     !/\d/.test(aria45), aria45);
+  // 第五十二轮：数值不能只活在像素里——静态图由宿主补一张 .sr-only 数据表
+  check('静态图带一张只给读屏的逐点数据表（caption + 列头 + 行头 + 数值）',
+    ch.includes('<table class="sr-only"><caption>数据表：每月走势（折线图）</caption>') &&
+    ch.includes('<th scope="col">一月</th>') && ch.includes('<th scope="col">三月</th>') &&
+    ch.includes('<th scope="row">收入</th><td>3</td><td>5</td><td>4</td>') &&
+    ch.includes('<th scope="row">支出</th><td>2</td><td>4</td><td>3</td>'), ch.slice(-700));
+  check('没有 x 标签时不编列名（不摆空表头）',
+    !compile45(['kind: chart', 'series: 收入 = 1,2']).includes('<thead>'), '');
+  check('数据表不写 data-*、不占 ui-* 类（文字替代不是新的宿主契约）',
+    /<table class="sr-only">/.test(ch) && !ch.includes('data-ui-') && !ch.includes('ui-chart-table'), ch.slice(-700));
 
   check('这一节无异常', errors.length === errsBefore45, errors.slice(errsBefore45).join(' | '));
 }
@@ -5062,6 +5087,8 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('滑块控件在图上（min0 max2 step1，value 0 = 第一条快照）',
     c.includes('type="range"') && c.includes('min="0"') && c.includes('max="2"') && c.includes('step="1"') && c.includes('value="0"'), c.slice(-360));
   check('滑块带着归属 id（宿主知道滑的是哪张图）', c.includes('data-ui-chart-snap="clt1"'), c.slice(-360));
+  check('滑块报出当前快照的名字而不是序号（aria-valuetext）',
+    c.includes('aria-valuetext="n5"'), c.slice(-360));
   check('整块带着归属 id（重画/续状态能找到这张图）', c.includes('<div class="ui-chart" data-ui-chart="clt1"'), c.slice(0, 200));
   check('默认画第一条快照（柱状：n5 的 5 个点 = 5 个 rect）',
     (c.match(/<rect /g) || []).length === 5, c.slice(0, 400));
@@ -5133,7 +5160,10 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   chartBlock.dataset.uiChart = 'clt1';
   const svg46 = doc.createElement('svg'); svg46.className = 'ui-chart-svg';
   const readout46 = doc.createElement('output'); readout46.className = 'ui-chart-snap'; readout46.textContent = 'n5';
-  chartBlock.append(svg46, readout46);
+  const slider46 = doc.createElement('input');
+  slider46.setAttribute('type', 'range');
+  slider46.setAttribute('aria-valuetext', 'n5');
+  chartBlock.append(svg46, readout46, slider46);
   domRoot.append(chartBlock);
   const svgBefore46 = svg46._innerHTML;
   handleUiDeskEvent({ target: { dataset: { uiChartSnap: 'clt1' }, value: '1' } });
@@ -5141,6 +5171,8 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     svg46._innerHTML !== svgBefore46 && svg46._innerHTML.includes('n10'), '');
   check('读数换成当前快照名', readout46.textContent === 'n10', readout46.textContent);
   check('svg 的 aria-label 换成当前快照', (svg46.attributes.get('aria-label') || '').includes('n10'), String(svg46.attributes.get('aria-label')));
+  check('滑块跟着快照改口（aria-valuetext=n10，读屏不念序号）',
+    slider46.getAttribute('aria-valuetext') === 'n10', String(slider46.getAttribute('aria-valuetext')));
   chartBlock.remove();
 
   // 8) 数据表替代视图（第三十四轮，学 IUI 组件库里的 table——同一份数据，图看形状、表查数值，
@@ -5168,6 +5200,12 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('表里是正在教的数据、不是学情（没有判分词）',
     !/score|percent|mastery|progress/i.test(ct), ct.slice(-600));
   check('没写 table 的交互图不带披露（表是模型的显式选择）', !c.includes('ui-chart-table'), '');
+  check('没写 table 也有一张隐藏的完整数据表（所有快照逐点都在，读屏不靠拖滑杆听数据）',
+    c.includes('<table class="sr-only"><caption>数据表：样本量越大，均值分布越窄（柱状图，每一行是一个「样本量」情形）</caption>') &&
+    c.includes('<th scope="row">n5</th>') && c.includes('<th scope="row">n10</th>') &&
+    c.includes('<th scope="row">n30</th>') && c.includes('<td>0.25</td>'), c.slice(-900));
+  check('写了 table 就不再叠一张隐藏表（同一件事只出现一次）',
+    ct.includes('<details class="ui-chart-table">') && !ct.includes('<table class="sr-only">'), ct.slice(-700));
   check('不带 x 标签的快照不摆空表头（列没有名字，不编"第几列"）',
     !compile46(['kind: chart', 'id: t2', 'slider: 情形', 'snap: 甲 = 1,2', 'snap: 乙 = 9,8', 'table: 数据']).html.includes('<thead>'), '');
   check('表名超 40 字：掉回原文并点名',
@@ -6191,6 +6229,8 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     c52.includes('data-ui-map-stop="g318"') && c52.includes('data-ui-name="康定"'), c52.slice(0, 500));
   check('点是可点的（role=button + tabindex，键盘走同一条路）',
     (c52.match(/role="button"/g) || []).length === 4 && (c52.match(/tabindex="0"/g) || []).length === 4, c52.slice(0, 500));
+  check('根节点是 group 不是 img（可聚焦的点各自可达，不被当成装饰）',
+    c52.includes('<svg class="ui-map-canvas" role="group"') && !c52.includes('role="img"'), c52.slice(0, 300));
   check('route 编译成一条折线（压在点底下，线只在声明过的点之间走）',
     c52.includes('<polyline class="ui-map-route" points="') &&
     (c52.match(/<polyline/g) || []).length === 1, c52.slice(0, 500));
@@ -6204,6 +6244,9 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     c52.includes('class="ui-cap"') && c52.includes('class="ui-handoff" data-ui-handoff="g318"'), c52.slice(-300));
   check('读屏名里说清"不按比例"（示意的框不能读成真地图）',
     c52.includes('aria-label="示意地图：318 国道东段（不按比例）"'), c52.slice(0, 400));
+  check('图外有一份读屏文字替代（点、方位、那句话、路线都写成句子）',
+    c52.includes('<p class="sr-only">图上的点：成都（图框的西南部，起点，平原上的菜市场）；康定（图框的中部，折多山从这里开始）；林芝（图框的东部，三月桃花）；拉萨（图框的东北部，终点）。方向指在图框里的位置，不按比例。</p>') &&
+    c52.includes('<p class="sr-only">路线：成都 → 康定 → 林芝 → 拉萨。</p>'), c52.slice(0, 900));
   check('编译输出没有判分词，学习者也不看得见原始坐标（Invariant 4：位置不进学情）',
     !/score|percent|mastery|correct|incorrect/.test(c52) && !c52.includes('38,62'), c52.slice(0, 400));
   check('spec 里点与路线都存下了（点击时要取现成的那份，不重解析围栏）',

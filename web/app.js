@@ -2766,6 +2766,8 @@ function renderAskCard(evt) {
   let textarea = null;
   if (evt.allowText !== false) {
     textarea = el('textarea', 'ask-textarea');
+    // 与编译出来的题卡同一把尺：placeholder 会消失，accessible name 不靠它。
+    textarea.setAttribute?.('aria-label', evt.options?.length ? '补充你的理由' : '用你自己的话回答');
     textarea.placeholder = evt.options?.length ? '也可以在这里补充你的理由…' : '用你自己的话说说看…';
     card.append(textarea);
   }
@@ -3387,6 +3389,10 @@ function repaintUiChart(id) {
     }
     const readout = block.querySelector?.('.ui-chart-snap');
     if (readout) readout.textContent = snap.name;
+    // 滑杆报出快照名而不是"第几档"：读屏用户听到的是正在教的那个情形（n5 / n30），
+    // 不是一个没有意义的序号。aria-label 管"这是什么控件"，aria-valuetext 管"现在在哪"。
+    const slider = block.querySelector?.('input');
+    if (slider) slider.setAttribute?.('aria-valuetext', snap.name);
     const tableBody = block.querySelector?.('.ui-chart-table-body');
     if (tableBody) tableBody.innerHTML = snap.table; // 数据表跟着快照走
   }

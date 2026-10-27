@@ -380,6 +380,36 @@ const mapPx = (x) => MAP_PAD + (x / 100) * (MAP_W - MAP_PAD * 2);
 const mapPy = (y) => MAP_PAD + (y / 100) * (MAP_H - MAP_PAD * 2);
 
 /**
+ * 相对示意框的方位（第五十二轮）：只给读屏的文字替代用，不是地理坐标。
+ * 框本来就不按比例，说"图框的西北部"是对这张图的诚实描述；原始 x,y 不进文字
+ * （学习者看不见坐标，读屏也不该念一串数字——位置是内容，数字不是）。
+ */
+function mapDir(x, y) {
+  const ns = y < 34 ? '北' : y > 66 ? '南' : '';
+  const ew = x < 34 ? '西' : x > 66 ? '东' : '';
+  if (ns && ew) return `${ew}${ns}部`;
+  if (ns) return `${ns}部`;
+  if (ew) return `${ew}部`;
+  return '中部';
+}
+
+/**
+ * map 的读屏文字替代：SVG 里的圆点与折线是像素，读屏只能听到一句"示意地图"。
+ * 这一段把"图上有哪些点、各在图框的哪个方位、那句话是什么、路线怎么走"写成句子；
+ * 点仍然是可聚焦的按钮（role=group 让它们各自可达），文字替代负责补全结构。
+ */
+function mapTextAlt(stops, route) {
+  const points = stops
+    .map((s) => `${s.name}（图框的${mapDir(s.x, s.y)}${s.note ? `，${s.note}` : ''}）`)
+    .join('；');
+  const line = route.length ? `<p class="sr-only">路线：${escapeHtml(route.join(' → '))}。</p>` : '';
+  return (
+    `<p class="sr-only">图上的点：${escapeHtml(points)}。方向指在图框里的位置，不按比例。</p>` +
+    line
+  );
+}
+
+/**
  * 框 → 路线（折线，压在点底下）→ 点（圈 + 名字）。几何全部由输入决定，与"第几个输入"
  * 无关：同一份 stop 永远落在同一个位置上（流式那一路每帧重编，跳来跳去的图没法对着问）。
  * interactive=false 是流里那一帧（id 还没落，点了没处存）：不加 role / tabindex / data-*，
@@ -544,10 +574,13 @@ function compileMap(fields, lines, partial) {
     ? `<p class="ui-map-pane-name">${cell(hit.name)}</p>` + (hit.note ? `<p class="ui-map-pane-note">${cell(hit.note)}</p>` : '')
     : `<p class="ui-map-pane-hint">点一个点，看它在哪儿；位置是示意的，不按比例</p>`;
   // 读屏名里刻意不放点的个数：结构数量不是学情指标，但连 aria 里也不出现数字（同 diagram）。
+  // 第五十二轮改口：真正要守的是"数值化的学情指标不进界面"，不是"数据里的数字不许进读屏"。
+  // 地图的点名、方位、那句话与路线是这张图的内容，读屏必须拿得到（见 mapTextAlt）。
   const aria = (title ? `示意地图：${title}` : '示意地图：点与点之间的相对位置') + '（不按比例）';
   const body =
     `<div class="ui-map" data-ui-map="${escapeHtml(id)}">` +
-    `<svg class="ui-map-canvas" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${MAP_W} ${MAP_H}" width="${MAP_W}" height="${MAP_H}">` +
+    mapTextAlt(stops, route) +
+    `<svg class="ui-map-canvas" role="group" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${MAP_W} ${MAP_H}" width="${MAP_W}" height="${MAP_H}">` +
     `<title>${escapeHtml(aria)}</title>${mapInner(stops, route, active, id, true)}</svg>` +
     `<div class="ui-map-pane" aria-live="polite">${pane}</div>` +
     `</div>`;
@@ -1032,6 +1065,21 @@ function fitText(s, maxChars) {
 }
 
 /**
+ * diagram 的读屏文字替代（第五十二轮）：SVG 的 <title> 只报"这是什么"，节点矩形与
+ * 连线对读屏仍是像素。role="group" 让每个可聚焦节点各自可达；这一段再把整张图的
+ * 结构用两句人话补全（有哪些节点、谁指向谁）。不写数量、不写坐标——数量不是这张
+ * 图的信息，数字只在"正在教的数据"里出现（chart 的逐点数据表）。
+ */
+function diagramTextAlt(nodes, edges) {
+  const nodeBits = nodes.map((n) => (n.note ? `${n.name}（${n.note}）` : n.name));
+  const edgeBits = edges.map((e) => `${e.src} → ${e.dst}${e.label ? `（${e.label}）` : ''}`);
+  return (
+    `<p class="sr-only">图里的节点：${escapeHtml(nodeBits.join('、'))}。</p>` +
+    `<p class="sr-only">图里的连线：${escapeHtml(edgeBits.join('；'))}。</p>`
+  );
+}
+
+/**
  * diagram 第二十七轮从静态形状升成交互档：节点可点击，点一下高亮"它连着谁"，
  * 宿主把「他点了谁 / 看过谁」记进 state.viewed，下一轮模型读得到。
  * 要有地方记就得有 id（同 checklist / calculator）；没 id 的图谁点了谁没处存，掉回原文。
@@ -1194,13 +1242,14 @@ function compileDiagram(fields) {
     })
     .join('');
 
-  // 读屏名里刻意不放节点/边的数量：结构数量不是学情指标，但连 aria 里也不出现数字，
-  // 免得哪一天"数字不许进界面面"这条被读屏用户先看见。data-ui-diagram 是这一整块的
-  // 归属 id：宿主点击时靠它知道"点的是哪张图"，重画时靠它把高亮续回来。
+  // 读屏名只报"这是什么"，不塞节点/边的数量：数量不是这张图的信息，人话留给下面的
+  // 文字替代（diagramTextAlt）。data-ui-diagram 是这一整块的归属 id：宿主点击时靠它
+  // 知道"点的是哪张图"，重画时靠它把高亮续回来。
   const aria = title ? `关系图解：${title}` : '关系图解：节点与连线表示概念或步骤之间的关系';
   const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
   const body =
-    `<svg class="ui-diagram" data-ui-diagram="${escapeHtml(id)}" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
+    diagramTextAlt(nodes, edges) +
+    `<svg class="ui-diagram" data-ui-diagram="${escapeHtml(id)}" role="group" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
     `<title>${escapeHtml(aria)}</title>${marker}${edgeEls}${nodeEls}</svg>`;
   return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'diagram' };
 }
@@ -1816,8 +1865,8 @@ function compileChart(fields) {
   const baseY = Math.max(PAD_T, Math.min(PAD_T + PLOT_H, y(0)));
 
   const typeName = type === 'bar' ? '柱状图' : '折线图';
-  // 读屏名里只放"是什么、有哪些系列"：数据值就在可见的轴上，结构数量不是学情指标，
-  // 但连 aria 也不塞数字——免得哪天"数字不许进界面"这条被读屏用户先看见。
+  // 读屏名只放"是什么、有哪些系列"：aria 是一句话的标题，不是数据倾倒的地方；
+  // 逐点数值由下面那张 .sr-only 数据表承担（第五十二轮）。
   const aria = `数据图：${title || '数据的形状'}。${typeName}：${series.map((s) => s.name).join('、')}`;
 
   const yLabels =
@@ -1851,13 +1900,38 @@ function compileChart(fields) {
   const body =
     `<svg class="ui-chart-svg" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
     `<title>${escapeHtml(aria)}</title>${frameEls}${yLabels}${xEls}${seriesEls}</svg>${legend}`;
-  return { html: `${cap}<div class="ui-chart">${body}${sourceHtml(src.source)}${assumeHtml(meta.assumes)}</div>`, shape: 'chart' };
+  // 数值不能只活在像素里：静态图没有 table 字段，读屏的逐点数据由宿主直接补一张隐藏表。
+  const srTable = chartSrTable(series, xLabels, `数据表：${title || '数据的形状'}（${typeName}）`);
+  return { html: `${cap}<div class="ui-chart">${body}${srTable}${sourceHtml(src.source)}${assumeHtml(meta.assumes)}</div>`, shape: 'chart' };
 }
 
 /** 交互档：`slider: 维度名` + `snap: 情形名 = 数值,数值,…`（2–8 条）+ `id:`。
  *  第三十四轮加可选 `table: 表名`：图下多一张可展开的数据表（原生 <details>，
  *  键盘天然可走，展开态归浏览器、不引宿主状态），跟着快照走——图看形状、表查数值，
  *  读屏用户也拿得到完整数据。 */
+/**
+ * 只给读屏的逐点数据表（第五十二轮）：SVG 里的折线 / 柱子对读屏是形状，不是数值。
+ * 这张 .sr-only 表把同一份数据逐点写出来——图给眼睛看形状，表给读屏查数值。
+ * 静态图一行一个系列；交互图一行一张快照（所有情形都在，拖动滑杆不会把它换掉）。
+ * 没有 x 标签时不摆表头、不编"第几列"：行头是系列名 / 快照名，列只按顺序排开。
+ * 这张表不写 data-*、不用 ui-* 类：它不是新的宿主契约，只是同一份数据的文字替代，
+ * 样式复用已有的 .sr-only（数据里的数字不是学情指标，Invariant 4 管的是后者）。
+ */
+function chartSrTable(rows, xLabels, caption) {
+  const head = xLabels.length
+    ? `<thead><tr>${xLabels.map((s) => `<th scope="col">${cell(s)}</th>`).join('')}</tr></thead>`
+    : '';
+  const body = rows
+    .map(
+      (r) =>
+        `<tr><th scope="row">${escapeHtml(r.name)}</th>` +
+        r.vals.map((v) => `<td>${escapeHtml(chartNum(v))}</td>`).join('') +
+        `</tr>`,
+    )
+    .join('');
+  return `<table class="sr-only"><caption>${escapeHtml(caption)}</caption>${head}<tbody>${body}</tbody></table>`;
+}
+
 function compileInteractiveChart(fields, shared) {
   const { type, title, handoff, assumes, source } = shared;
   const id = pick(fields, 'id')[0];
@@ -1927,6 +2001,12 @@ function compileInteractiveChart(fields, shared) {
   writeUiState(id, 'chart', { snap: current.name, uiKind: 'chart' }, spec);
 
   const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  // 没写 table 时，读屏也拿得到完整数据（所有快照都在一张隐藏表里）；写了 table
+  // 就是模型显式选择了"可展开的数据表"，不再叠一张隐藏表——同一件事在一个面板里
+  // 只出现一次（表的展开态归浏览器，读屏打开 summary 就能逐项查）。
+  const srTable = tableName
+    ? ''
+    : chartSrTable(snaps, xLabels, `数据表：${title || '数据的形状'}（${typeName}，每一行是一个「${sliderName}」情形）`);
   const body =
     `<div class="ui-chart" data-ui-chart="${escapeHtml(id)}">` +
     `<svg class="ui-chart-svg" role="img" aria-label="${escapeHtml(pre[snapIdx].aria)}" viewBox="0 0 ${pre[snapIdx].w} ${pre[snapIdx].h}" width="${pre[snapIdx].w}" height="${pre[snapIdx].h}">` +
@@ -1934,9 +2014,10 @@ function compileInteractiveChart(fields, shared) {
     `<div class="ui-chart-controls">` +
     `<span class="ui-chart-slider-name">${escapeHtml(sliderName)}</span>` +
     `<input type="range" min="0" max="${snaps.length - 1}" step="1" value="${snapIdx}" ` +
-    `data-ui-chart-snap="${escapeHtml(id)}" aria-label="「${escapeHtml(sliderName)}」：拖动切换快照，看数据的形状怎么变" />` +
+    `data-ui-chart-snap="${escapeHtml(id)}" aria-valuetext="${escapeHtml(current.name)}" aria-label="「${escapeHtml(sliderName)}」：拖动切换快照，看数据的形状怎么变" />` +
     `<output class="ui-chart-snap">${escapeHtml(current.name)}</output>` +
     `</div>` +
+    srTable +
     (tableName
       ? `<details class="ui-chart-table"><summary class="ui-chart-table-summary">${cell(tableName)}</summary>` +
         `<div class="ui-chart-table-body">${chartSnapTable(current, xLabels)}</div></details>`
@@ -1964,8 +2045,8 @@ function chartSnapSvg(snap, type, xLabels, title, sliderName) {
   const h = PAD_T + PLOT_H + PAD_B;
   const baseY = Math.max(PAD_T, Math.min(PAD_T + PLOT_H, y(0)));
   const typeName = type === 'bar' ? '柱状图' : '折线图';
-  // 读屏名里只放"是什么、当前快照与怎么动"：数据值就在可见的轴上，快照名是身份不是值，
-  // 不塞数据本身（连 aria 也不出现数值序列）。
+  // 读屏名只放"是什么、当前快照与怎么动"：aria 是标题，不塞整串数值；
+  // 逐点数值由面板里的数据表承担（写了 table 就用那张，没写由宿主补 .sr-only 表）。
   const aria = `数据图：${title || '数据的形状'}。${typeName}：${snap.name}（「${sliderName}」可拖动切换）`;
 
   const yLabels =
@@ -2150,7 +2231,7 @@ function compileQuestion(fields) {
     )
     .join('');
   const textarea = allowText
-    ? `<textarea class="ask-textarea" placeholder="${options.length ? '也可以在这里补充你的理由…' : '用你自己的话说说看…'}"></textarea>`
+    ? `<textarea class="ask-textarea" aria-label="${options.length ? '补充你的理由' : '用你自己的话回答'}" placeholder="${options.length ? '也可以在这里补充你的理由…' : '用你自己的话说说看…'}"></textarea>`
     : '';
   const html =
     `<div class="ask-card" data-question-id="${escapeHtml(id)}">` +
