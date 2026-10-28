@@ -2,7 +2,7 @@
 //
 // 设计要点：
 //   - 教学只发生在对话里。这个模块把「对话」做成真正的读-写-阻塞-回传回路：
-//     agent 调 ask_user_question → 服务端 emit 事件到前端 → 阻塞本回合 →
+//     agent 写一道 question 档（ui 围栏）→ 服务端 emit 事件到前端 → 阻塞本回合 →
 //     学习者的作答 resolve → 作为 toolResult 回到模型。这就是即时反馈回路。
 //   - 渲染根因：text 是流式文本，artifact 是制品。制品只给现象，不判对错。
 
@@ -799,9 +799,9 @@ export class TeachingSession {
       conceptCount: graph.concepts.length,
       teachingOrder: ordered.map((c) => `${c.id} (${c.name})`),
       note:
-        '已保存。向学习者展示概念清单与顺序，然后调用 ask_user_question 收这次确认' +
-        '（这是范围确认，不是在探某个概念，concept_id 填 none；选项给「就按这个顺序」「换个聚焦范围」「砍掉某一块」，' +
-        'allow_text 保持开启）。' +
+        '已保存。向学习者展示概念清单与顺序，然后写一道 `ui` 围栏的 `question` 档收这次确认' +
+        '（这是范围确认，不是在探某个概念，conceptId 填 none；选项给「就按这个顺序」「换个聚焦范围」「砍掉某一块」，' +
+        'allowText 保持开启）。' +
         '不要用正文里的「⛔ 等待你的确认」代替：正文不阻塞回合，学习者只能自己打字回答，' +
         '而下一轮回放历史时这条确认什么都不留下——你会把同一份清单再念一遍。',
     };

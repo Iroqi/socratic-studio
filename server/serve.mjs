@@ -3,7 +3,7 @@
 // 只用 Node 内置 http，没有构建步骤：静态文件直接发 web/，
 // API 走 /api/*，教学回合走 SSE（/api/notebooks/:id/turn）。
 //
-// 为什么是 SSE + 服务端阻塞：教学的核心是即时反馈回路。模型调 ask_user_question
+// 为什么是 SSE + 服务端阻塞：教学的核心是即时反馈回路。模型写出一道 question 档
 // 时服务端必须真的停在那里等学习者作答，再把作答作为 toolResult 交回模型——
 // 这一条只能在服务端做，浏览器端做不了。
 

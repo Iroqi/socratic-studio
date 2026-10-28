@@ -25,7 +25,7 @@
 ```
 学习者发一条消息
   → 模型开始一个回合，连续调工具
-  → 调 ask_user_question 时，服务端真的停住，把问题推给浏览器
+  → 写出 question 档时，服务端真的停住，把问题推给浏览器
   → 学习者在页面上作答，作答作为 toolResult 回到模型
   → 模型继续讲、出题、更新学习状态
 ```
@@ -157,9 +157,9 @@ value / probability 是判定置信度不是学习量（Invariant 4），完整�
 | 规则里说的 | 应用里的实现 |
 |---|---|
 | Learning Graph（`protocols.md` 严格校验） | `server/graph.mjs`：未知字段 / 非法枚举 / 悬空依赖 / 错误的 `assessment_items` 形状一律 fail fast，绝不静默丢字段。参数校验层不再抢着判必填（漏写 `name`/`summary` 曾让模型白烧一个来回、页面上多一张红卡）：`update_learning_graph` 是整张替换，同一 id 没写的字段沿用上一版（显式 `[]` 才算清空），补不齐的才由 Graph 校验一次报全。清单被整个写成 JSON 字符串也先拆开再校验（`unwrapStructuredArgs`，只点名单数组字段，正文类字段一律不碰）——那是序列化习惯，不是教学错误；非 JSON（单引号那种）不猜，原样交给校验层说实话 |
-| 平台原生问题控件 | `ask_user_question` 工具 → SSE `ask` 事件 → 页面上的提问卡 → POST 作答 → resolve → toolResult。**GATE-1 的确认也走这条通道**，不是正文里挂一句「⛔ 等待你的确认」：正文不阻塞回合，学习者只能自己打字回答，而下一轮回放历史时这次确认什么都不留——活数据里同一份概念清单被念了三遍、三个「可以」都是手打的。所以 `update_learning_graph` 成功返回值里就写着"去调 ask_user_question 收确认（`concept_id` 填 `none`，范围确认不算探针）"：模型当场读到的最后一条指令，决定它会不会真调 |
+| 平台原生问题控件 | `ui` 围栏的 `question` 档 → SSE `ask` 事件 → 页面上的提问卡 → POST 作答 → resolve → 合成一条 `ask_user_question` 的 toolCall/toolResult 回给模型。**工具集里没有 `ask_user_question` 这个工具**（第三十九轮并入界面；第三十九轮起能力映射表里再出现它就当幽灵工具测试报红）。**GATE-1 的确认也走这一档**，不是正文里挂一句「⛔ 等待你的确认」：正文不阻塞回合，学习者只能自己打字回答，而下一轮回放历史时这次确认什么都不留——活数据里同一份概念清单被念了三遍、三个「可以」都是手打的。所以 `update_learning_graph` 成功返回值里就写着"写一道 `question` 档收确认（`conceptId` 填 `none`，范围确认不算探针）"：模型当场读到的最后一条指令，决定它会不会真写 |
 | Progress State 持久化 | `data/notebooks/<id>/progress.json`，每次工具执行后落盘 |
-| mastery 状态机（`runtime.md` §1.2） | `checkTransition()` 在服务端强制执行：一次只升一级；升级必须带 observed 证据；自报未验证的 concept 单次概念错误即降一级。违反规则**拒绝写入**并把规则原文回给模型。**唯一的无条件那条边由应用自己走**：`ask_user_question` 的 `concept_id` 是必填字段，学习者一答，`execAsk` 就把那格从 `unknown` 写成 `seen` 并记一条 observed 事件（证据 = 作答原文），跳过不算接触、已 seen 不重复写、绝不越级。理由很实在：曾经有一局 50 多轮的活会话，老师把 Graph、提问、待办都调了，`set_progress_state` / `record_learning_event` / `compile_notes` **一次都没调**，地图从头到尾全灰——把一条不需要判断的转换押在模型自觉上，就是没押 |
+| mastery 状态机（`runtime.md` §1.2） | `checkTransition()` 在服务端强制执行：一次只升一级；升级必须带 observed 证据；自报未验证的 concept 单次概念错误即降一级。违反规则**拒绝写入**并把规则原文回给模型。**唯一的无条件那条边由应用自己走**：`question` 档每次都带 `conceptId`（提示词要求，事务性提问填 `none`），学习者一答，宿主就把那格从 `unknown` 写成 `seen` 并记一条 observed 事件（证据 = 作答原文），跳过不算接触、已 seen 不重复写、绝不越级。理由很实在：曾经有一局 50 多轮的活会话，老师把 Graph、提问、待办都调了，`set_progress_state` / `record_learning_event` / `compile_notes` **一次都没调**，地图从头到尾全灰——把一条不需要判断的转换押在模型自觉上，就是没押 |
 | 制品（内联 / 可交互 / 可带走） | `share_artifact` 工具 → `sandbox` iframe 内联渲染；**每一件都落盘** `data/notebooks/<id>/artifacts/<制品id>/index.html`，随事件带一条 `rel`，稳定地址 `GET /api/notebooks/<id>/artifacts/<制品id>`（响应带 `Content-Security-Policy: sandbox …`）；寿命归学习者：`POST …/artifacts/<制品id>/lifetime` `{retired}` 只在 manifest 上盖 / 抹 `retiredAt`（软退役，文件与他在里面做过的记录一条不删） |
 | PATCH（`protocols.md` §1） | `propose_graph_patch`：先对当前 Graph 空跑，合不上的当场退回给模型（不给学习者一张点不动的卡）；high 置信度直接合并，medium/low 落成待确认记录，右侧可接受/忽略 |
 | 判定类决策（可选外包） | `jev_judge` 工具（需配 JEV key，见「判定外包」）。判对/判错、证据是否支撑主张、候选中选下一步——**判定**交给专用决策模型 JEV，模型侧只提供证据与标准，拿回 `value + probability`。概率只是置信度不是正确率；判成 `needs_review` 时补证据或问学习者，缺失证据 = unknown，低概率硬凑比不判更糟。**手续类绝不外包**：状态转移合法性、证据归一化、自报未验证打标、一次一级，仍是状态机自己的活。没配 key 时工具明说并跳过，绝不假装判过 |
@@ -788,10 +788,10 @@ assistant 消息上写进 `chat.json`；刷新后 `renderThread()` 按时间顺�
 前端与 `chat.json` 看到的形状不变。`run.mjs` 第 7 节直接调**运行时那同一个** `validateToolCall`
 钉这条（把 schema 改回只认对象，那两行立刻红成一模一样的报错）。
 
-**`ask_user_question` 的 `id` 也不再必填——同一个坑的第二版。** 活数据里它漏填一次就红一次
+**`question` 档的 `id` 是必填的（围栏里漏写会被编译器挡下），但回放路径的合成调用不必带——同一个坑的第二版。** 活数据里它漏填一次就红一次
 （`id: must have required properties id`，一张题卡还没问出口就先挂在红框里），
-而 `execAsk` 第一行本来就会补一个：校验层挡的是代码自己能补的东西。
-`id` 只是"这张卡对应哪个等待中的提问"的传输把手，答完就没用了；教学坐标承重的是 `concept_id`
+而 `execAsk` 第一行本来就会补一个：回放用的合成 `ask_user_question` 调用不该因为缺这个传输把手被校验层打回。
+`id` 只是"这张卡对应哪个等待中的提问"的传输把手，答完就没用了；教学坐标承重的是 `conceptId`
 （那个**仍然必填**，因为学习者一答就由它把那格写成 Seen，必填比提示词里叮嘱可靠）。
 补号现在带自增序号——以前是 `q-${Date.now()}`，同一毫秒连发两问会撞在同一个把手上，
 第一张卡永远等不到作答。`run.mjs` 第 7 节钉这三条（改回必填、或改回裸 `Date.now()`，各自立刻红）。
@@ -1444,6 +1444,7 @@ README 说 3 件（探针 24-C）。数了没打进包的东西，与"备份说�
 | 50 | 2026-10-27 | 可核对的界面：calculator / form / chart 摆出算式、代入、前提与来源（IUI 的"界面要经得起核对"） | `docs/iteration-2026-10-27.md` |
 | 51 | 2026-10-27b | 可核对界面的证据纪律：assume/source 只写真（真前提真出处、拿不准就省略）、诚实说明宿主不校验内容 | `docs/iteration-2026-10-27b.md` |
 | 52 | 2026-10-27c | 读得出来的界面：图解 / 地图的结构文字替代、图表逐点数据表、滑杆报快照名、题卡补充框可访问名（"软件适应人"包括不用眼睛的人） | `docs/iteration-2026-10-27c.md` |
+| 53 | 2026-10-28 | 问句是界面：能力映射 / 输出风格 / 运行时最后一条指令不再指向已并入 `question` 档的幽灵工具；映射表入口真实性进 CI | `docs/iteration-2026-10-28.md` |
 
 ### 第四十五轮：文档层收敛——迭代档案区收成年表（2026-10-22）
 
@@ -1555,6 +1556,23 @@ README 说 3 件（探针 24-C）。数了没打进包的东西，与"备份说�
   §39 +2、§40 +2、§45 +3、§46 +4、§52 +2）；变异六连（根角色 / diagram 清单 / map 清单 /
   图表数据表 / 滑杆快照名 / 题卡可访问名）先红后恢复。详细判决在
   `docs/iteration-2026-10-27c.md`。
+
+### 第五十三轮：问句是界面——能力映射里不能有幽灵工具（2026-10-28）
+
+- **一手依据**：Intelligent UI 是"原生组件库 + 编译器"——模型在已知组件里选。机制成立的前提
+  是**模型看到的清单 = 宿主接得住的清单**；多一个入口，模型就会去调，这一回合白烧。
+- **审计发现**：第三十九轮把 `ask_user_question` 并进 `question` 档、从 `buildTools()` 移除，
+  但 prompt 的能力映射行、输出风格、`update_learning_graph` 成功返回值（模型存完图后读到的
+  **最后一条指令**）仍写"调用 ask_user_question"；README 四处活文档同样复述幽灵。
+  概念层的根因：适配层按规则源语言逐条转写，却没有跟工具集对齐——源语言保留是对的，
+  照抄进适配层就成了幽灵。
+- **本轮（奥卡姆，零新增档 / 字段 / 状态）**：映射行改指 `ui` 围栏的 `question` 档并明说
+  "工具集里没有这个工具"；输出风格与运行时 note 同改（字段名用围栏的 `conceptId` / `allowText`）；
+  `APP_ADAPTER` 导出给测试；新增守卫断言从 `buildTools()` 读真相——映射表点名的入口要么是
+  注册工具、要么是 `ui` 围栏，没有第三种；README 四处活文档改回当前事实。
+- **验证**：全量 `npm run test:all` = **2927 项 / 6 套件全绿**（+7 断言）；变异三连
+  （映射行 / 输出风格 / 运行时 note 各自改回幽灵措辞）先红后恢复。详细判决在
+  `docs/iteration-2026-10-28.md`。
 
 ## 已知边界
 

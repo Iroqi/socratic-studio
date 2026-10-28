@@ -1104,7 +1104,7 @@ check('没撤过时不许摆那句解释（没说错对象的提示比不提示�
 // ─────────────────────────────────────── 7d. 教学规则本体在 server/rules/
 
 section('7d. 教学规则在 server/rules/，运行时注入');
-const { loadRulesText } = await import('../server/prompt.mjs');
+const { loadRulesText, APP_ADAPTER } = await import('../server/prompt.mjs');
 const { RULES_DIR } = await import('../server/config.mjs');
 check('RULES_DIR 指向 server/rules', RULES_DIR.endsWith(path.join('server', 'rules')), RULES_DIR);
 const rulesBlob = loadRulesText({ force: true });
@@ -1154,6 +1154,49 @@ for (const name of Object.values(TOOL_NAMES)) {
 // 出现一次就意味着模型会以为自己能执行命令 / 改文件 / 解析 PDF / 转写语音。
 for (const ghost of ['命令执行工具', 'str_replace', 'pdf 技能', '语音转写', '`Skill` 工具', 'workspace 下的真实文件']) {
   check(`prompt 里不再宣称有「${ghost}」`, !rulesBlob.includes(ghost));
+}
+
+// 能力映射表的反向检查（第五十三轮）：上一段只保证"注册的工具都有映射"，
+// 反过来"映射里点名的工具真的注册过"没人守——第三十九轮把 ask 并进 question 档之后，
+// 映射表里那一行还写着 `ask_user_question`，提示里还叫模型"调用它"，而工具集里 19 个
+// 工具没有这一个。规则原样保留旧名字是对的（规则是源语言），适配层照着抄就是幽灵工具。
+{
+  const registered = new Set(buildTools().map((t) => t.name));
+  check('ask_user_question 不在注册工具里（第三十九轮起由 question 档收答）',
+    !registered.has(TOOL_NAMES.ASK), [...registered].join(','));
+  check('规则本体仍原样保留 ask_user_question（源语言不因适配层改名而改写）',
+    rulesBlob.includes('ask_user_question'), '规则被改写了');
+
+  // 只取「## 工具映射」这一张表：后面那张十六档词表里也满是反引号，
+  // 混在一起扫会把 kind / 字段名当成工具名。
+  const mapSection = APP_ADAPTER.split('## 工具映射')[1]?.split('\n## ')[0] || '';
+  const mapRows = mapSection.split('\n').filter((l) => /^\|/.test(l) && !/^\|\s*-{2,}/.test(l));
+  const badRows = [];
+  for (const row of mapRows) {
+    const cells = row.split('|').map((c) => c.trim());
+    const right = cells[2] || '';
+    const first = /`([^`]+)`/.exec(right);
+    if (!first) continue;
+    const token = first[1];
+    // 只查"工具样"的入口（snake_case）：`@` 引用这类能力不是工具，别误判
+    if (!/^[a-z][a-z0-9_]*$/.test(token)) continue;
+    // `ui` 那一行是 question 档的入口：它不是工具，是围栏词——映射表允许它当"入口"
+    if (token !== 'ui' && !registered.has(token)) badRows.push(token);
+  }
+  check('映射表里点名的入口要么是注册工具、要么是 ui 围栏（没有第三种）',
+    badRows.length === 0, badRows.join(',') || '（空）');
+
+  const askRow = mapRows.find((l) => l.includes('问题控件')) || '';
+  check('问题控件那一行指向 question 档（不是幽灵工具）',
+    askRow.includes('`ui` 围栏的 `question` 档') && !askRow.includes('`ask_user_question`。'),
+    askRow.slice(0, 120));
+  check('问题控件那一行明说工具集里没有 ask_user_question',
+    askRow.includes('工具集里没有这个工具'), askRow.slice(0, 160));
+  check('适配层不再叫模型调用 / 使用 ask_user_question',
+    !/(调用|就用|必须用|请用|使用|用)\s*`?ask_user_question`?/.test(APP_ADAPTER),
+    (APP_ADAPTER.match(/(调用|就用|必须用|请用|使用|用)\s*`?ask_user_question`?/) || [])[0] || '');
+  check('输出风格那一句也走 question 档',
+    APP_ADAPTER.includes('写一道 `ui` 围栏的 `question` 档'), '');
 }
 
 // ─────────────────────────────────────── 7c. 项目/游戏的通用回报通道
@@ -2218,7 +2261,7 @@ check(
 
 // ─────────────────────────────────────── 7l. 门禁确认必须走题卡，不是正文里的一句话
 
-section('7l. GATE-1：确认要触发 ask_user_question，不能让学习者自己打字');
+section('7l. GATE-1：确认要写出 question 档，不能让学习者自己打字');
 
 // 活数据（data/notebooks/topic-i3b-dd36be）里三连击：模型连着三轮把同一份概念清单
 // +「⛔ 等待你的确认」当正文发出去，学习者每次都得手打「可以」。根因不是模型偷懒——
@@ -2231,8 +2274,8 @@ section('7l. GATE-1：确认要触发 ask_user_question，不能让学习者自�
   ]));
   check('存图确实成功（下面几条才有意义）', res.ok === true, JSON.stringify(res).slice(0, 160));
   check(
-    '成功的 note 点名要调 ask_user_question 收确认',
-    String(res.note).includes('ask_user_question'),
+    '成功的 note 点名要写 question 档收确认（不再叫模型去调幽灵工具）',
+    String(res.note).includes('`question` 档') && !String(res.note).includes('ask_user_question'),
     res.note,
   );
   check(
@@ -2242,7 +2285,7 @@ section('7l. GATE-1：确认要触发 ask_user_question，不能让学习者自�
   );
   check(
     '门禁确认算事务性提问：不许把 Seen 记到某个概念头上',
-    /concept_id 填 none/.test(String(res.note)),
+    /conceptId 填 none/.test(String(res.note)),
     res.note,
   );
   session.graph = snapshot;
@@ -2257,8 +2300,8 @@ check(
   gateRow,
 );
 check(
-  '适配器措辞：任何"停下来等回答"都指向题卡，正文提问只是降级',
-  /要停下来等学习者回答[\s\S]{0,400}ask_user_question/.test(probePrompt),
+  '适配器措辞：任何"停下来等回答"都指向 question 档，正文提问只是降级',
+  /要停下来等学习者回答[\s\S]{0,400}question/.test(probePrompt),
 );
 check(
   '适配器不再单独教 GATE-1 的正文标记格式',
