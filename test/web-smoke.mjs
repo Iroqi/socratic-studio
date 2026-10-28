@@ -4037,6 +4037,13 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const q39b = compile(['kind: question', 'id: q39b', 'question: 用你自己的话说说看']).html;
   check('没有选项的题卡，补充框的读屏名换成"用你自己的话回答"',
     q39b.includes('aria-label="用你自己的话回答"'), q39b.slice(0, 400));
+  // 第五十九轮：首行裸档名（模型照词表字段写法自然输出 question / calculator）也能编
+  const q39c = compile(['question', 'id: q39c', 'question: 你学 Git 主要想做到什么？', 'option: 从零上手日常使用 - 完全没用过 Git']).html;
+  check('首行裸 question 也能编成题卡（词表按字段教，模型写裸档名不降级）',
+    q39c.includes('ask-card') && q39c.includes('q39c') && !q39c.includes('lang-ui'), q39c.slice(0, 200));
+  const calcBare = compile(['calculator', 'id: feast2', 'unit: 公斤', 'param: 人数 | 8 | 2 | 20', 'formula: 肉 = 人数 * 0.4']).html;
+  check('首行裸 calculator 同样能编（裸档名是通用行为，不只 question）',
+    calcBare.includes('data-ui-param="人数"'), calcBare.slice(0, 120));
 
   // 2) 词表之外一律退回原文，且把「为什么」说给人看
   const unknown = compile(['kind: pie', 'row: a | b']);

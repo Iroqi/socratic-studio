@@ -2356,6 +2356,14 @@ const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: comp
  */
 export function compileUiBlock(lines, partial) {
   const fail = (why) => (partial ? { html: skeleton('正在把这个界面长出来…'), pending: true } : { html: degrade(why, lines), degraded: why });
+  // 首行裸档名（第五十九轮）：词表按「id: / question: 字段」教，模型很自然把首行写成
+  // 裸档名（question / calculator / …）而不是 kind: 前缀。编译器两种写法都认——
+  // 裸档名归一成 kind: 行再走下面的特例与 parseFence。
+  const lead = lines.find((l) => l.trim())?.trim();
+  if (lead && !lead.includes(':') && UI_KINDS.includes(lead.toLowerCase())) {
+    const at = lines.indexOf(lines.find((l) => l.trim()));
+    lines = [...lines.slice(0, at), `kind: ${lead.toLowerCase()}`, ...lines.slice(at + 1)];
+  }
   // canvas 的 html 是多行正文，不能走 parseFence 的「字段: 值」通用拆（html 行会被当字段
   // 判坏，长行还会先撞「单行过长」）——首行声明 kind: canvas 就先按原文行整段编译。
   const firstMeaningful = lines.find((l) => l.trim());
