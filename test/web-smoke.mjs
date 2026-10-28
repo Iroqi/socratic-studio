@@ -5177,7 +5177,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
 
   // 8) 数据表替代视图（第三十四轮，学 IUI 组件库里的 table——同一份数据，图看形状、表查数值，
   //    读屏拿得到完整数据）：table: 表名 → 图下多一张可展开的数据表（原生 <details>，键盘天然
-  //    可走，展开态归浏览器、不引宿主状态），跟着快照走。表名 ≤40 字；table 只配带 slider 的 chart。
+  //    可走，展开态归浏览器、不引宿主状态），跟着快照走。表名 ≤40 字；table 只配 chart（第五十四轮起静态图也收）。
   //    用独立 id tbl1（clt1 被前序用例滑过，状态不许串）。
   const tbl = ['kind: chart', 'id: tbl1', 'title: 样本量越大，均值分布越窄', 'type: bar', 'slider: 样本量',
     'x: 区间一,区间二,区间三,区间四,区间五',
@@ -5210,9 +5210,9 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     !compile46(['kind: chart', 'id: t2', 'slider: 情形', 'snap: 甲 = 1,2', 'snap: 乙 = 9,8', 'table: 数据']).html.includes('<thead>'), '');
   check('表名超 40 字：掉回原文并点名',
     Boolean(deg46(['kind: chart', 'id: x10', 'slider: 样本量', 'snap: n5 = 1,2', 'snap: n10 = 3,4', 'table: ' + '表'.repeat(41)]).includes('表名')), '');
-  check('静态 chart 写 table 掉回原文（table 只配带 slider 的 chart）',
-    Boolean(deg46(['kind: chart', 'series: 收入 = 1,2,3', 'table: 数据']).includes('table')), '');
-  check('compare 写 table 掉回原文并点名（table 只配带 slider 的 chart）',
+  check('静态 chart 写 table 长出披露（第五十四轮起静态图也收 table，数据表就是全部数据）',
+    compile46(['kind: chart', 'series: 收入 = 1,2,3', 'table: 数据']).html.includes('<details class="ui-chart-table">'), '');
+  check('compare 写 table 掉回原文并点名（table 只配 chart）',
     Boolean(deg46(['kind: compare', 'row: 甲 | 乙', 'row: 丙 | 丁', 'table: 数据']).includes('table')), '');
   check('explore 写 table 掉回原文并点名',
     Boolean(deg46(['kind: explore', 'id: e1', 'tab: 一 | 甲', 'tab: 二 | 乙', 'table: 数据']).includes('table')), '');
@@ -5488,7 +5488,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 甲 = x', 'outcome: 甲 = z', 'outcome: 乙 = y']).includes('两条结果')), '');
   check('有选项没配 outcome：掉回原文并点名',
     Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 甲 = x']).includes('没有配 outcome')), '');
-  check('game 里写 table：掉回原文并点名', Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 甲 = x', 'outcome: 乙 = y', 'table: 一张表']).includes('table 只配带 slider')), '');
+  check('game 里写 table：掉回原文并点名', Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 甲 = x', 'outcome: 乙 = y', 'table: 一张表']).includes('table 只配 chart')), '');
   check('handoff 超 24 字：掉回原文并点名',
     Boolean(deg48(['kind: game', 'id: a', 'try: 甲', 'try: 乙', 'outcome: 甲 = x', 'outcome: 乙 = y', 'handoff: ' + '发'.repeat(25)]).includes('24')), '');
   check('try 写在 compare：掉回原文并点名',
@@ -5669,7 +5669,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('walkthrough 里写 step（steps 档的字段）：掉回原文并点名',
     Boolean(deg49(['kind: walkthrough', 'id: a', 'step: 一步', 'move: 乙 = y']).includes('step 是 steps 档的字段')), '');
   check('walkthrough 里写 table：掉回原文并点名',
-    Boolean(deg49(['kind: walkthrough', 'id: a', 'move: 甲 = x', 'move: 乙 = y', 'table: 一张表']).includes('table 只配带 slider')), '');
+    Boolean(deg49(['kind: walkthrough', 'id: a', 'move: 甲 = x', 'move: 乙 = y', 'table: 一张表']).includes('table 只配 chart')), '');
   check('walkthrough 里写 try：掉回原文并点名',
     Boolean(deg49(['kind: walkthrough', 'id: a', 'move: 甲 = x', 'move: 乙 = y', 'try: 丙']).includes('只配带 id 的 game')), '');
   check('handoff 超 24 字：掉回原文并点名',
@@ -5872,7 +5872,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('顶层写 handoff：掉回原文并点名（递话跟着块走）',
     Boolean(deg50(['kind: deck', 'handoff: 带回去', 'part: calculator', '  param: 人数 | 5', '  formula: 总量 = 人数 * 2',
       'part: checklist', '  id: c1', '  item: 一项']).includes('写错了层')), '');
-  check('顶层写 table：掉回原文并点名（table 只配带 slider 的 chart，也不配 deck 顶层）',
+  check('顶层写 table：掉回原文并点名（table 只配 chart，也不配 deck 顶层）',
     Boolean(deg50(['kind: deck', 'table: 一张表', 'part: compare', '  row: 甲 | 乙']).includes('写错了层')), '');
   check('缩进内容出现在第一个 part 之前：掉回原文并点名',
     Boolean(deg50(['kind: deck', '  id: shop1', 'part: compare', '  row: 甲 | 乙']).includes('缩进的内容要跟在 part: 后面')), '');
@@ -6082,7 +6082,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('form 里写 item（checklist 档的字段）：掉回原文并点名',
     Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'item: 一项']).includes('不是 form 的字段')), '');
   check('form 里写 table：掉回原文并点名',
-    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'table: 一张表']).includes('table 只配带 slider')), '');
+    Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'table: 一张表']).includes('table 只配 chart')), '');
   check('form 里写 try：掉回原文并点名',
     Boolean(deg51(['kind: form', 'id: a', 'field: 人数 | number', 'try: 丙']).includes('只配带 id 的 game')), '');
   check('form 里写 move：掉回原文并点名',
@@ -6308,7 +6308,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('map 里写 node / edge：掉回原文并点名（谁连着谁用 diagram）',
     Boolean(deg52(['kind: map', 'id: a', 'node: 甲', 'node: 乙', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18']).includes('diagram 的字段')), '');
   check('map 里写 table：掉回原文并点名',
-    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18', 'table: 一张表']).includes('table 只配带 slider')), '');
+    Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18', 'table: 一张表']).includes('table 只配 chart')), '');
   check('handoff 超 24 字：掉回原文并点名',
     Boolean(deg52(['kind: map', 'id: a', 'stop: 成都 | 6,90', 'stop: 拉萨 | 94,18', 'handoff: ' + '发'.repeat(25)]).includes('24')), '');
   // 语义词写错档：stop / route 是 map 的词，写在别的档 = 掉回原文并点名（同一把尺）
@@ -6606,6 +6606,121 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
       'part: checklist', '  id: c', '  item: a']).includes('第 1 块（compare）'), '');
 
   check('这一节无异常', errors.length === errsBefore53, errors.slice(errsBefore53).join(' | '));
+}
+
+// ─── 54. 图表诚实性（第五十四轮）：柱状图的长度就是值——基线不归零会把 100/120/140
+// 画成 11/80/111 px；单位写进 unit；静态图也能配 table（图看形状、表查数值）。
+{
+  console.log('\n54. 图表诚实性（柱状图零基线 / 单位 / 静态数据表）');
+  const errsBefore54 = errors.length;
+  const ui54 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const compile54 = (lines, partial) => ui54.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const deg54 = (lines) => compile54(lines).degraded || '';
+  ui54.resetUiState();
+
+  // 柱子的高度（只认 <rect>，别把 svg 的 height 属性算进来）
+  const bars54 = (html) => [...html.matchAll(/<rect class="[^"]*" x="[^"]*" y="([\d.]+)" width="[^"]*" height="([\d.]+)"/g)]
+    .map((m) => ({ y: Number(m[1]), h: Number(m[2]) }));
+  const ylabels54 = (html) => [...html.matchAll(/class="ui-chart-ylabel"[^>]*>([^<]+)<\/text>/g)].map((m) => m[1]);
+
+  // 1) 基线归零：100 / 120 / 140 的柱高必须同比例，纵轴下限是 0
+  const pos = compile54(['kind: chart', 'type: bar', 'x: 一月,二月,三月', 'series: 收入 = 100,120,140']).html;
+  const bh = bars54(pos);
+  check('三根柱子都画出来了', bh.length === 3, JSON.stringify(bh));
+  check('柱高与数值同比例（不再把 1.4 倍画成 10 倍）',
+    Math.abs(bh[0].h / bh[2].h - 100 / 140) < 0.01 && Math.abs(bh[1].h / bh[2].h - 120 / 140) < 0.01,
+    JSON.stringify(bh.map((b) => b.h)));
+  check('纵轴下限是 0（柱状图不从最小值截断）', ylabels54(pos)[1] === '0', ylabels54(pos).join(' / '));
+  check('全正数没有零线（零线就在底轴上，不重复画）', !pos.includes('ui-chart-zero'), '');
+  check('柱底都落在同一条基线上',
+    new Set(bh.map((b) => Math.round((b.y + b.h) * 100) / 100)).size === 1,
+    JSON.stringify(bh.map((b) => b.y + b.h)));
+
+  // 2) 正负混合：零线画在轴内，柱子从零线向两边长
+  const mixed = compile54(['kind: chart', 'type: bar', 'x: 一月,二月', 'series: 盈亏 = -5,10']).html;
+  const mh = bars54(mixed);
+  const zeroY = Number((/class="ui-chart-zero"[^>]*y1="([\d.]+)"/.exec(mixed) || [])[1]);
+  check('有正有负时零线出现（柱子的起点有个可见的锚）',
+    Number.isFinite(zeroY) && mixed.includes('class="ui-chart-zero"'), mixed.slice(0, 400));
+  check('正柱从零线向上长、负柱从零线向下长（高度 5 与 10 同比例）',
+    mh.length === 2 && Math.abs(mh[0].h / mh[1].h - 0.5) < 0.01 &&
+    Math.abs(mh[0].y - zeroY) < 0.01 && mh[0].y + mh[0].h > zeroY,
+    JSON.stringify(mh) + ' zero=' + zeroY);
+
+  // 3) 全负：零线在顶轴，柱子向下长
+  const neg = compile54(['kind: chart', 'type: bar', 'x: 一月,二月', 'series: 亏损 = -10,-20']).html;
+  const nh = bars54(neg);
+  check('全负数组的纵轴上限是 0（基线在顶）', ylabels54(neg)[0] === '0', ylabels54(neg).join(' / '));
+  check('全负柱高仍与数值同比例（10 与 20 是一半）',
+    nh.length === 2 && Math.abs(nh[0].h / nh[1].h - 0.5) < 0.01, JSON.stringify(nh.map((b) => b.h)));
+  check('全负柱从顶轴向下长（顶端对齐）', nh.length === 2 && Math.abs(nh[0].y - nh[1].y) < 0.01, JSON.stringify(nh));
+
+  // 4) 全零：不除零、不出 NaN、柱高为 0
+  const zeros = compile54(['kind: chart', 'type: bar', 'x: 一月,二月', 'series: 收入 = 0,0']).html;
+  check('全零柱状图不产生 NaN / Infinity', !/NaN|Infinity/.test(zeros), zeros.slice(0, 300));
+  check('全零柱高是 0（没数据就画不出长度）', bars54(zeros).every((b) => b.h === 0), JSON.stringify(bars54(zeros)));
+
+  // 5) 折线图保持自适应（它没有"长度"，压到零轴反而看不出趋势）
+  const line = compile54(['kind: chart', 'series: 收入 = 100,120,140']).html;
+  const lyl = ylabels54(line);
+  check('折线图仍按数据范围自适应（143.2 / 96.8，不强行归零）', lyl[0] === '143.2' && lyl[1] === '96.8', lyl.join(' / '));
+  check('折线不画零基线、也不画零线', !line.includes('ui-chart-zero'), '');
+
+  // 6) 多系列柱共享同一条零基线
+  const multi = compile54(['kind: chart', 'type: bar', 'x: 一月,二月', 'series: 甲组 = 4,6', 'series: 乙组 = 2,8']).html;
+  const mb = bars54(multi);
+  check('多系列柱共 4 根、底边同一条线',
+    mb.length === 4 && new Set(mb.map((b) => Math.round((b.y + b.h) * 100) / 100)).size === 1,
+    JSON.stringify(mb));
+
+  // 7) unit：标题旁标一次、读屏名里有一份、数据表有一份
+  const withUnit = compile54(['kind: chart', 'type: bar', 'title: 每月收入', 'unit: 万元', 'x: 一月,二月', 'series: 收入 = 100,120']).html;
+  check('标题旁标出单位（"140"是元还是公斤不用猜）', withUnit.includes('<p class="ui-cap">每月收入（单位：万元）</p>'), withUnit.slice(0, 200));
+  check('读屏名也带单位（读屏听到的口径与眼睛看到的一致）',
+    withUnit.includes('柱状图（单位：万元）'), withUnit.slice(0, 300));
+  check('隐藏数据表的标题带单位', withUnit.includes('（柱状图，单位：万元）'), withUnit.slice(-400));
+  check('不写 title 时单位也能单独成一行', compile54(['kind: chart', 'unit: 元', 'series: 收入 = 1,2']).html.includes('<p class="ui-cap">单位：元</p>'), '');
+  check('单位超过 12 字：掉回原文并点名', deg54(['kind: chart', 'series: 甲 = 1,2', 'unit: ' + '公'.repeat(13)]).includes('单位'), '');
+  const xssUnit = compile54(['kind: chart', 'title: 收入', 'unit: <img src=x onerror=alert(1)>', 'series: 甲 = 1,2']).html;
+  check('单位里的标签被转义（不能让标题旁边长出图片 / 脚本）',
+    !xssUnit.includes('<img') && xssUnit.includes('&lt;img'), xssUnit.slice(0, 300));
+
+  // 8) 静态图 + table：可见披露表，不再叠隐藏表
+  const st = ['kind: chart', 'type: bar', 'title: 每月收入', 'unit: 万元', 'x: 一月,二月', 'series: 收入 = 100,120', 'series: 支出 = 80,90', 'table: 收支明细'];
+  const stHtml = compile54(st).html;
+  check('静态图的 table 长出原生披露（summary = 表名）',
+    stHtml.includes('<details class="ui-chart-table"><summary class="ui-chart-table-summary">收支明细</summary>'), stHtml.slice(-500));
+  check('静态表一行一个系列（行头 = 系列名，scope=row）',
+    (stHtml.match(/<th scope="row">/g) || []).length === 2 && stHtml.includes('<th scope="row">收入</th>') && stHtml.includes('<th scope="row">支出</th>'), stHtml.slice(-700));
+  check('静态表列头是 x 标签（scope=col）', (stHtml.match(/<th scope="col">/g) || []).length === 2, stHtml.slice(-700));
+  check('静态可见表带单位、且不再叠隐藏表（同一件事只出现一次）',
+    stHtml.includes('<caption>单位：万元</caption>') && !stHtml.includes('<table class="sr-only">'), stHtml.slice(-700));
+  check('静态图不写 table 仍保留隐藏数据表', !compile54(['kind: chart', 'series: 甲 = 1,2']).html.includes('ui-chart-table') &&
+    compile54(['kind: chart', 'series: 甲 = 1,2']).html.includes('<table class="sr-only">'), '');
+  check('静态表名超过 40 字：掉回原文并点名',
+    deg54(['kind: chart', 'series: 甲 = 1,2', 'table: ' + '表'.repeat(41)]).includes('表名'), '');
+  check('其他档写 table 仍掉回原文，错误话说清"只配 chart"',
+    deg54(['kind: compare', 'row: 甲 | 乙', 'row: 丙 | 丁', 'table: 数据']).includes('table 只配 chart'), '');
+
+  // 9) 交互图：单位进快照表 / 隐藏表；有 table 时可见表带单位
+  const it = compile54(['kind: chart', 'id: u54', 'type: bar', 'title: 分布', 'unit: 公斤', 'slider: 样本量',
+    'x: 甲,乙', 'snap: n5 = 10,20', 'snap: n30 = 30,40', 'table: 每个样本量的分布']).html;
+  check('交互图的可见快照表带单位标题', it.includes('<caption>单位：公斤</caption>'), it.slice(-600));
+  check('交互图写了 table 就不叠隐藏表', !it.includes('<table class="sr-only">'), '');
+  const itNoTab = compile54(['kind: chart', 'id: u54b', 'type: bar', 'unit: 公斤', 'slider: 样本量',
+    'x: 甲,乙', 'snap: n5 = 10,20', 'snap: n30 = 30,40']).html;
+  check('交互图不写 table 时隐藏表标题带单位',
+    itNoTab.includes('柱状图，单位：公斤，每一行是一个「样本量」情形'), itNoTab.slice(-700));
+  const itBars = bars54(itNoTab);
+  check('交互柱状图同样零基线（h(10):h(20) = 1:2）',
+    itBars.length === 2 && Math.abs(itBars[0].h / itBars[1].h - 0.5) < 0.01, JSON.stringify(itBars));
+
+  // 10) 确定性与零新增面
+  check('带单位与表的静态图两次编译一模一样', compile54(st).html === stHtml, '');
+  check('本轮没有新增 data-*（表与单位都是展示，不是状态通道）',
+    !/data-ui-(unit|table|zero)/.test(stHtml + it), '');
+
+  check('这一节无异常', errors.length === errsBefore54, errors.slice(errsBefore54).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

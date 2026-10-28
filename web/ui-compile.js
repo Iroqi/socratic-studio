@@ -233,7 +233,7 @@ function inlineSafe(text) {
  */
 function compileCompare(fields, lines) {
   if (pick(fields, 'handoff').length) return { error: 'compare 这一档没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (questionWords(fields)) return { error: QUESTION_ONLY };
@@ -267,7 +267,7 @@ function compileCompare(fields, lines) {
 /** steps：`step: 这一步 | 为什么在这一步`（第二段可省）。有序列表 + `<ol>`，读屏天然带序号。 */
 function compileSteps(fields, lines, partial) {
   if (pick(fields, 'handoff').length) return { error: 'steps 这一档没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (questionWords(fields)) return { error: QUESTION_ONLY };
@@ -304,7 +304,7 @@ function compileSteps(fields, lines, partial) {
  */
 function compileTimeline(fields, lines, partial) {
   if (pick(fields, 'handoff').length) return { error: 'timeline 没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (questionWords(fields)) return { error: QUESTION_ONLY };
@@ -460,7 +460,7 @@ function compileMap(fields, lines, partial) {
   if (pick(fields, 'node').length || pick(fields, 'edge').length) {
     return { error: 'node / edge 是 diagram 的字段：谁连着谁用 diagram，谁在哪儿用 map' };
   }
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (questionWords(fields)) return { error: QUESTION_ONLY };
@@ -617,7 +617,7 @@ function compileChecklist(fields, lines, partial) {
       .join('');
     return { html: `${cap}<div class="ui-checklist">${boxes}</div>`, shape: 'checklist', pending: true };
   }
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (questionWords(fields)) return { error: QUESTION_ONLY };
@@ -683,7 +683,7 @@ function compileForm(fields, lines, partial) {
       .join('');
     return { html: `${cap}<div class="ui-form">${boxes}</div>`, shape: 'form', pending: true };
   }
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (questionWords(fields)) return { error: QUESTION_ONLY };
@@ -832,7 +832,7 @@ const UI_IDENT = /^[A-Za-z_一-龥][\w一-龥]*$/;
 function compileCalculator(fields, lines, partial) {
   const id = pick(fields, 'id')[0];
   if (!id) return { error: '这个计算器没有 id：滑到的值没地方续' };
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (questionWords(fields)) return { error: QUESTION_ONLY };
@@ -1087,7 +1087,7 @@ function diagramTextAlt(nodes, edges) {
 function compileDiagram(fields) {
   const id = pick(fields, 'id')[0] || '';
   if (!id) return { error: '这个图没有 id：谁点了谁没有地方记' };
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (questionWords(fields)) return { error: QUESTION_ONLY };
@@ -1323,7 +1323,7 @@ const WALK_ONLY = 'move 只配带 id 的 walkthrough（这一步的动作 = 这�
 function compileExplore(fields) {
   const id = pick(fields, 'id')[0];
   if (!id) return { error: '这个探索没有 id：点开哪一面没有地方续' };
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (questionWords(fields)) return { error: QUESTION_ONLY };
@@ -1401,7 +1401,7 @@ function compileExplore(fields) {
 function compileGame(fields) {
   const id = pick(fields, 'id')[0];
   if (!id) return { error: '这个游戏没有 id：试到哪一步没有地方续' };
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
@@ -1499,7 +1499,7 @@ function compileGame(fields) {
 function compileWalkthrough(fields) {
   const id = pick(fields, 'id')[0];
   if (!id) return { error: '这个走查没有 id：走到哪一步没有地方续' };
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (pick(fields, 'step').length) {
     return { error: 'step 是 steps 档的字段：走查每步写「move: 这一步的动作 = 这一步之后到哪」' };
@@ -1702,7 +1702,7 @@ function compileSuggest(fields) {
   if (pick(fields, 'handoff').length) {
     return { error: 'suggest 这一档自己就是把话递回输入框的出口，不要再写 handoff' };
   }
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (questionWords(fields)) return { error: QUESTION_ONLY };
@@ -1755,6 +1755,7 @@ const CHART_SNAP_MIN = 2;
 const CHART_SNAP_MAX = 8;
 /** 数据表视图（第三十四轮）：summary 上是表名不是说明，超长掉回原文。 */
 const CHART_TABLE_NAME_MAX = 40;
+const CHART_UNIT_MAX = 12;
 /** 系列数据里的数值只收这种形状：可负、可小数；千分位逗号、科学计数、空格一律不认——
  * 认了就是"1,000"被拆成两个点的静默坏数据，那比掉回原文糟。 */
 const CHART_NUM = /^[+-]?(0|[1-9]\d*)(\.\d+)?$/;
@@ -1765,6 +1766,29 @@ function chartNum(n) {
   const r = Math.round(n * 1000) / 1000;
   const s = String(r);
   return s.length > 9 ? n.toExponential(2) : s;
+}
+
+/**
+ * 纵轴的定义域（第五十四轮）。**柱状图的长度就是值**：纵轴必须含 0，柱子从零线
+ * 长出来——从数据最小值截断会把 100 / 120 / 140 画成 11 / 80 / 111 px，1.4 倍的
+ * 差距看起来像 10 倍，图在撒谎。折线图没有"长度"这回事，沿用数据范围自适应
+ * （否则一条 3→5→4 的线会被压成贴着零轴的平线）。
+ * 全零的柱状图给一个 0..1 的纵轴兜底，避免除以零；零值柱高度就是 0。
+ */
+function chartDomain(type, groups) {
+  let mn = Infinity, mx = -Infinity;
+  for (const vals of groups) for (const v of vals) { if (v < mn) mn = v; if (v > mx) mx = v; }
+  if (type !== 'bar') {
+    const span = mx - mn;
+    const pad = span === 0 ? 1 : span * 0.08;
+    return { yMin: mn - pad, yMax: mx + pad };
+  }
+  const lo = Math.min(mn, 0), hi = Math.max(mx, 0);
+  const span = hi - lo;
+  const pad = span === 0 ? 1 : span * 0.08;
+  const yMin = lo < 0 ? lo - pad : 0;
+  const yMax = hi > 0 ? hi + pad : 0;
+  return { yMin, yMax: yMax === yMin ? yMin + 1 : yMax };
 }
 
 /**
@@ -1803,10 +1827,13 @@ function compileChart(fields) {
   if (meta.error) return { error: meta.error };
   const src = readSource(fields);
   if (src.error) return { error: src.error };
+  const unit = pick(fields, 'unit')[0]?.trim() || '';
+  if (unit.length > CHART_UNIT_MAX) return { error: `单位太长了（≤${CHART_UNIT_MAX} 字）` };
+  const tableName = pick(fields, 'table')[0]?.trim() || '';
+  if (tableName.length > CHART_TABLE_NAME_MAX) return { error: `表名太长了（≤${CHART_TABLE_NAME_MAX} 字）` };
   if (pick(fields, 'slider').length) {
-    return compileInteractiveChart(fields, { type, title, handoff, assumes: meta.assumes, source: src.source });
+    return compileInteractiveChart(fields, { type, title, handoff, unit, tableName, assumes: meta.assumes, source: src.source });
   }
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
   if (handoff.length) {
     return { error: '静态 chart 没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
   }
@@ -1845,14 +1872,14 @@ function compileChart(fields) {
     if (xLabels.some((s) => s.length > CHART_XLABEL_MAX)) return { error: `x 标签太长了（≤${CHART_XLABEL_MAX} 字）` };
   }
 
-  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const cap = title
+    ? `<p class="ui-cap">${cell(title)}${unit ? `（单位：${cell(unit)}）` : ''}</p>`
+    : unit ? `<p class="ui-cap">单位：${cell(unit)}</p>` : '';
 
   // 几何完全由输入决定（与 diagram 同一把尺）：同样的 series/x 永远落在同样的坐标上。
-  let mn = Infinity, mx = -Infinity;
-  for (const s of series) for (const v of s.vals) { if (v < mn) mn = v; if (v > mx) mx = v; }
-  const span = mx - mn;
-  const pad = span === 0 ? 1 : span * 0.08;
-  const yMax = mx + pad, yMin = mn - pad;
+  // 柱状图的长度就是值：纵轴必须含 0（chartDomain），否则 100/120/140 会被画成
+  // 11/80/111 px——形状在撒谎。折线图没有"长度"这回事，仍按数据范围自适应。
+  const { yMin, yMax } = chartDomain(type, series.map((s) => s.vals));
   const PAD_L = 72, PAD_R = 14, PAD_T = 10, PAD_B = xLabels.length ? 26 : 12;
   const PLOT_H = 160, GAP = 64;
   const y = (v) => PAD_T + ((yMax - v) / (yMax - yMin)) * PLOT_H;
@@ -1866,8 +1893,9 @@ function compileChart(fields) {
 
   const typeName = type === 'bar' ? '柱状图' : '折线图';
   // 读屏名只放"是什么、有哪些系列"：aria 是一句话的标题，不是数据倾倒的地方；
-  // 逐点数值由下面那张 .sr-only 数据表承担（第五十二轮）。
-  const aria = `数据图：${title || '数据的形状'}。${typeName}：${series.map((s) => s.name).join('、')}`;
+  // 逐点数值由下面那张 .sr-only 数据表承担（第五十二轮）。单位是轴的口径
+  // （第五十四轮），一句话标题里就该有，否则"140"不知道是元还是公斤。
+  const aria = `数据图：${title || '数据的形状'}。${typeName}${unit ? `（单位：${unit}）` : ''}：${series.map((s) => s.name).join('、')}`;
 
   const yLabels =
     `<text class="ui-chart-ylabel" x="${PAD_L - 8}" y="${PAD_T + 11}" text-anchor="end">${escapeHtml(chartNum(yMax))}</text>` +
@@ -1878,6 +1906,10 @@ function compileChart(fields) {
   const frameEls =
     `<line class="ui-chart-axis" x1="${PAD_L}" y1="${PAD_T + PLOT_H}" x2="${svgW - PAD_R}" y2="${PAD_T + PLOT_H}"/>` +
     `<line class="ui-chart-axis" x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${PAD_T + PLOT_H}"/>`;
+  // 有正有负时零线画在轴内：柱子的起点不能只靠"猜哪边是 0"（第五十四轮）。
+  const zeroEls = type === 'bar' && yMin < 0 && yMax > 0
+    ? `<line class="ui-chart-zero" x1="${PAD_L}" y1="${y(0)}" x2="${svgW - PAD_R}" y2="${y(0)}"/>`
+    : '';
 
   const seriesEls = series.map((s, idx) => {
     const cls = `ui-series-${idx}`;
@@ -1899,10 +1931,19 @@ function compileChart(fields) {
 
   const body =
     `<svg class="ui-chart-svg" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
-    `<title>${escapeHtml(aria)}</title>${frameEls}${yLabels}${xEls}${seriesEls}</svg>${legend}`;
-  // 数值不能只活在像素里：静态图没有 table 字段，读屏的逐点数据由宿主直接补一张隐藏表。
-  const srTable = chartSrTable(series, xLabels, `数据表：${title || '数据的形状'}（${typeName}）`);
-  return { html: `${cap}<div class="ui-chart">${body}${srTable}${sourceHtml(src.source)}${assumeHtml(meta.assumes)}</div>`, shape: 'chart' };
+    `<title>${escapeHtml(aria)}</title>${frameEls}${zeroEls}${yLabels}${xEls}${seriesEls}</svg>${legend}`;
+  // 数值不能只活在像素里：静态图没有写 table 时，读屏的逐点数据由宿主补一张隐藏表；
+  // 写了 table 就换一张可见的数据表（第五十四轮把静态图也纳入 table），
+  // 同一份数据只出现一次（与交互档同一把尺）。
+  const tableCaption = unit ? `单位：${unit}` : '';
+  const visibleTable = tableName
+    ? `<details class="ui-chart-table"><summary class="ui-chart-table-summary">${cell(tableName)}</summary>` +
+      `<div class="ui-chart-table-body">${chartDataTable(series, xLabels, tableCaption)}</div></details>`
+    : '';
+  const srTable = tableName
+    ? ''
+    : chartSrTable(series, xLabels, `数据表：${title || '数据的形状'}（${typeName}${unit ? `，单位：${unit}` : ''}）`);
+  return { html: `${cap}<div class="ui-chart">${body}${visibleTable}${srTable}${sourceHtml(src.source)}${assumeHtml(meta.assumes)}</div>`, shape: 'chart' };
 }
 
 /** 交互档：`slider: 维度名` + `snap: 情形名 = 数值,数值,…`（2–8 条）+ `id:`。
@@ -1914,10 +1955,12 @@ function compileChart(fields) {
  * 这张 .sr-only 表把同一份数据逐点写出来——图给眼睛看形状，表给读屏查数值。
  * 静态图一行一个系列；交互图一行一张快照（所有情形都在，拖动滑杆不会把它换掉）。
  * 没有 x 标签时不摆表头、不编"第几列"：行头是系列名 / 快照名，列只按顺序排开。
- * 这张表不写 data-*、不用 ui-* 类：它不是新的宿主契约，只是同一份数据的文字替代，
- * 样式复用已有的 .sr-only（数据里的数字不是学情指标，Invariant 4 管的是后者）。
+ * 这张表不写 data-*：它不是新的宿主契约，只是同一份数据的第二种表示。样式复用已有的
+ * `.sr-only`（隐藏兜底）与 `.ui-chart-table-el`（可见披露里的表），数据里的数字不是
+ * 学情指标，Invariant 4 管的是后者。第五十四轮起静态图也能配 table，同一个生成器
+ * 同时服务静态多系列（一行一系列）与交互快照（一行一张快照）。
  */
-function chartSrTable(rows, xLabels, caption) {
+function chartDataTable(rows, xLabels, caption, cls = 'ui-chart-table-el') {
   const head = xLabels.length
     ? `<thead><tr>${xLabels.map((s) => `<th scope="col">${cell(s)}</th>`).join('')}</tr></thead>`
     : '';
@@ -1929,16 +1972,20 @@ function chartSrTable(rows, xLabels, caption) {
         `</tr>`,
     )
     .join('');
-  return `<table class="sr-only"><caption>${escapeHtml(caption)}</caption>${head}<tbody>${body}</tbody></table>`;
+  const cap = caption ? `<caption>${escapeHtml(caption)}</caption>` : '';
+  return `<table class="${cls}">${cap}${head}<tbody>${body}</tbody></table>`;
+}
+
+/** 只给读屏的逐点数据表（静态图没写 table、交互图没写 table 时的兜底）。 */
+function chartSrTable(rows, xLabels, caption) {
+  return chartDataTable(rows, xLabels, caption, 'sr-only');
 }
 
 function compileInteractiveChart(fields, shared) {
-  const { type, title, handoff, assumes, source } = shared;
+  const { type, title, handoff, unit, tableName, assumes, source } = shared;
   const id = pick(fields, 'id')[0];
   if (!id) return { error: '带 slider 的 chart 必须有 id：滑到哪一档没有地方续' };
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
-  const tableName = pick(fields, 'table')[0] || '';
-  if (tableName.length > CHART_TABLE_NAME_MAX) return { error: `表名太长了（≤${CHART_TABLE_NAME_MAX} 字）` };
   const sliderName = pick(fields, 'slider')[0].trim();
   if (!sliderName) return { error: 'slider 的名字是空的' };
   if (sliderName.length > CHART_NAME_MAX) return { error: `滑块名太长了（≤${CHART_NAME_MAX} 字）` };
@@ -1991,22 +2038,24 @@ function compileInteractiveChart(fields, shared) {
   // 几何**编译时一次算好**：每张快照的完整 SVG（含 <title>）与读屏名都存进 spec，
   // 宿主 repaint 只挑现成那段换进 SVG，不重算坐标（两处实现迟早漂）。带 table 时
   // 同一张快照的完整数据表（<table>）也在这里算好——滑块一响，表跟着快照换。
-  const pre = snaps.map((s) => chartSnapSvg(s, type, xLabels, title, sliderName));
+  const pre = snaps.map((s) => chartSnapSvg(s, type, xLabels, title, sliderName, unit));
   const spec = {
-    snaps: snaps.map((s, i) => ({ name: s.name, svg: pre[i].svg, aria: pre[i].aria, table: chartSnapTable(s, xLabels) })),
+    snaps: snaps.map((s, i) => ({ name: s.name, svg: pre[i].svg, aria: pre[i].aria, table: chartSnapTable(s, xLabels, unit) })),
     slider: sliderName,
     title,
     typeName,
   };
   writeUiState(id, 'chart', { snap: current.name, uiKind: 'chart' }, spec);
 
-  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const cap = title
+    ? `<p class="ui-cap">${cell(title)}${unit ? `（单位：${cell(unit)}）` : ''}</p>`
+    : unit ? `<p class="ui-cap">单位：${cell(unit)}</p>` : '';
   // 没写 table 时，读屏也拿得到完整数据（所有快照都在一张隐藏表里）；写了 table
   // 就是模型显式选择了"可展开的数据表"，不再叠一张隐藏表——同一件事在一个面板里
   // 只出现一次（表的展开态归浏览器，读屏打开 summary 就能逐项查）。
   const srTable = tableName
     ? ''
-    : chartSrTable(snaps, xLabels, `数据表：${title || '数据的形状'}（${typeName}，每一行是一个「${sliderName}」情形）`);
+    : chartSrTable(snaps, xLabels, `数据表：${title || '数据的形状'}（${typeName}${unit ? `，单位：${unit}` : ''}，每一行是一个「${sliderName}」情形）`);
   const body =
     `<div class="ui-chart" data-ui-chart="${escapeHtml(id)}">` +
     `<svg class="ui-chart-svg" role="img" aria-label="${escapeHtml(pre[snapIdx].aria)}" viewBox="0 0 ${pre[snapIdx].w} ${pre[snapIdx].h}" width="${pre[snapIdx].w}" height="${pre[snapIdx].h}">` +
@@ -2020,7 +2069,7 @@ function compileInteractiveChart(fields, shared) {
     srTable +
     (tableName
       ? `<details class="ui-chart-table"><summary class="ui-chart-table-summary">${cell(tableName)}</summary>` +
-        `<div class="ui-chart-table-body">${chartSnapTable(current, xLabels)}</div></details>`
+        `<div class="ui-chart-table-body">${chartSnapTable(current, xLabels, unit)}</div></details>`
       : '') +
     `${sourceHtml(source)}${assumeHtml(assumes)}` +
     `</div>`;
@@ -2028,13 +2077,9 @@ function compileInteractiveChart(fields, shared) {
 }
 
 /** 一张快照的完整几何：单条系列，坐标全部由输入决定。返回 { svg, aria, w, h }。 */
-function chartSnapSvg(snap, type, xLabels, title, sliderName) {
+function chartSnapSvg(snap, type, xLabels, title, sliderName, unit) {
   const vals = snap.vals;
-  let mn = Infinity, mx = -Infinity;
-  for (const v of vals) { if (v < mn) mn = v; if (v > mx) mx = v; }
-  const span = mx - mn;
-  const pad = span === 0 ? 1 : span * 0.08;
-  const yMax = mx + pad, yMin = mn - pad;
+  const { yMin, yMax } = chartDomain(type, [vals]);
   const PAD_L = 72, PAD_R = 14, PAD_T = 10, PAD_B = xLabels.length ? 26 : 12;
   const PLOT_H = 160, GAP = 64;
   const y = (v) => PAD_T + ((yMax - v) / (yMax - yMin)) * PLOT_H;
@@ -2047,7 +2092,7 @@ function chartSnapSvg(snap, type, xLabels, title, sliderName) {
   const typeName = type === 'bar' ? '柱状图' : '折线图';
   // 读屏名只放"是什么、当前快照与怎么动"：aria 是标题，不塞整串数值；
   // 逐点数值由面板里的数据表承担（写了 table 就用那张，没写由宿主补 .sr-only 表）。
-  const aria = `数据图：${title || '数据的形状'}。${typeName}：${snap.name}（「${sliderName}」可拖动切换）`;
+  const aria = `数据图：${title || '数据的形状'}。${typeName}${unit ? `（单位：${unit}）` : ''}：${snap.name}（「${sliderName}」可拖动切换）`;
 
   const yLabels =
     `<text class="ui-chart-ylabel" x="${PAD_L - 8}" y="${PAD_T + 11}" text-anchor="end">${escapeHtml(chartNum(yMax))}</text>` +
@@ -2058,6 +2103,9 @@ function chartSnapSvg(snap, type, xLabels, title, sliderName) {
   const frameEls =
     `<line class="ui-chart-axis" x1="${PAD_L}" y1="${PAD_T + PLOT_H}" x2="${w - PAD_R}" y2="${PAD_T + PLOT_H}"/>` +
     `<line class="ui-chart-axis" x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${PAD_T + PLOT_H}"/>`;
+  const zeroEls = type === 'bar' && yMin < 0 && yMax > 0
+    ? `<line class="ui-chart-zero" x1="${PAD_L}" y1="${y(0)}" x2="${w - PAD_R}" y2="${y(0)}"/>`
+    : '';
   let seriesEls;
   // 交互档一次只画一条系列，系列色取第一档 token（--accent）。类名走插值不写字面量：
   // 契约那张"编译器吐的 class 都要有样式"的账是按源码文本扫的，字面量会把扫描器带歪。
@@ -2072,7 +2120,7 @@ function chartSnapSvg(snap, type, xLabels, title, sliderName) {
     const pts = vals.map((v, i) => `${cx(i)},${y(v)}`).join(' ');
     seriesEls = `<polyline class="${cls}" points="${pts}"/>`;
   }
-  return { svg: `<title>${escapeHtml(aria)}</title>${frameEls}${yLabels}${xEls}${seriesEls}`, aria, w, h };
+  return { svg: `<title>${escapeHtml(aria)}</title>${frameEls}${zeroEls}${yLabels}${xEls}${seriesEls}`, aria, w, h };
 }
 
 /**
@@ -2083,13 +2131,8 @@ function chartSnapSvg(snap, type, xLabels, title, sliderName) {
  * 值是数据本身（chartNum 同一套格式），那是正在教的对象的数据，不是学情
  * （Invariant 4 那道线照旧）。表名在 summary 上，不在这里重说一遍
  * （"同一件事在一个面板里只许出现一次"）。 */
-function chartSnapTable(snap, xLabels) {
-  const head = xLabels.length
-    ? `<thead><tr>${xLabels.map((s) => `<th scope="col">${cell(s)}</th>`).join('')}</tr></thead>`
-    : '';
-  const cells = snap.vals.map((v) => `<td>${escapeHtml(chartNum(v))}</td>`).join('');
-  const row = `<tr><th scope="row">${escapeHtml(snap.name)}</th>${cells}</tr>`;
-  return `<table class="ui-chart-table-el">${head}<tbody>${row}</tbody></table>`;
+function chartSnapTable(snap, xLabels, unit) {
+  return chartDataTable([snap], xLabels, unit ? `单位：${unit}` : '');
 }
 
 /**
@@ -2177,7 +2220,7 @@ const CANVAS_ONLY = 'html 只配 canvas（整页制品写在 kind: canvas 的围
 
 function compileQuestion(fields) {
   if (pick(fields, 'handoff').length) return { error: 'question 自己就是收答的卡，不要再写 handoff' };
-  if (pick(fields, 'table').length) return { error: 'table 只配带 slider 的 chart（数据表跟着快照走）' };
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（静态图查全部数值，交互图跟着快照走）' };
   if (gameWords(fields)) return { error: GAME_ONLY };
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };

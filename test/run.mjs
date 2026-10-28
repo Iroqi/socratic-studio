@@ -4024,6 +4024,25 @@ section('12m. 配置备份要过同一道闸：坏的时候不许出货');
 }
 
 
+
+// ─────────────────────────────────────── 12p. 图表诚实性：基线归零、单位、静态数据表（第五十四轮）
+{
+  // 柱状图的长度就是值：纵轴从最小值截断会把 1.4 倍画成 10 倍（第 31 轮起的 bug，
+  // 第 54 轮修）。提示必须明说基线规则；单位与 table 也要教到——教了模型才写得对，
+  // 编译器与样式由 web-smoke §54 / contract 那张 class 账钉住。
+  const pPrompt = buildSystemPrompt({ topic: 't', chat: { messages: shortHistory } });
+  const chartRow = pPrompt.split('\n').find((l) => l.includes('| `chart` |')) || '';
+  check('12p 词表里 chart 点名了 unit（否则"140"是元还是公斤只能猜）',
+    /unit/.test(chartRow), chartRow.slice(0, 200));
+  check('12p 词表里静态 chart 也收 table（图看形状、表查数值，静态图同样是全部数据）',
+    /静态/.test(chartRow) && /table/.test(chartRow), chartRow.slice(0, 200));
+  check('12p 硬规矩 7 说清柱状图基线从 0 起（不从最小值截断）',
+    pPrompt.includes('柱状图的基线永远从 0 起'), '基线规则没写');
+  check('12p 硬规矩 7 说清单位会标在标题 / 读屏名 / 数据表上',
+    pPrompt.includes('标题、读屏名与数据表都会标出来'), '单位口径没写');
+  check('12p table 的归属改成 chart（不再说只配带 slider 的 chart）',
+    pPrompt.includes('`table` 只配 `chart`'), 'table 归属还是旧的');
+}
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);
