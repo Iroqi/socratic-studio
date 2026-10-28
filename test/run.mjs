@@ -4043,6 +4043,21 @@ section('12m. 配置备份要过同一道闸：坏的时候不许出货');
   check('12p table 的归属改成 chart（不再说只配带 slider 的 chart）',
     pPrompt.includes('`table` 只配 `chart`'), 'table 归属还是旧的');
 }
+// ─────────────────────────────────────── 12q. 画像写协议：learner_profile 补进"当场写进结构层"（第五十五轮）
+{
+  // 第 49 轮的写协议点名 compile_notes / session_note / 概念 note，漏了 learner_profile——
+  // 而 background / known_concepts / pace 恰是最先被窗口丢掉、又最驱动适配（节奏 / 跳过 / 例题）
+  // 的画像事实。学习者改口后模型沿用旧画像当基线 = "装作记得"他是初学者，正是写协议要防的病。
+  const qFat = buildSystemPrompt({ topic: 't', chat: { messages: longHistory } });
+  const qNote = (qFat.split('===== 对话窗口说明 =====')[1] || '');
+  const qMain = fs.readFileSync(new URL('../server/rules/main.md', import.meta.url), 'utf8');
+  check('12q 窗口写协议补上 learner_profile 一格（画像跟窗口走）', qNote.includes('meta.learner_profile'), '画像没进写协议');
+  check('12q 写协议点名改口（"其实我早学过 / 这个我会"）也当场更新', qNote.includes('改口') && qNote.includes('这个我会'), '改口没进协议');
+  check('12q 写协议保留 compile_notes / session_note（第 49 轮承诺没丢）', qNote.includes('compile_notes') && qNote.includes('session_note'), '旧协议被顶掉了');
+  check('12q 画像只写学习者亲口说过的事实，不猜着补', qNote.includes('亲口说过') && qNote.includes('不猜着补'), '画像没钉在事实上');
+  check('12q main.md:80 说清改口当场更新对应槽位、别沿用旧画像当基线', qMain.includes('改口') && qMain.includes('当场更新对应槽位'), '主规则没教改口');
+  check('12q main.md:80 拿不准的不猜着写（与 12e 钉子同族）', qMain.includes('拿不准的不猜着写'), '没给省略纪律');
+}
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

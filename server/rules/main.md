@@ -78,7 +78,8 @@ Learning Graph 是静态知识模型，Progress State 是动态学习记录，�
 - 已有 Learning Graph 快照（上传的 `.md`/JSON，或原生持久化里的）→ 读取复用，跳过分解进 ROUTE；损坏则请用户重新分解。
 - 「继续上次学习」/ 上传 progress 文件 → 按 `runtime.md` §1.6 的持久化契约恢复；失败则询问是否重新开始。
 - **学习者水平：** 未声明按初学者；用户提及背景/已掌握概念时记入 `meta.learner_profile`
-  （预掌握初始化见 `runtime.md`「Concept 初始化」，后续表现不符可随时下调）。
+  （预掌握初始化见 `runtime.md`「Concept 初始化」）；表现不符或学习者改口（背景 / 已掌握概念 / 节奏）
+  时当场更新对应槽位，别沿用旧画像当基线；拿不准的不猜着写。
 - **学习深度（默认 standard）：** brief / deep 只在用户明确表达时切换，仅凭主题宽窄不自动切档；
   各档行为见 `pedagogy.md`「学习深度档」。
 

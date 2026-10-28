@@ -493,7 +493,9 @@ export function buildSystemPrompt(notebook) {
         '你写进「笔记」页、概念图谱与进度备注的内容都读得到：用 get_learning_graph 读回（include=notes 或 all 会把全部结构化笔记一起带回）。' +
         '不要凭印象编造学习者早先说过的话。\n' +
         '所以学习者说出关键自述 / 背景 / 约束 / 误解时，**当场写进结构层**：知识点用 compile_notes，' +
-        '观察与记仇用 set_progress_state 的 session_note 或概念 note——别等窗口把它丢掉，丢了你读不到，也不能装作记得。',
+        '观察与记仇用 set_progress_state 的 session_note 或概念 note；**背景 / 已掌握概念 / 节奏这类画像事实——' +
+        '包括改口（"其实我早学过 / 这个我会"）——当场写进 meta.learner_profile**，别等窗口把它丢掉，丢了你读不到，也不能装作记得。' +
+        '画像只写学习者亲口说过的事实，不猜着补。',
     );
   }
   return parts.join('\n\n');

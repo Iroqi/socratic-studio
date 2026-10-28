@@ -98,7 +98,7 @@ pedagogy: <教学策略标签>
 ```
 
 **格式规则：** 每个 concept 占两行（知识字段 / 教学元数据，缩进对齐）；空字段省略（依赖默认值）。
-`learner_profile` 在文本载体里写成缩进块：`learner_profile:` 独占一行，其后缩进行给出 `background` /
+文本载体里 `learner_profile:` 独占一行起缩进块，其后缩进行给出 `background` /
 `known_concepts` / `pace`，遇到下一个顶层字段即收块。
 
 **解析约定：** `assessment_items: [type: ..., prompt: ...]` 表示**单个对象**，不能被拆成多个列表项；
