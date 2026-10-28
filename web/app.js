@@ -10,8 +10,6 @@ import {
   setUiValues,
   writeUiState,
   resetUiState,
-  getUiMode,
-  setUiMode,
   UI_STATEFUL,
   // uiEval 是契约金丝雀：宿主只许用编译器这一份求值口径（contract-consistency 钉），
   // 渲染出口统一走 uiOutText（第五十六轮：除零给一句人话）。
@@ -2916,7 +2914,6 @@ function forwardArtifactMessage(payload, artifactId) {
 // read_artifact_evidence 只认 artifact_state 这一处。前缀 `ui:` 让它和真制品分得开。
 
 const UI_PREFIX = 'ui:';
-const UI_MODE_KEY = 'socratic-ui-mode';
 
 const uiStateKey = (id) => `${UI_PREFIX}${id}`;
 
@@ -3591,34 +3588,8 @@ function reportUiDegraded(reason, lines) {
   forwardArtifactMessage({ type: 'event', name: 'ui_degraded', payload: { reason } }, 'inline-ui');
 }
 
-// 「只要文字」这一档：全局开关住在编译器门口（ui-compile.js 的 getUiMode/setUiMode），
-// 因为词汇表只有一个入口——开关放在入口上才真的能关掉全部，而不是"减少，但有些还会冒出来"。
-function currentUiMode() {
-  try {
-    return localStorage.getItem(UI_MODE_KEY) === 'plain' ? 'plain' : 'rich';
-  } catch {
-    return 'rich';
-  }
-}
-
-function applyUiMode(mode) {
-  setUiMode(mode);
-  try {
-    localStorage.setItem(UI_MODE_KEY, mode);
-  } catch {
-    /* 存不了就只对本次会话生效 */
-  }
-  // 已经上台的正文得按新档重画一遍：那一刷刷的是 innerHTML，不会自己回头补。
-  // 没开着本子就不重画——boot 那一次只是把偏好落到编译器门口，台面还空着，
-  // 重画是白跑一遍，还会碰到尚未初始化的台面账。
-  if (state.notebook) renderThread();
-  const btn = $('uiToggle');
-  if (btn) {
-    btn.textContent = mode === 'plain' ? '▤' : '▦';
-    btn.setAttribute('aria-pressed', mode === 'plain' ? 'true' : 'false');
-    btn.title = mode === 'plain' ? '现在只要文字：点这里恢复把界面长出来' : '现在会把界面长出来：点这里改成只要文字';
-  }
-}
+// 「只要文字」那一档随第五十七轮删除：IUI 默认全开，没有全局开关（开关在编译器门口
+// 只会让"组件没渲染"多一种说不出原因的形态；要原文另有降级报告与浏览器查看源码）。
 
 function collectArtifactEvidence(artifactId, evidence) {
   if (!artifactId || !evidence) return;
@@ -5191,12 +5162,9 @@ function bindEvents() {
   if (themeToggle) {
     themeToggle.onclick = () => applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
   }
-  // 界面档：先接上编译器唯一的出口（它报"哪一段没编出来"），再按上次的偏好落到门口，
-  // 最后给按钮接线。顺序要紧——第一帧台面渲染就要用这两样。
+  // 界面档：接上编译器唯一的出口（它报"哪一段没编出来"）。IUI 默认全开——第五十七轮
+  // 起没有"只要文字"开关了，台面第一帧就是 IUI。
   setUiDegradedListener(reportUiDegraded);
-  applyUiMode(currentUiMode());
-  const uiToggle = $('uiToggle');
-  if (uiToggle) uiToggle.onclick = () => applyUiMode(getUiMode() === 'rich' ? 'plain' : 'rich');
   $('closeConfig').onclick = () => closeModal('configModal');
   $('configModal').onclick = (e) => {
     if (e.target === $('configModal')) closeModal('configModal');
@@ -5462,8 +5430,6 @@ export const __hooks = {
   repaintUiWalk,
   reportUiDegraded,
   hydrateUiState,
-  applyUiMode,
-  currentUiMode,
   repaintUiCalc,
   repaintUiForm,
   textBlock,

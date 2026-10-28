@@ -8,7 +8,7 @@
 // 词汇表与渲染只该有一个入口，多一个入口就多一条"这条路上没人校验"。
 
 import { escapeHtml } from './escape.js';
-import { compileUiBlock, getUiMode } from './ui-compile.js';
+import { compileUiBlock } from './ui-compile.js';
 
 /** 行内语法。输入已转义。 */
 function inline(text) {
@@ -268,8 +268,8 @@ export function renderMarkdown(src, { partial = false, _inner = false } = {}) {
   // 默认信封（第三十九轮）：IUI 是一等公民——正文也是界面的一部分。
   // 模型没写 ```ui 围栏时，平台把纯文字包成 IUI 的文本块（.ui-text）再上台，
   // 而不是让文字以"不是界面"的身份出现；写过围栏的块不包（卡片是它自己的表面，
-  // 外面的文字照旧是旁白）。「只要文字」模式（uiToggle）不包——那是退回纯文本的逃生口。
-  if (!_inner && !sawUiFence && getUiMode() !== 'plain' && html.trim()) {
+  // 外面的文字照旧是旁白）。第五十七轮起没有「只要文字」模式，正文始终包。
+  if (!_inner && !sawUiFence && html.trim()) {
     return `<div class="ui-text">${html}</div>`;
   }
   return html;

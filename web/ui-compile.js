@@ -132,16 +132,8 @@ export function uiStateIds() {
   return [...uiState.keys()];
 }
 
-// ── 渲染档开关（「简洁模式」的落点）────────────────────────────────────
-// 全局唯一开关就放在编译器门口：词汇表只有一个入口，所以这个开关真的能关掉全部——
-// 而不是"减少，但有些还会冒出来"。
-let uiMode = 'rich';
-export function setUiMode(mode) {
-  uiMode = mode === 'plain' ? 'plain' : 'rich';
-}
-export function getUiMode() {
-  return uiMode;
-}
+// ── 渲染档：第五十七轮起没有「只要文字」开关，IUI 默认全开。
+// 关掉的入口只剩"这行写坏了"的降级报告；要原文看源码，不设静默逃生口。
 
 /** 解析后的块：kind + 字段表 + 原始行（退回时要能还原原文）。 */
 function parseFence(lines) {
@@ -2363,10 +2355,6 @@ const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: comp
  * 只有闭合了（或回合收尾了）才有权判定"这一段写坏了"——那是唯一的、也是最后的机会。
  */
 export function compileUiBlock(lines, partial) {
-  if (getUiMode() === 'plain') {
-    // 简洁模式里围栏就是原文：这不是编译失败，不报降级，也不摆占位。
-    return { html: `<pre><code class="lang-ui">${escapeHtml(lines.join('\n'))}</code></pre>`, degraded: 'plain-mode' };
-  }
   const fail = (why) => (partial ? { html: skeleton('正在把这个界面长出来…'), pending: true } : { html: degrade(why, lines), degraded: why });
   // canvas 的 html 是多行正文，不能走 parseFence 的「字段: 值」通用拆（html 行会被当字段
   // 判坏，长行还会先撞「单行过长」）——首行声明 kind: canvas 就先按原文行整段编译。

@@ -3989,7 +3989,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   console.log('\n39. 内联界面（```ui 编译 + 封闭词表 + 流式那一路）');
   const errsBefore39 = errors.length;
   const {
-    state: st39, handleUiDeskEvent, reportUiDegraded, hydrateUiState, applyUiMode, currentUiMode,
+    state: st39, handleUiDeskEvent, reportUiDegraded, hydrateUiState,
     handleTurnEvent, appendChatTurn, renderChatLive, currentScene, NO_SCENE, textBlock,
   } = appModule.__hooks;
   const uiPath = path.join(webDir, 'ui-compile.js');
@@ -4289,31 +4289,18 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     /"name":"ui_degraded"/.test(posted39[0]) && /没有「pie」/.test(posted39[0]), String(posted39[0]).slice(0, 200));
   globalThis.fetch = realFetch;
 
-  // 11) 界面开关：真的能关掉全部，而且偏好记住
+  // 11) 界面开关删了（第五十七轮）：IUI 默认全开，没有"只要文字"逃生口
+  // 先摘降级监听器：它该报什么在第 39 节开头已验过（"报的是事件不是状态"）。
+  // 后面几节数的是"界面不替学习者发言 / 不落状态"，不是降级事件——摘掉才数得干净。
   ui.setUiDegradedListener(null);
-  const plain = (() => { applyUiMode('plain'); return ui.compileUiBlock(['kind: compare', 'row: a | b', 'row: c | d'], false).html; })();
-  check('「只要文字」这一档真的关掉全部（不留"有些还会冒出来"）',
-    plain.includes('lang-ui') && !plain.includes('ui-compare'), plain.slice(0, 140));
-  check('简洁模式里的原文不算降级，也就不报（围栏本该是原文，不是失败）',
-    !ui.compileUiBlock(['kind: compare', 'row: a | b', 'row: c | d'], false).html.includes('ui-degraded'));
-  applyUiMode('rich');
-  check('切回来就重新编译（开关是个开关不是单行道）',
-    ui.compileUiBlock(['kind: compare', 'row: a | b', 'row: c | d'], false).html.includes('ui-compare'));
-  // 偏好落盘：桩里没有 localStorage，app.js 那句 setItem 会静默吞掉——临时给一个，
-  // 才能验"下次开机还认"这条承诺真的有键、真的读得回来。
-  const store39 = new Map();
-  globalThis.localStorage = {
-    getItem: (k) => (store39.has(k) ? store39.get(k) : null),
-    setItem: (k, v) => store39.set(k, String(v)),
-    removeItem: (k) => store39.delete(k),
-  };
-  applyUiMode('plain');
-  check('偏好写进 localStorage 的键名对得上（下次开机还认）',
-    store39.get('socratic-ui-mode') === 'plain' && currentUiMode() === 'plain',
-    [...store39].map(([k, v]) => `${k}=${v}`).join(','));
-  applyUiMode('rich');
-  check('切回来时盘上那行也跟着改（开关状态与偏好不许各说各话）',
-    store39.get('socratic-ui-mode') === 'rich', String(store39.get('socratic-ui-mode')));
+  check('编译器门口没有 getUiMode / setUiMode（开关已删，默认就是启动）',
+    typeof ui.getUiMode === 'undefined' && typeof ui.setUiMode === 'undefined', '开关还活着');
+  const always = ui.compileUiBlock(['kind: compare', 'row: a | b', 'row: c | d'], false);
+  check('没有开关也在编：围栏永远长成组件（不再有 plain 出口）',
+    always.html.includes('ui-compare'), always.html.slice(0, 140));
+  check('坏输入照旧降级点名（删的是开关，不是降级报告）',
+    Boolean(ui.compileUiBlock(['kind: pie', 'row: a | b'], false).degraded), '');
+  // 偏好落盘那条路也随之删除：app.js 不再读 localStorage 的 socratic-ui-mode（见 §14）。
   delete globalThis.localStorage;
 
   // 12) 换本子：状态与降级账都要清，上一本的勾选不许顶着同一个 id 活过来
@@ -4371,7 +4358,6 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     ui.readUiState('ok1')?.state?.done?.甲 === true, JSON.stringify(ui.readUiState('ok1')));
   st39.uiHydratedFrom = null;
   ui.resetUiState();
-  ui.setUiMode('rich');
 
   // 13) 看得清吗：新形状的每一组前景/背景现算一遍（用第 26 节那套公式，不抄常量）
   const uiCss = /\/\* ── 内联界面[\s\S]*?(?=\/\* 提问卡)/.exec(cssText)?.[0] || '';
@@ -4401,22 +4387,13 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('降级那句是给普通人看的中文（不是错误码，也不是没信息量的"出错了"）',
     !/E[0-9]{2,}|Error:|Exception/.test(compile(['kind: pie', 'row: a | b']).html), '');
 
-  // 14) 那颗开关本身：名字、状态、说得清它做什么
-  const btn39 = /<button[^>]*id="uiToggle"[^>]*>/.exec(idxHtml)?.[0] || '';
-  check('开关有 aria-label（图标按钮不是只给眼睛看的）', /aria-label="[^"]+"/.test(btn39), btn39);
-  check('开关报出自己按下的状态（aria-pressed）', /aria-pressed="false"/.test(btn39), btn39);
-  check('开关有 title 说明它会做什么（悬停看得见，不用猜 ▦ 是什么）', /title="[^"]{8,}"/.test(btn39), btn39);
-  // 按下去以后那张键自己要说得出话：aria-pressed 跟着档位走，否则读屏用户不知道自己关了什么
-  applyUiMode('plain');
-  const btnNode39 = doc.getElementById('uiToggle');
-  check('切到"只要文字"后开关自报按下状态（aria-pressed=true）',
-    btnNode39.getAttribute('aria-pressed') === 'true', String(btnNode39.getAttribute('aria-pressed')));
-  check('开关那句说明也跟着改口（title 说的就是当前的档位）',
-    /只要文字/.test(btnNode39.title || ''), String(btnNode39.title));
-  applyUiMode('rich');
-  check('切回来时状态与说明都跟着回来（不留一个说反话的开关）',
-    btnNode39.getAttribute('aria-pressed') === 'false' && /把界面长出来/.test(btnNode39.title || ''),
-    `${btnNode39.getAttribute('aria-pressed')} | ${btnNode39.title}`);
+  // 14) 那颗开关已经没了（第五十七轮）：index.html 不再有 #uiToggle，app.js 不再读偏好键
+  check('index.html 不再有 #uiToggle 按钮（IUI 默认全开，不需要开关）',
+    !/<button[^>]*id="uiToggle"/.test(idxHtml), 'uiToggle 还在 index.html');
+  check('app.js 不再读 localStorage 的 socratic-ui-mode（键跟着开关一起删）',
+    !/socratic-ui-mode/.test(appSrc), '偏好键还在 app.js');
+  check('app.js 没有 applyUiMode / currentUiMode（接线也一并删干净）',
+    !/applyUiMode|currentUiMode/.test(appSrc), '开关函数还在 app.js');
   check('这一节无异常', errors.length === errsBefore39, errors.slice(errsBefore39).join(' | '));
 }
 
@@ -4542,16 +4519,9 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('diagram 那一档里没有给判分留位置（Invariant 4 第 ③ 条）',
     !/quiz|answer|grade|judge/.test('diagram'), '');
 
-  // 8) 简洁模式：diagram 跟其它档一样，整段掉回原文
-  ui40.setUiMode('plain');
-  const dgPlain = compile40(dgLines).html;
-  check('「只要文字」里 diagram 就是原文（不留半个 SVG）',
-    dgPlain.includes('lang-ui') && !dgPlain.includes('ui-diagram'), dgPlain.slice(0, 140));
-  check('简洁模式里的原文不算降级（围栏本该是原文，不是失败）',
-    !dgPlain.includes('ui-degraded'), dgPlain.slice(0, 140));
-  ui40.setUiMode('rich');
-  check('切回来就重新编译（开关是个开关不是单行道）',
-    compile40(dgLines).html.includes('ui-diagram'));
+  // 8) 没有「只要文字」这一档（第五十七轮删掉开关）：diagram 始终编译，不留 plain 出口
+  check('diagram 没有 plain 出口：正常行始终长成 SVG（IUI 默认全开）',
+    compile40(dgLines).html.includes('ui-diagram'), compile40(dgLines).html.slice(0, 140));
 
   // 9) 看得清吗：图解那一段的每一组前景/背景现算一遍，颜色只借已量过的 token
   const dgCss = /\/\* 图解：[\s\S]*?(?=\/\* 降级：)/.exec(cssText)?.[0] || '';
@@ -4721,15 +4691,12 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('没有 spec 的图重画什么都不做（防御，不许炸）',
     repaintUiDiagram('nope') === undefined, '');
 
-  // 8) 降级路径完整：没 id 掉回原文并点名；简洁模式把交互连根关掉
+  // 8) 降级路径完整：没 id 掉回原文并点名（"只要文字"逃生口已随第五十七轮删除）
   const noid = compile41(['kind: diagram', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙']);
   check('没 id 的图解掉回原文（谁点了谁没有地方记）',
     Boolean(noid.degraded) && noid.degraded.includes('没有 id') && noid.html.includes('没能编译成界面'), String(noid.degraded));
-  ui41.setUiMode('plain');
-  const gPlain = compile41(g1Lines).html;
-  check('「只要文字」里交互也一起关掉（不留半个 SVG）',
-    gPlain.includes('lang-ui') && !gPlain.includes('ui-diagram'), gPlain.slice(0, 140));
-  ui41.setUiMode('rich');
+  check('交互照常编译（没有"只要文字"这一档）',
+    compile41(g1Lines).html.includes('ui-diagram'), compile41(g1Lines).html.slice(0, 140));
 
   // 9) 高亮样式只借 accent 一族（状态指示不是正文，不引新配色）
   const dgCss41 = /\/\* 图解：[\s\S]*?(?=\/\* 降级：)/.exec(cssText)?.[0] || '';
