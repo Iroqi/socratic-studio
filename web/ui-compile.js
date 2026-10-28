@@ -710,7 +710,7 @@ function compileForm(fields, lines, partial) {
     const m = outRe.exec(f.trim());
     if (!m || !UI_IDENT.test(m[1].trim())) return { error: `compute「${f.slice(0, 40)}」不是「输出名 = 表达式」` };
     const terms = compileFormula(m[2]);
-    if (!terms) return { error: `表达式「${m[2].slice(0, 60)}」里有词汇表之外的写法（只认字段名、数、* 与 +）` };
+    if (!terms) return { error: `表达式「${m[2].slice(0, 60)}」里有词汇表之外的写法（只认字段名、数、+ - * /）` };
     formulas.push({ out: m[1].trim(), terms });
   }
   if (formulas.length > 4) return { error: '输出最多 4 个' };
@@ -718,7 +718,7 @@ function compileForm(fields, lines, partial) {
   const numberNames = new Set(parsed.filter((f) => f.type === 'number').map((f) => f.name));
   for (const f of formulas) {
     for (const group of f.terms) {
-      for (const t of group) {
+      for (const t of group.terms) {
         if (t.p !== undefined && !numberNames.has(t.p)) {
           return { error: `compute「${f.out}」引了「${t.p}」——只认 number 字段（text 字段没数可算）` };
         }
@@ -753,7 +753,7 @@ function compileForm(fields, lines, partial) {
     .join('');
   const outs = formulas
     .map((f) => `<p class="ui-out"><span class="ui-out-name">${escapeHtml(f.out)}</span>` +
-      `<output class="ui-out-value">${uiEval(f.terms, values)}</output></p>`)
+      `<output class="ui-out-value">${uiOutText(f.terms, values, '')}</output></p>`)
     .join('');
   const math = mathHtml(formulas, values, '');
   return { html: `${cap}<div class="ui-form" data-ui-form="${escapeHtml(id)}">${inputs}${outs}${math}${assumeHtml(meta.assumes)}${sourceHtml(src.source)}</div>${handoff ? handoffButton(id, handoff) : ''}`, shape: 'form' };
@@ -860,7 +860,7 @@ function compileCalculator(fields, lines, partial) {
     const m = outRe.exec(f.trim());
     if (!m || !UI_IDENT.test(m[1].trim())) return { error: `formula「${f.slice(0, 40)}」不是「输出名 = 表达式」` };
     const terms = compileFormula(m[2]);
-    if (!terms) return { error: `表达式「${m[2].slice(0, 60)}」里有词汇表之外的写法（只认参数名、数、* 与 +）` };
+    if (!terms) return { error: `表达式「${m[2].slice(0, 60)}」里有词汇表之外的写法（只认参数名、数、+ - * /）` };
     formulas.push({ out: m[1].trim(), terms });
   }
   if (!formulas.length) return { error: '没有任何 formula' };
@@ -899,48 +899,100 @@ function compileCalculator(fields, lines, partial) {
     .map(
       (f) =>
         `<p class="ui-out"><span class="ui-out-name">${escapeHtml(f.out)}</span>` +
-        `<output class="ui-out-value">${uiEval(f.terms, values)}${unit ? ` ${escapeHtml(unit)}` : ''}</output></p>`,
+        `<output class="ui-out-value">${uiOutText(f.terms, values, unit)}</output></p>`,
     )
     .join('');
   const math = mathHtml(formulas, values, unit);
   return { html: `${cap}<div class="ui-calc" data-ui-calc="${escapeHtml(id)}">${sliders}${outs}${math}${assumeHtml(meta.assumes)}${sourceHtml(src.source)}</div>${handoff ? handoffButton(id, handoff) : ''}`, shape: 'calculator' };
 }
 
-/** 表达式的形状：积项之和。`a * b + 3 * c` → [[{p:'a'},{p:'b'}],[{n:3},{p:'c'}]]。不认这个形状就返回 null。 */
+/**
+ * 表达式的形状（第五十六轮把 / 与 - 补进词表）：`金额 / 人数`、`本金 - 支出`、
+ * `a * b + 3 * c`。解析成组（sign: '+'|'-'，项按 op: '*'|'/' 从左到右）：
+ * `a * b + 3 * c` → [{sign:'+',terms:[{p:'a'},{p:'b'}]},{sign:'+',terms:[{n:3},{p:'c'}]}]
+ * `每人 = 金额 / 人数` → [{sign:'+',terms:[{p:'金额'},{op:'/',p:'人数'}]}]。
+ * 不认这个形状就返回 null（调用方按"词汇表之外的写法"降级回原文）。
+ */
 function compileFormula(src) {
-  const groups = src
-    .split('+')
-    .map((g) => g.trim())
-    .filter(Boolean);
-  if (!groups.length || groups.length > 6) return null;
+  // 顶层按 +/- 拆组并记每组符号；组内按 */ 拆项并记每项运算符。
+  const segs = [];
+  let cur = '';
+  let sign = '+';
+  const flushSeg = () => {
+    const s = cur.trim();
+    if (s) segs.push([sign, s]);
+    cur = '';
+  };
+  for (const ch of src) {
+    if (ch === '+' || ch === '-') {
+      flushSeg();
+      sign = ch;
+    } else cur += ch;
+  }
+  flushSeg();
+  if (!segs.length || segs.length > 6) return null;
   const out = [];
-  for (const g of groups) {
-    const factors = g
-      .split('*')
-      .map((f) => f.trim())
-      .filter(Boolean);
-    if (!factors.length || factors.length > 4) return null;
+  for (const [s, seg] of segs) {
     const terms = [];
-    for (const f of factors) {
+    let buf = '';
+    let op = '*';
+    const pushTerm = () => {
+      const f = buf.trim();
+      buf = '';
+      if (!f) return false;
       const n = num(f);
-      if (n !== null) terms.push({ n });
-      else if (UI_IDENT.test(f)) terms.push({ p: f });
-      else return null;
+      if (n !== null) terms.push({ op, n });
+      else if (UI_IDENT.test(f)) terms.push({ op, p: f });
+      else return false;
+      return true;
+    };
+    for (const ch of seg) {
+      if (ch === '*' || ch === '/') {
+        if (!pushTerm()) return null;
+        op = ch;
+      } else buf += ch;
     }
-    out.push(terms);
+    if (!pushTerm() || !terms.length || terms.length > 4) return null;
+    out.push({ sign: s, terms });
   }
   return out;
 }
 
-/** 与编译器同一份求值口径（积项之和）。app.js 也 import 这一份，不在宿主侧重写。 */
+/**
+ * 旧形状（第五十轮，terms 是裸数组 [[{p},{n}]]）回放兼容：老 notebook 的 ui-state 里
+ * 存着旧形状的公式表，刷新 / 重画回放不能炸。归一只有这一处，eval / formula / work 共用。
+ */
+function normGroups(groups) {
+  if (!Array.isArray(groups) || !groups.length) return groups;
+  if (Array.isArray(groups[0])) {
+    return [{ sign: '+', terms: groups[0].map((t) => ({ op: '*', ...t })) }];
+  }
+  return groups;
+}
+
+/** 与编译器同一份求值口径（第五十六轮：组内乘除从左到右，组间加减；除零不吐 Infinity/NaN）。 */
 export function uiEval(groups, values) {
+  groups = normGroups(groups);
   let total = 0;
-  for (const terms of groups) {
-    let prod = 1;
-    for (const t of terms) prod *= t.n !== undefined ? t.n : (values?.[t.p] ?? 0);
-    total += prod;
+  for (const { sign, terms } of groups) {
+    let acc = 1;
+    for (const t of terms) {
+      const v = t.n !== undefined ? t.n : (values?.[t.p] ?? 0);
+      if (t.op === '/') {
+        if (v === 0) return NaN;
+        acc /= v;
+      } else acc *= v;
+    }
+    total += sign === '-' ? -acc : acc;
   }
   return Math.round(total * 1000) / 1000;
+}
+
+/** 结果文本：除零给一句人话，不吐 NaN（第五十六轮）。与 .ui-out 的渲染共用一个出口。 */
+export function uiOutText(groups, values, unit = '') {
+  const v = uiEval(groups, values);
+  if (!Number.isFinite(v)) return '除零了（除数不能是 0）';
+  return unit ? `${v} ${unit}` : `${v}`;
 }
 
 /**
@@ -953,46 +1005,53 @@ function fmtNum(n) {
   return r < 0 ? `−${Math.abs(r)}` : String(r);
 }
 
-/** 积项之和的字符串：`2 × 人数 + 3`；负项接到后面时读成 `− 3`，不写 `+ -3`。 */
+/** 组的字符串（第五十六轮）：`2 × 人数 + 3`、`金额 ÷ 人数 − 1`；负项读成 `− 3`，不写 `+ -3`。 */
 function joinGroups(groups) {
   let out = '';
-  groups.forEach((terms, i) => {
-    const body = terms.join(' × ');
+  groups.forEach(({ sign, terms }, i) => {
+    let body = '';
+    terms.forEach((t, j) => {
+      const v = t.n !== undefined ? fmtNum(t.n) : t.p;
+      if (j === 0) {
+        body = v;
+        return;
+      }
+      body += t.op === '/' ? ` ÷ ${v}` : ` × ${v}`;
+    });
     if (i === 0) {
       out = body;
       return;
     }
-    if (body.startsWith('−')) out += ` − ${body.slice(1)}`;
+    if (sign === '-') out += ` − ${body}`;
     else out += ` + ${body}`;
   });
   return out;
 }
 
 /**
- * 符号算式：`肉 = 人数 × 0.4`。从编译器自己解析出的那份积项表生成，
- * 与求值、代入过程共用一份词法——三处各写一遍，迟早有一处漂。
+ * 符号算式：`肉 = 人数 × 0.4`、`每人 = 金额 ÷ 人数`。从编译器自己解析出的那份
+ * 组项表生成，与求值、代入过程共用一份词法——四处各写一遍，迟早有一处漂。
  */
 export function uiFormula(groups) {
-  return joinGroups(
-    groups.map((terms) =>
-      terms.map((t) => (t.n !== undefined ? fmtNum(t.n) : t.p)),
-    ),
-  );
+  return joinGroups(normGroups(groups));
 }
 
 /**
- * 代入过程：`= 8 × 0.4 = 3.2 公斤`。
+ * 代入过程：`= 8 × 0.4 = 3.2 公斤`、`= 120 ÷ 3 = 40`。
  *
  * 只在"真能核对"时出现：公式里没引参数（没什么可代入）、或引用的表单字段空着 / 不是数
  * （没东西可代入）时返回空串——不拿 0 冒充学习者填过的值。参数引用了就逐项替换，
- * 结果与 .ui-out 用同一个 uiEval，保证两行永远对得上。
+ * 结果与 .ui-out 用同一个 uiEval，保证两行永远对得上。除零时整行写成"除零了"，
+ * 不吐 NaN——学习者看到的是人话，不是浏览器报错。
  */
 export function uiWork(groups, values, unit = '') {
+  groups = normGroups(groups);
   let hasParam = false;
   let missing = false;
-  const subst = groups.map((terms) =>
-    terms.map((t) => {
-      if (t.n !== undefined) return fmtNum(t.n);
+  const subst = groups.map(({ sign, terms }) => ({
+    sign,
+    terms: terms.map((t) => {
+      if (t.n !== undefined) return { op: t.op, n: t.n };
       hasParam = true;
       const raw = values?.[t.p];
       const n =
@@ -1002,15 +1061,16 @@ export function uiWork(groups, values, unit = '') {
             ? Number(raw)
             : null;
       if (n === null) missing = true;
-      return n === null ? '?' : fmtNum(n);
+      return { op: t.op, n: n };
     }),
-  );
+  }));
   if (!hasParam || missing) return '';
+  if (!Number.isFinite(uiEval(groups, values))) return '除零了（除数不能是 0）';
   const text = joinGroups(subst);
   const total = uiEval(groups, values);
   const suffix = unit ? ` ${unit}` : '';
   // 裸参数（`输出 = 人数`）没有运算可展示，只报结果，不写 `= 8 = 8`。
-  if (!/[+−]|×/.test(text)) return `= ${fmtNum(total)}${suffix}`;
+  if (!/[+\u2212]|×|÷/.test(text)) return `= ${fmtNum(total)}${suffix}`;
   return `= ${text} = ${fmtNum(total)}${suffix}`;
 }
 

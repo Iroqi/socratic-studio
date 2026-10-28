@@ -4061,13 +4061,20 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('词汇表里没有能给判分留位置的一档（Invariant 4 第 ③ 条：判分不进控件）',
     !ui.UI_KINDS.some((k) => /quiz|answer|grade|judge/.test(k)), ui.UI_KINDS.join(','));
 
-  // 4) 公式：没有 eval，词法只有参数名 / 数 / * / +
+  // 4) 公式：没有 eval，词法 = 参数名 / 数 / + - * /（第五十六轮把 - 与 / 补进词表；
+  //    它们不再是"一律不编"，而是正常编成 − / ÷，仍不引 eval / new Function）
   const src39 = fs.readFileSync(path.join(webDir, 'ui-compile.js'), 'utf8');
   check('编译器里没有 eval / new Function（表达式语言也在词汇表里）',
     !/\beval\(/.test(src39) && !/new Function/.test(src39), '');
-  for (const evil of [
+  for (const ok of [
     'formula: 肉 = 人数 * 0.4 - 1',
     'formula: 肉 = 人数 / 3',
+  ]) {
+    const r = compile(['kind: calculator', 'id: x1', 'param: 人数 | 8', ok]);
+    check(`公式「${ok.slice(9, 30)}」现在能编（- 与 / 进了词表，第五十六轮）`,
+      !r.degraded && /− 1|÷ 3/.test(r.html), ok);
+  }
+  for (const evil of [
     'formula: 肉 = (人数 + 1) * 0.4',
     'formula: 肉 = Math.ceil(人数)',
     'formula: 肉 = 人数 * alert(1)',
@@ -4077,6 +4084,17 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   }
   check('合法公式求值走的是同一份分解（积项之和）',
     ui.compileUiBlock(['kind: calculator', 'id: x2', 'param: a | 3', 'param: b | 4', 'formula: 总额 = a * b + 2'], false).html.includes('>14<'));
+  check('除法公式从词法编到代入一条链（120 ÷ 3 = 40）',
+    compile(['kind: calculator', 'id: x3', 'param: 金额 | 120', 'param: 人数 | 3', 'formula: 每人 = 金额 / 人数']).html.includes('= 120 ÷ 3 = 40'));
+  check('减法公式同一条链（100 − 30 = 70）',
+    compile(['kind: calculator', 'id: x4', 'param: 本金 | 100', 'param: 支出 | 30', 'formula: 余额 = 本金 - 支出']).html.includes('= 100 − 30 = 70'));
+  check('先除后加按运算顺序来（2 + 6 ÷ 3 = 4）',
+    compile(['kind: calculator', 'id: x5', 'param: a | 2', 'param: b | 6', 'param: c | 3', 'formula: 结果 = a + b / c']).html.includes('= 2 + 6 ÷ 3 = 4'));
+  check('除零不吐 NaN：界面回一句人话',
+    compile(['kind: calculator', 'id: x6', 'param: 除数 | 0', 'param: 被除数 | 5', 'formula: 结果 = 被除数 / 除数']).html.includes('除零了（除数不能是 0）'));
+  check('旧形状公式表（第五十轮 terms 裸数组）回放不炸：人数 × 0.4 照算',
+    ui.uiEval([[{ p: '人数' }, { n: 0.4 }]], { 人数: 8 }) === 3.2 && ui.uiWork([[{ p: '人数' }, { n: 0.4 }]], { 人数: 8 }, '公斤') === '= 8 × 0.4 = 3.2 公斤',
+    '旧形状没归一');
 
   // 5) XSS：模型写的正文进不了可执行位置
   const evil = compile(['kind: steps', 'step: <img src=x onerror=alert(1)> | 标题**粗**']).html;

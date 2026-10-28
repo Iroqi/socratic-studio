@@ -4058,6 +4058,23 @@ section('12m. 配置备份要过同一道闸：坏的时候不许出货');
   check('12q main.md:80 说清改口当场更新对应槽位、别沿用旧画像当基线', qMain.includes('改口') && qMain.includes('当场更新对应槽位'), '主规则没教改口');
   check('12q main.md:80 拿不准的不猜着写（与 12e 钉子同族）', qMain.includes('拿不准的不猜着写'), '没给省略纪律');
 }
+// ─────────────────────────────────────── 12r. 布局高度链与公式词表（第五十六轮）
+{
+  // 两个用户报告 bug 的钉：① 聊天框没钉底——.layout 不加 height:100%，整页随会话长高，
+  //    .thread 的 overflow-y:auto 永远不生效（实测 62 条消息后 composer 跑到视口下方 10 屏）；
+  //    ② 公式只有 * +，模型写「每人 = 金额 / 人数」必降级——词表必须教到 ÷ 与 −。
+  const rCss = fs.readFileSync(new URL('../web/styles.css', import.meta.url), 'utf8');
+  const layoutRule = rCss.split('\n').find((l) => l.includes('.layout { display: grid')) || '';
+  check('12r .layout 带 height:100%（聊天框钉底的前提）', /height:\s*100%/.test(layoutRule), layoutRule);
+  check('12r .thread 保持内部滚动（overflow-y:auto 在高度链里才生效）',
+    /\.thread \{ flex: 1; overflow-y: auto/.test(rCss), '.thread 滚动没了');
+  const rPrompt = buildSystemPrompt({ topic: 't', chat: { messages: shortHistory } });
+  check('12r 公式规则教到 ÷ 与 −（每人 = 金额 / 人数、余额 = 本金 - 支出）',
+    rPrompt.includes('每人 = 金额 / 人数') && rPrompt.includes('余额 = 本金 - 支出'), '词表没教除法/减法');
+  check('12r 公式规则说清除零的后果（除数不能是 0）',
+    rPrompt.includes('除数不能是 0'), '没教除零');
+  check('12r 公式规则不再说「没有减法、除法」', !rPrompt.includes('没有减法、除法'), '旧禁令还在');
+}
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

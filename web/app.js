@@ -13,8 +13,11 @@ import {
   getUiMode,
   setUiMode,
   UI_STATEFUL,
+  // uiEval 是契约金丝雀：宿主只许用编译器这一份求值口径（contract-consistency 钉），
+  // 渲染出口统一走 uiOutText（第五十六轮：除零给一句人话）。
   uiEval,
   uiWork,
+  uiOutText,
 } from './ui-compile.js';
 
 // ─────────────────────────────────────────────── 基础工具
@@ -2934,7 +2937,6 @@ function uiCalcNodes(id) {
 function repaintUiCalc(id) {
   const rec = readUiState(id);
   if (!rec?.spec) return;
-  const unit = rec.spec.unit ? ` ${rec.spec.unit}` : '';
   for (const box of uiCalcNodes(id)) {
     const readouts = box.querySelectorAll('.ui-param-value') || [];
     rec.spec.params.forEach((p, i) => {
@@ -2947,7 +2949,7 @@ function repaintUiCalc(id) {
       if (holder) {
         // kids() 不是洁癖：children 是 HTMLCollection，没有 find——直接写会当场炸
         const target = kids(holder).find((c) => c.classList?.contains('ui-out-value')) || holder;
-        target.textContent = `${uiEval(f.terms, rec.state)}${unit}`;
+        target.textContent = uiOutText(f.terms, rec.state, rec.spec.unit || '');
       }
       // 算式与代入必须和结果同一次求值、同一份 spec：两行对不上比不摆更糟（第五十轮）。
       if (works[i]) works[i].textContent = uiWork(f.terms, rec.state, rec.spec.unit || '');
@@ -2978,7 +2980,7 @@ function repaintUiForm(id) {
       const holder = outs[i];
       if (holder) {
         const target = kids(holder).find((c) => c.classList?.contains('ui-out-value')) || holder;
-        target.textContent = String(uiEval(f.terms, rec.state));
+        target.textContent = uiOutText(f.terms, rec.state, '');
       }
       // 表单里空着的字段没有代入可言：uiWork 返回空串，CSS 把这一行藏掉——
       // 不拿 0 冒充学习者填过的值（输出仍按 0 算，那是表单原有的口径）。

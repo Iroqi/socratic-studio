@@ -91,7 +91,11 @@ html, body {
 
 .hidden { display: none !important; }
 
-.layout { display: grid; grid-template-columns: 216px minmax(0, 1fr); }
+/* 第五十六轮：布局高度链。html/body 已是 height:100%，.layout 不加这一句就随内容长高——
+   .thread 的 overflow-y:auto 只在容器有界时生效，整页撑开后聊天框会一路被顶出视口
+   （长会话里输入框跑到屏幕下方几屏之外）。height:100% 把栅格钉在视口高，
+   .main 纵向 flex + .thread flex:1 才真正内部滚动，composer-wrap 钉在底边。 */
+.layout { display: grid; grid-template-columns: 216px minmax(0, 1fr); height: 100%; }
 
 /* 第四十一轮：舞台、台面流与输入区各自压住 min-width，杜绝 flex 链式撑宽——
    .stage/.thread 是纵向 flex 链上的子项，默认 min-width:auto，内容一旦超宽会把
