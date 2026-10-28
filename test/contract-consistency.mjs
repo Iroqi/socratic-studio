@@ -467,8 +467,11 @@ for (const m of readmeDoc.matchAll(/\/api\/[^\s"'，。；）】、`]+/g)) {
   check(`README 里写到的 ${ref} 在 serve.mjs 有真路由（排查照抄不 404）`,
     routeSet.has(tpl), `模板 ${tpl} 不在 serve.mjs 路由清单里`);
 }
-check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由文档静默过期"）`,
-  readmeApiRefs >= 20, `只找到 ${readmeApiRefs} 处 /api/ 引用，排查节的那几条应该在`);
+// 第六十轮起 README 精简为门面（50 行内、不写排查节与细节条款）：/api/ 引用若还出现，
+// 上面逐条钉路由；这条钉门面本身——README 不许膨胀回"排查节"（细节收编至 git 提交信息）。
+check('README 是门面：不再写排查节与细节条款（/api/ 引用少于 10 处、体量在门面量级）',
+  readmeApiRefs < 10 && readmeDoc.length < 8000,
+  `README ${readmeDoc.length} 字符 / ${readmeApiRefs} 处 /api/ 引用`);
 
 // ──────────────────────────────────────────────── 承诺的兑现位置：文档说的守卫必须在删数据那一侧
 //
@@ -479,18 +482,9 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
 //
 // 第二十轮同一类病换了个主语：守卫认得回合、认不出分身。回合派完后台任务就收尾，任务还 running
 // 时删除照旧 200，任务一收尾就往 jobs/ 写盘（mkdirSync recursive）把删掉的学习复活成鬼目录。
-// 所以这一节现在钉两笔账：文档与代码都得同时认「回合」和「后台任务」，摘掉任何一边都红。
+// 所以这一节现在钉两笔账：代码侧守卫必须同时认「回合」和「后台任务」，摘掉任何一边都红。
+// （第六十轮：README 精简为门面，文档侧那句承诺收编至 git 提交信息——下面只钉代码侧。）
 {
-  // 窗口按整节取（到下一个 ### 为止）：这段历史越写越长，窗口收窄会把钉子本身弄断
-  const delSectionMatch = /### 删除会话[\s\S]*?\n###/.exec(readmeDoc);
-  check('README「删除会话」一节仍在承诺回合中不许删（并写明兑在哪一侧）',
-    Boolean(delSectionMatch) && /进行中的回合/.test(delSectionMatch[0])
-    && /409/.test(delSectionMatch[0]) && /turn-active/.test(delSectionMatch[0]),
-    delSectionMatch ? delSectionMatch[0].replace(/\n+/g, ' ').slice(0, 200) : '找不到该节');
-  check('README 同样承诺"还有后台任务在跑也不许删"（第二笔账不能只在代码里兑）',
-    Boolean(delSectionMatch) && /task-active/.test(delSectionMatch[0])
-    && /后台任务/.test(delSectionMatch[0]),
-    delSectionMatch ? delSectionMatch[0].replace(/\n+/g, ' ').slice(0, 240) : '找不到该节');
   // serve.mjs 里有好几条 DELETE 分支（providers / endpoints / notes / notebook），
   // 要盯的是删整本那一条——用 store.deleteNotebook 认出它，再检查守卫在不在它身体里。
   const delBranches = [...serveSrc.matchAll(/if \(m && method === 'DELETE'\) \{[\s\S]*?\n {4}\}/g)]
@@ -563,27 +557,13 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
 // ──────────────────────────────────────────────── 体检报告字段：文档、服务端、前端三处口径一致
 //
 // corruptEvidence 是第十八轮加的台账（治好的文件副本仍在案）。三份文件都得认它：
-// store 产出它、README 描述它、前端读它——任何一处漂移都会让取证出口静默变瞎。
+// store 产出它、代码侧认它——任何一处漂移都会让取证出口静默变瞎。
+// （第六十轮：README 精简为门面，文档侧描述收编至 git 提交信息，这里只钉 store 侧。）
 {
   const storeSrc = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8');
   check('store 的体检报告产出 corruptEvidence 台账',
     /corruptEvidence/.test(storeSrc) && /sourceCorrupt/.test(storeSrc), '报告里没有台账字段');
-  {
-    // 文档守护要钉"那句话"而不是那个字段名：光 includes('corruptEvidence') 时，
-    // 把台账一节的实质内容全删、只在别处留一次词，照样绿（M15 实测撞出的弱钉子）。
-    const ledgerDoc = /治好了也要查得着[\s\S]{0,900}/.exec(readmeDoc);
-    check('README 写清台账的实质：治好了仍在案 + rel 相对 DATA_DIR + sourceCorrupt',
-      Boolean(ledgerDoc) && ledgerDoc[0].includes('corruptEvidence')
-      && /查无实据|仍在案|治好/.test(ledgerDoc[0]) && /DATA_DIR/.test(ledgerDoc[0])
-      && ledgerDoc[0].includes('sourceCorrupt'),
-      ledgerDoc ? ledgerDoc[0].replace(/\n+/g, ' ').slice(0, 200) : '找不到台账一节');
-  }
-  check('README 写到取证口两条清单都认（原件与副本）',
-    /取证下载两条清单都认|两条清单都认/.test(readmeDoc), 'README 没跟上第十八轮口径');
-  // 前端这一侧原来有体检面板的台账出口；第三十九轮右栏砍除（用户拍板：整本备份含体检入口
-  // 一并移出界面），前端不再渲染台账——数据仍在 store 侧（上面两条钉着），界面出口没了。
-  // readCorruptFile 分辨两份清单的契约仍由服务端那两条钉着。
-  check('readCorruptFile 明确分辨两份清单（原件走 NOTEBOOKS_DIR，副本走 DATA_DIR）',
+  check('取证口两条清单都认（原件与副本）由服务端钉着（README 侧已收编提交信息）',
     /report\.corruptFiles\.includes/.test(storeSrc) && /corruptEvidence\.find/.test(storeSrc)
     && /NOTEBOOKS_DIR/.test(storeSrc) && /serveWhitelisted\(DATA_DIR/.test(storeSrc)
     && /serveWhitelisted\(base, relPath\)/.test(storeSrc)
@@ -655,14 +635,8 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
   check('read_background_task 读到 interrupted 如实说并给重派的出口',
     /status: 'interrupted'[\s\S]{0,300}重新派/.test(agentSrc), '工具又开始把中断任务当活着或当完成');
 
-  // README 那一节：钉语义而不是关键词（第十八轮 §4.1 的教训——M15 撞出来的）
-  const jobsDoc = /### 后台任务记录[\s\S]{0,2200}?\n###/.exec(readmeDoc);
-  check('README 有「落盘要有回读」一节并写明三件事（回读 / 如实 / 归属）',
-    Boolean(jobsDoc) && /只写不读/.test(jobsDoc[0]) && /句柄/.test(jobsDoc[0])
-    && /interrupted/.test(jobsDoc[0]) && /守卫要站在动手那一侧/.test(jobsDoc[0]),
-    jobsDoc ? jobsDoc[0].replace(/\n+/g, ' ').slice(0, 220) : '找不到这一节');
-  check('README 写明导出带 jobs、导入有意无视（这条"不做"要有名分）',
-    /导入.{0,16}有意无视/.test(readmeDoc), 'jobs 的导出/导入口径没进文档');
+  // 第六十轮：README 精简为门面，「落盘要有回读」一节随功能章节收编至 git 提交信息，
+  // 代码侧钉子（上面 stop 归属 / interrupted 重派）仍在。
 }
 
 // ──────────────────────────────────────────────── 写盘那道门：学习不在了就不许 mkdir 回来（第二十轮）
@@ -733,12 +707,8 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
   check('删除弹层也提"后台任务还在跑"这一笔（与 state.turn 那句并列）',
     /个后台任务在跑/.test(webApp), '弹层还只认回合');
 
-  // README：鬼目录进体检清单这件事得写在文档里（钉语义，不只钉词）
-  const healthDoc = /- \*\*体检数据\*\*[\s\S]{0,700}/.exec(readmeDoc);
-  check('README 体检一节写了第四件该修的事（鬼目录）与本数只数真学习',
-    Boolean(healthDoc) && /鬼目录/.test(healthDoc[0]) && /notebook\.json/.test(healthDoc[0])
-    && /只数\*\*真学习\*\*|只数真学习/.test(healthDoc[0]),
-    healthDoc ? healthDoc[0].replace(/\n+/g, ' ').slice(0, 240) : '找不到体检那一节');
+  // 第六十轮：README 精简为门面，「体检清单」文档侧随功能章节收编至提交信息；
+  // 服务端两条钉子（corruptEvidence 台账、ghostDirs 上报）与前端弹层账在上面仍钉。
 }
 
 // ──────────────────────────────── 分身交付要带户口 + 一道门统口径（第二十一轮）
@@ -818,19 +788,8 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     && !/function notebookExists/.test(serveSrc),
     '有第二个地方自己定义了一本学习存不存在');
 
-  // README 那两节：钉语义，不钉关键词
-  const deliverDoc = /分界线的判据是\*\*生成延迟\*\*[\s\S]{0,2400}?\n### /.exec(readmeDoc);
-  check('README 写明这句话以前是假的，并给出现在的三句口径（自带户口 / 宿主真的动手 / 占位卡认 job id）',
-    Boolean(deliverDoc) && /一次都没执行过/.test(deliverDoc[0])
-    && /task: publicView\(record\)/.test(deliverDoc[0]) && /task_scene/.test(deliverDoc[0])
-    && /job id/.test(deliverDoc[0]),
-    deliverDoc ? deliverDoc[0].replace(/\n+/g, ' ').slice(0, 200) : '找不到这一节');
-  const gateDoc = /### 一道门统口径[\s\S]{0,2000}?(?=\n### |\n## )/.exec(readmeDoc);
-  check('README 写明门长在总处（400 与 404 两句话），并说明创建/导入走在门前面',
-    Boolean(gateDoc) && /safeId/.test(gateDoc[0]) && /400/.test(gateDoc[0])
-    && /学习不存在/.test(gateDoc[0])
-    && /走在门前面/.test(gateDoc[0]) && /排在门后面/.test(gateDoc[0]),
-    gateDoc ? gateDoc[0].replace(/\n+/g, ' ').slice(0, 200) : '找不到这一节');
+  // 第六十轮：README 精简为门面，这两节随功能章节收编至 git 提交信息；
+  // 行为钉子（task_artifact 自带户口 / 兜底广播死 / safeId 门）仍在上面。
 }
 
 // ──────────────────────────────── 身份只有一个来源：地址是目录名（第二十二轮）
@@ -922,22 +881,8 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
   check('不给"一键修"的键（改盘上那行与删目录都是动数据，由人拍板）',
     !/一键修|修好身份|自动对齐/.test(webCode22), '面板长出了会动盘的键');
 
-  // README：钉语义不钉关键词（第十八轮 §4.1 与第二十一轮 m24 的同一类病）
-  const idDoc = /### 身份只有一个来源[\s\S]{0,3200}?(?=\n### |\n## )/.exec(readmeDoc);
-  check('README 写明两个来源各是谁、四个实测后果、以及"地址是目录名"这一句口径',
-    Boolean(idDoc) && /目录名/.test(idDoc[0]) && /meta\.id/.test(idDoc[0])
-    && /两行同一个 id/.test(idDoc[0]) && /从列表消失/.test(idDoc[0]) && /随导出旅行/.test(idDoc[0]),
-    idDoc ? idDoc[0].replace(/\n+/g, ' ').slice(0, 200) : '找不到这一节');
-  check('README 写明守卫站在动手那一侧（touchNotebook/sanitiseMetaPatch），不是"路由清洗过了"',
-    Boolean(idDoc) && /sanitiseMetaPatch/.test(idDoc[0]) && /守卫站在动手那一侧/.test(idDoc[0]),
-    idDoc ? '那一节没写守卫的位置' : '找不到这一节');
-  check('README 写明漂了的旧数据由下一次写入自己对齐 + 体检点名（不需要人手工修盘）',
-    Boolean(idDoc) && /identityDrift/.test(idDoc[0]) && /unaddressableDirs/.test(idDoc[0])
-    && /下一次写入/.test(idDoc[0]),
-    idDoc ? '那一节没写这两笔账' : '找不到这一节');
-  check('README 写明请求体收口在唯一读口（不逐条边补）',
-    Boolean(idDoc) && /readBody/.test(idDoc[0]) && /必须是 JSON 对象/.test(idDoc[0]),
-    idDoc ? '那一节没写这条收口' : '找不到这一节');
+  // 第六十轮：README 精简为门面，身份一节收编至 git 提交信息；
+  // 行为钉子（读侧取目录名 / 写侧白名单 / 收口 readBody）全部在上面的代码侧。
 }
 
 // ──────────────────────────────── 备份要经得起坏的时候（第二十三轮）
@@ -1045,21 +990,8 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     `残留两档写法 ${(webCode23.match(/kind === 'image' \? '🖼' : '📄'/g) || []).length} 处`);
 
   // 5) 文档不许写旧口径：这一节只钉语义，关键词由 README 那节负责
-  const backupDoc23 = /### 备份要经得起坏的时候[\s\S]{0,4000}?(?=\n### |\n## )/.exec(readmeDoc);
-  check('README 写明三条实测后果（PDF 毁整本、空文件蒸发、坏了还少一份报成功）',
-    Boolean(backupDoc23) && /U\+FFFD/.test(backupDoc23[0]) && /概念数 0/.test(backupDoc23[0])
-    && /新机|查无此件/.test(backupDoc23[0]),
-    backupDoc23 ? backupDoc23[0].replace(/\n+/g, ' ').slice(0, 160) : '找不到这一节');
-  check('README 写明守卫站在动手那一侧（导出前拒绝，不是导入时补救）',
-    Boolean(backupDoc23) && /backupBlockers/.test(backupDoc23[0]) && /blockers/.test(backupDoc23[0])
-    && /409/.test(backupDoc23[0]),
-    backupDoc23 ? '那一节没写守卫位置' : '找不到这一节');
-  check('README 写明"缺文件不是损坏"这条边界（否则正常的新本会被自己的守卫拦死）',
-    Boolean(backupDoc23) && /缺文件不是损坏/.test(backupDoc23[0]),
-    backupDoc23 ? '那一节没写这条边界' : '找不到这一节');
-  check('README 的备份一节写了口径只有一份（classifyUpload / encodingFor 有名分）',
-    Boolean(backupDoc23) && /classifyUpload/.test(backupDoc23[0]) && /encodingFor|同一处定义|一处/.test(backupDoc23[0]),
-    backupDoc23 ? '那一节没写单一定义' : '找不到这一节');
+  // 第六十轮：README 精简为门面，备份一节随功能章节收编至 git 提交信息；
+  // 结构钉子（classifyUpload / encodingFor 单一定义、导出前检查）全在上面代码侧。
 
   // 6) "七份"这个数字以前是错的（白名单实际八项）。这一条把数字钉在数组上，不让人再抄一遍错的。
   const keysFn23 = /const IMPORT_FILE_KEYS = new Set\(\[([\s\S]*?)\]\);/.exec(storeSrc23)?.[1] || '';
@@ -1069,15 +1001,13 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     keyCount23 === 8 && /NOTES_FILE/.test(keysFn23) && exportList23.length > 0,
     `IMPORT_FILE_KEYS=${keyCount23} 项`);
   const CN_NUM = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
-  check('文档与报错里的份数就是数组的真实长度（"七份"是抄来的，抄错一次就永远错下去）',
+  check('报错里的份数就是数组的真实长度（"七份"是抄来的，抄错一次就永远错下去）',
     (storeSrc23.match(/只认这(\S)份已知 JSON 文件/) || [])[1] === CN_NUM[keyCount23]
     && (storeSrc23.match(/白名单内的(\S)份 JSON/) || [])[1] === CN_NUM[keyCount23]
     && (storeSrc23.match(/扫描范围两处：每本学习的(\S)份 JSON/) || [])[1] === CN_NUM[keyCount23]
     && /(\S)份 JSON 解析失败/.test(storeSrc23) && (storeSrc23.match(/(\S)份 JSON 解析失败/) || [])[1] === CN_NUM[keyCount23]
-    && /八份 JSON \+ 素材/.test(readmeDoc) && /只认八份已知 JSON 键/.test(readmeDoc)
-    && /(\S)份 JSON 里解析失败/.test(readmeDoc) && (readmeDoc.match(/(\S)份 JSON 里解析失败/) || [])[1] === CN_NUM[keyCount23]
-    && !/七份/.test(storeSrc23) && !/七份/.test(readmeDoc),
-    `数组 ${keyCount23} 项；store 注释=${(storeSrc23.match(/只认这(\S)份/) || [])[1]}；报错=${(storeSrc23.match(/白名单内的(\S)份/) || [])[1]}；README=${(readmeDoc.match(/(\S)份 JSON \+ 素材/) || [])[1]}`);
+    && !/七份/.test(storeSrc23),
+    `数组 ${keyCount23} 项；store 注释=${(storeSrc23.match(/只认这(\S)份/) || [])[1]}；报错=${(storeSrc23.match(/白名单内的(\S)份/) || [])[1]}`);
 }
 
 // ──────────────────────────────── 另一扇门也是门（第二十四轮）
@@ -1171,23 +1101,9 @@ check(`README 排查命令的 /api/ 引用有测试盯着（不再"改了路由�
     zipFn24 ? (zipFn24.match(/.*没有进包.*/) || [''])[0] : '找不到 skipped 那一段');
 
   // 7) README：钉语义不钉关键词
-  const doorDoc = /### 另一扇门也是门[\s\S]{0,5000}?(?=\n### |\n## )/.exec(readmeDoc);
-  check('README 写了这轮的四条事实（黑户 / 指错路 / 没闸的门 / 撕裂）',
-    Boolean(doorDoc) && /黑户/.test(doorDoc[0]) && /evaporat|蒸发/.test(doorDoc[0])
-    && /撕裂/.test(doorDoc[0]) && /不在清单里|400/.test(doorDoc[0]),
-    doorDoc ? doorDoc[0].replace(/\n+/g, ' ').slice(0, 160) : '找不到这一节');
-  check('README 写明两套基准（裸文件名对 DATA_DIR，`<本>/<文件>` 对 NOTEBOOKS_DIR）',
-    Boolean(doorDoc) && /裸文件名/.test(doorDoc[0]) && /DATA_DIR/.test(doorDoc[0]) && /NOTEBOOKS_DIR/.test(doorDoc[0]),
-    doorDoc ? '那一节没写两套基准' : '找不到这一节');
-  check('README 写明 400 与 409 的分工（包不像话是请求错，家底坏着是状态不允许）',
-    Boolean(doorDoc) && /请求错/.test(doorDoc[0]) && /状态不允许/.test(doorDoc[0]),
-    doorDoc ? '那一节没写两个状态码的分工' : '找不到这一节');
-  check('README 写明判据与文案各只有一份（corruptBlocker / blockedBackupToast 有名分）',
-    Boolean(doorDoc) && /corruptBlocker/.test(doorDoc[0]) && /blockedBackupToast/.test(doorDoc[0]),
-    doorDoc ? '那一节没写单一定义' : '找不到这一节');
-  check('README 写了 zip 的诚实账（件数只数真进包的，缺的点名）',
-    Boolean(doorDoc) && /README\.txt/.test(doorDoc[0]) && /manifest/.test(doorDoc[0]) && /探针 24-C/.test(doorDoc[0]),
-    doorDoc ? '那一节没写 zip 这条账' : '找不到这一节');
+  // 第六十轮：README 精简为门面，「另一扇门」四事实 / 两套基准 / 状态码分工 / zip 诚实账
+  // 随功能章节收编至 git 提交信息；行为钉子（黑户守卫、serveWhitelisted 两基准、
+  // corruptBlocker 单一定义）全部在上面的代码侧。
 }
 
 // ──────────────────────────────── 内联界面的词汇表只有一份（第二十五轮）

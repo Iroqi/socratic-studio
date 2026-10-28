@@ -4044,6 +4044,31 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const calcBare = compile(['calculator', 'id: feast2', 'unit: 公斤', 'param: 人数 | 8 | 2 | 20', 'formula: 肉 = 人数 * 0.4']).html;
   check('首行裸 calculator 同样能编（裸档名是通用行为，不只 question）',
     calcBare.includes('data-ui-param="人数"'), calcBare.slice(0, 120));
+  // 第五十九轮起：十六档 × 裸档名 / kind: 前缀 双写法全编（防"某档悄悄渲染不出来"回归）
+  const ALL_KINDS = {
+    compare: ['row: 甲 | 乙', 'row: 丙 | 丁'],
+    steps: ['step: 打开仓库', 'step: 提交一次'],
+    timeline: ['time: 2026-10-28 | 迭代'],
+    map: ['id: m1', 'stop: 甲 | 10,20 | 位置一', 'stop: 乙 | 40,50 | 位置二'],
+    checklist: ['id: c1', 'item: 备份', 'item: 停服'],
+    form: ['id: f1', 'field: 金额 | number | 120', 'field: 人数 | number | 3', 'compute: 每人 = 金额 / 人数'],
+    calculator: ['id: k1', 'param: 人数 | 3 | 1 | 20', 'param: 金额 | 120 | 0 | 1000', 'formula: 每人 = 金额 / 人数'],
+    diagram: ['id: d1', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙'],
+    explore: ['id: e1', 'tab: 基础', 'tab: 进阶'],
+    chart: ['type: line', 'series: 一月 = 1,2', 'series: 二月 = 3,4'],
+    suggest: ['pick: 再举个例子', 'pick: 换一个'],
+    game: ['id: g1', 'try: 甲', 'try: 乙', 'outcome: 甲 = 你选了甲', 'outcome: 乙 = 你选了乙'],
+    walkthrough: ['id: w1', 'move: 先这样 = 到 A', 'move: 再那样 = 到 B'],
+    deck: ['part: compare', '  row: a | b', '  row: c | d', 'part: steps', '  step: 一', '  step: 二'],
+    question: ['id: q1', 'question: 你要选哪条？', 'option: 甲 — 说明'],
+    canvas: ['title: 一页纸', 'html: <p>正文</p>'],
+  };
+  for (const [k, lines] of Object.entries(ALL_KINDS)) {
+    const bare = compile([k, ...lines]);
+    const prefixed = compile([`kind: ${k}`, ...lines]);
+    check(`档 ${k}：裸档名与 kind: 前缀两种写法都能编（全档渲染巡检）`,
+      !bare.degraded && !prefixed.degraded, `${bare.degraded || prefixed.degraded}`);
+  }
 
   // 2) 词表之外一律退回原文，且把「为什么」说给人看
   const unknown = compile(['kind: pie', 'row: a | b']);
