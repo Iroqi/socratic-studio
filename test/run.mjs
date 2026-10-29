@@ -775,6 +775,119 @@ check('第三场归档第二场：log 两条、编号连续',
     sceneAfterThird.log.map((s) => s.index).join(',') === '1,2',
   JSON.stringify({ index: sceneAfterThird.current?.index, log: sceneAfterThird.log.length }));
 
+// ─────────────────────────────────────── 6d-2. 场上参数（第六十三轮）
+
+section('6d-2. 场上参数：一场共用的数只写一遍（声明读取、学习者优先、指标键不许进）');
+
+// 参数住在 scene.current 上，和台面同一层：不是第二套状态，读盘 / 写盘 / 换场都走同一本账。
+check('参数上限与名字规则是导出的事实（剧本、工具、编译器共用同一把尺）',
+  desk.MAX_SCENE_PARAMS === 8 && desk.SCENE_PARAM_NAME.test('人数') && desk.SCENE_PARAM_NAME.test('unit_price') &&
+    !desk.SCENE_PARAM_NAME.test('有 空格') && !desk.SCENE_PARAM_NAME.test('人数,单价') && !desk.SCENE_PARAM_NAME.test(''),
+  String(desk.MAX_SCENE_PARAMS));
+const washedParams = desk.sanitiseParams({
+  人数: 12, 单价: '3.5', 空的: null, 'x y': 1, 超额: Number.POSITIVE_INFINITY,
+  score: 3, 掌握度: 0.8, a1: 0, a2: 1, a3: 2, a4: 3, a5: 4, a6: 5, a7: 6, a8: 7, a9: 8,
+});
+check('读盘洗参数：只留有限数、坏名字 / 字面数字 / 指标键都丢掉', washedParams.人数 === 12 && !('单价' in washedParams) &&
+  !('空的' in washedParams) && !('x y' in washedParams) && !('超额' in washedParams), JSON.stringify(washedParams));
+check('指标键不许借参数表进来（score / 掌握度 是 Invariant 4 那一族）',
+  !('score' in washedParams) && !('掌握度' in washedParams), JSON.stringify(washedParams));
+check('超量就截到上限，不是整份丢掉（读盘是尽力量的洗，不抛）',
+  Object.keys(washedParams).length === 8 && washedParams.a5 === 4 && !('a8' in washedParams),
+  JSON.stringify(washedParams));
+check('不是对象（数组 / 字符串 / null）一律当空表，不把下标当参数名',
+  JSON.stringify(desk.sanitiseParams([1, 2])) === '{}' && JSON.stringify(desk.sanitiseParams('x')) === '{}' &&
+    JSON.stringify(desk.sanitiseParams(null)) === '{}');
+
+// 换场 / 整体替换 / 清空：三条合起来才是"一场共用的口径"，缺一条就退回每件各写一份。
+let withParams = desk.setParams(desk.openScene(deskBare, { title: '参数戏' }), { 人数: 12, 单价: 3.5 });
+check('写下参数表（整体就是这两个）', JSON.stringify(withParams.current.params) === '{"人数":12,"单价":3.5}',
+  JSON.stringify(withParams.current.params));
+withParams = desk.setParams(withParams, { 人数: 20 });
+check('整体替换，不是合并（旧的那条不留——"加了几个"和"就是这几个"是两件事）',
+  JSON.stringify(withParams.current.params) === '{"人数":20}', JSON.stringify(withParams.current.params));
+const carriedParams = desk.openScene(withParams, { title: '下一场' });
+check('换场照旧带着（同承台：换场不是换口径）',
+  carriedParams.current.params.人数 === 20 && carriedParams.log[0].params?.人数 === 20,
+  JSON.stringify({ now: carriedParams.current.params, prev: carriedParams.log[0]?.params }));
+const cleared = desk.setParams(carriedParams, {});
+check('显式传空 = 这一场不再共用任何数', JSON.stringify(cleared.current.params) === '{}');
+let paramThrew = null;
+try { desk.setParams(deskBare, { 人数: 1 }); } catch (err) { paramThrew = err.message; }
+check('没开场就写参数被拒（参数是这一场的参数，不是全局变量）', /还没开场/.test(paramThrew || ''), paramThrew);
+
+const washedScene = desk.normaliseSceneState({
+  index: 1,
+  current: { id: 's1', title: '手改过的盘', phase: 'open', props: [], params: { 人数: 12, score: 9, 坏名字: 'x' } },
+  log: [],
+});
+check('手改坏的参数表读进来就洗掉（读盘不抛）',
+  JSON.stringify(washedScene.current.params) === '{"人数":12}', JSON.stringify(washedScene.current.params));
+check('旧盘没有 params 这一栏 ⇒ 读成空表（不写 undefined 漂下去）',
+  JSON.stringify(desk.normaliseSceneState({ current: { id: 's2', title: 't', phase: 'open', props: [] } }).current.params) === '{}');
+
+const paramSnapshot = desk.renderSceneSnapshot(withParams);
+check('快照把这一场共用的数摆给模型（名字=值，只收数）',
+  paramSnapshot.includes('场上参数（这一场共用，只收数）：人数=20'), paramSnapshot);
+check('快照说清解析顺序（他的值 > 场上参数 > 围栏里的默认值）并说清不会改回去',
+  paramSnapshot.includes('学习者自己拖过 / 填过就以他的为准') && paramSnapshot.includes('不会改回来'), paramSnapshot);
+check('快照没写参数时不出这一句（同"没开场不许写当前无场景"）',
+  !desk.renderSceneSnapshot(desk.openScene(deskBare, { title: '素场' })).includes('场上参数'), '');
+
+// 走真会话：工具层是唯一写入口。验的是"拒绝得明明白白"与"落盘 / 回报 / 下一场带着"。
+// 用一本新学习、一场新戏——上面那一本的台面还有第六节 e 的断言在等它停在第三场。
+const paramsNb = store.getNotebook(store.createNotebook({ topic: '参数戏探针', goal: '看数怎么写进台面', pace: 'normal' }).id);
+const paramsSession = new TeachingSession({ registry, notebook: paramsNb, emit: () => {}, systemPrompt: '' });
+paramsSession.execRunScene({ action: 'open', title: '参数戏' });
+const paramsRet = paramsSession.execRunScene({
+  action: 'params',
+  params: [{ name: '人数', value: 12 }, { name: '单价', value: 3.5 }],
+});
+const sceneAfterParams = store.readSceneState(paramsNb.id);
+check('run_scene(params) 写成这一场的参数表并当场落盘',
+  paramsRet.ok === true && sceneAfterParams.current.params.人数 === 12 && sceneAfterParams.current.params.单价 === 3.5,
+  JSON.stringify({ ret: paramsRet, onDisk: sceneAfterParams.current.params }));
+check('返回值把参数表交给模型（它下一句话要引用这几个数）',
+  paramsRet.scene?.params?.人数 === 12 && /场上参数已更新/.test(paramsRet.note) && /人数=12/.test(paramsRet.note),
+  JSON.stringify({ scene: paramsRet.scene, note: paramsRet.note }));
+const paramRefusals = [
+  [{ action: 'params' }, /数组/],
+  [{ action: 'params', params: [{ name: '人数', value: 1 }, { name: '二', value: 2 }, { name: '三', value: 3 },
+    { name: '四', value: 4 }, { name: '五', value: 5 }, { name: '六', value: 6 }, { name: '七', value: 7 },
+    { name: '八', value: 8 }, { name: '九', value: 9 }] }, /最多 8 个/],
+  [{ action: 'params', params: [{ name: '有 空格', value: 1 }] }, /不合法/],
+  [{ action: 'params', params: [{ name: 'score', value: 1 }] }, /指标/],
+  [{ action: 'params', params: [{ name: '人数', value: '很多' }] }, /不是数/],
+  [{ action: 'params', params: [{ name: '人数', value: 1 }, { name: '人数', value: 2 }] }, /两遍/],
+];
+for (const [args, re] of paramRefusals) {
+  const r = paramsSession.execRunScene(args);
+  check(`参数被拒得明明白白：${String(re).slice(1, -1)}`, r.ok === false && re.test(r.error || ''), JSON.stringify(r.error));
+}
+check('被拒的写入口不许把盘写坏（还是刚才那一份）',
+  JSON.stringify(store.readSceneState(paramsNb.id).current.params) === '{"人数":12,"单价":3.5}',
+  JSON.stringify(store.readSceneState(paramsNb.id).current.params));
+paramsSession.execRunScene({ action: 'open', title: '第四场：带着参数走' });
+const sceneAfterFourth = store.readSceneState(paramsNb.id);
+check('换场把参数表一起带过去（同台面道具的承台语义）',
+  sceneAfterFourth.current.params.人数 === 12 && sceneAfterFourth.log.at(-1).params?.单价 === 3.5,
+  JSON.stringify({ now: sceneAfterFourth.current.params, prev: sceneAfterFourth.log.at(-1)?.params }));
+const clearRet = paramsSession.execRunScene({ action: 'params', params: [] });
+check('传空数组清空，并在返回值里点明（界面上写着 uses 的会退回各自默认值）',
+  clearRet.ok === true && JSON.stringify(store.readSceneState(paramsNb.id).current.params) === '{}' &&
+    /不再共用任何参数/.test(clearRet.note),
+  String(clearRet.note));
+paramsSession.execRunScene({ action: 'params', params: [{ name: '人数', value: 12 }] });
+const paramsPrompt = buildPromptForDesk(store.getNotebook(paramsNb.id));
+check('下一回合的 prompt 里读得到场上参数（续演不靠记忆）',
+  paramsPrompt.includes('场上参数（这一场共用，只收数）：人数=12'), paramsPrompt.slice(paramsPrompt.indexOf('导演台'), paramsPrompt.indexOf('导演台') + 260));
+check('APP_ADAPTER 讲清 uses / 写入通道 / 解析顺序 / 只收数 / 不改回去',
+  paramsPrompt.includes('uses: 参数名') && paramsPrompt.includes("action: 'params'") &&
+    paramsPrompt.includes('学习者自己拖过 / 填过的值 > 场上参数 > 围栏里写的默认值') &&
+    paramsPrompt.includes('学习者的改动不会回头改场上参数'), 'APP_ADAPTER 缺第六十三轮那一条');
+check('APP_ADAPTER 讲清 ui_param_missing 是什么（读得到才改得对）',
+  paramsPrompt.includes('ui_param_missing') && paramsPrompt.includes('补上参数'), '');
+
 // ─────────────────────────────────────── 6e. 台面只有一个写字的人
 //
 // 后台分身拿的是**派出那一刻**的 notebook 克隆。让它写 scene.json，就等于用一张旧台面

@@ -6806,6 +6806,119 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore54, errors.slice(errsBefore54).join(' | '));
 }
 
+// ─── 55. 场上参数（第六十三轮）：围栏写 uses 声明读哪几个数，编译器按
+// 「学习者自己拖过 / 填过的值 > 场上参数 > 围栏里写的默认值」取数；没接上不静默，
+// 界面上多一句说明、下一轮多一条 ui_param_missing。
+{
+  console.log('\n55. 场上参数（uses 声明读取：他的值 > 场上参数 > 默认值，没接上可见）');
+  const errsBefore63 = errors.length;
+  const ui63 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { state: st63 } = appModule.__hooks;
+  const compile63 = (lines, partial) => ui63.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  ui63.resetUiState();
+  ui63.setSceneParams({});
+  st63.notebook = sampleNotebook();
+  st63.uiReported.clear();
+  const bodies63 = [];
+  const realFetch63 = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (/\/artifact-message$/.test(url)) bodies63.push(JSON.parse(opts.body));
+    return realFetch63(url, opts);
+  };
+
+  // 1) 没有场上参数：界面照常长出来，用自己写的默认值，并把原因说在界面上
+  const calcLines = ['kind: calculator', 'id: c63', 'unit: 公斤', 'param: 人数 | 8 | 2 | 20',
+    'formula: 肉 = 人数 * 0.4', 'uses: 人数'];
+  const none63 = compile63(calcLines);
+  check('少了场上参数也照编（界面不因为约定没接上就消失）',
+    !none63.degraded && none63.html.includes('type="range"') && none63.html.includes('value="8"'), none63.html.slice(0, 300));
+  check('用围栏里写的默认值算结果（3.2 公斤，不是空）', none63.html.includes('>3.2 公斤<'), '');
+  check('界面自己说清为什么（不静默换数：学习者会以为这就是约定）',
+    none63.html.includes('class="ui-param-note"') && none63.html.includes('场上参数里还没有「人数」') &&
+      none63.html.includes('先用这里写的 8'), none63.html.slice(-400));
+  check('没接上这件事挂成一条 ui_param_missing（下一轮老师读得到）',
+    bodies63.some((b) => b.type === 'event' && b.name === 'ui_param_missing' &&
+      b.payload?.name === '人数' && b.payload?.why === '没有这个数' && b.artifactId === 'ui: c63'.replace(' ', '')),
+    JSON.stringify(bodies63.slice(-2)));
+
+  // 2) 写上场参数：同一件界面按它取数（同一个 id = 同一件，不换 id 才接得住）
+  ui63.setSceneParams({ 人数: 12 });
+  const filled63 = compile63(calcLines);
+  check('场上参数一写，界面就用它（滑杆在 12、结果 4.8）',
+    filled63.html.includes('value="12"') && filled63.html.includes('>4.8 公斤<'), filled63.html.slice(0, 400));
+  check('接上了就不念那句说明（说明只在没接上时出现）', !filled63.html.includes('ui-param-note'), '');
+  check('盘上不记场上参数（那是这一场共用的数，不是他填的；参数一改要跟得动）',
+    ui63.readUiState('c63')?.state?.人数 === undefined, JSON.stringify(ui63.readUiState('c63')?.state));
+
+  // 3) 学习者自己拖过的值优先，而且不被场上参数改回来；重画也续得回来
+  ui63.setUiValues('c63', 'calculator', { 人数: 30, uiKind: 'calculator' });
+  const learner63 = compile63(calcLines);
+  check('他自己拖到 30 就以他的为准（场上参数是 12 也不覆盖）',
+    learner63.html.includes('value="30"') && learner63.html.includes('>12 公斤<'), learner63.html.slice(0, 300));
+  ui63.setSceneParams({ 人数: 12, 单价: 3 });
+  check('多写一个参数不改别人（每件只读自己 uses 的那几个）',
+    compile63(calcLines).html.includes('value="30"'), '');
+
+  // 4) 值超出这件界面的范围：退回默认值 + 说清超了哪
+  ui63.resetUiState();
+  ui63.setSceneParams({ 人数: 99 });
+  const over63 = compile63(['kind: calculator', 'id: c63b', 'param: 人数 | 8 | 2 | 20',
+    'formula: 肉 = 人数 * 0.4', 'uses: 人数']);
+  check('超出范围退回自己写的默认值（界面不被一个不合理的共用数带坏）',
+    over63.html.includes('value="8"') && over63.html.includes('>3.2<'), over63.html.slice(0, 300));
+  check('并说清是超了这件界面的范围（不是"没有这个数"）',
+    over63.html.includes('超了这件界面的范围') && over63.html.includes('99'), over63.html.slice(-400));
+
+  // 5) 表单：number 格子按场上参数预填；没有就空着并说明
+  ui63.resetUiState();
+  ui63.setSceneParams({ 人数: 12 });
+  const form63 = compile63(['kind: form', 'id: f63', 'field: 人数 | number | 几个人吃', 'field: 备注 | text | 口味',
+    'uses: 人数']);
+  check('表单的 number 格子被场上参数预填', form63.html.includes('value="12"'), form63.html.slice(0, 400));
+  ui63.resetUiState();
+  ui63.setSceneParams({});
+  const form63b = compile63(['kind: form', 'id: f63b', 'field: 人数 | number | 几个人吃', 'uses: 人数']);
+  check('没有这个数就空着（不拿 0 冒充filled），并说清为什么',
+    form63b.html.includes('value=""') && form63b.html.includes('这一格先空着'), form63b.html.slice(0, 400));
+
+  // 6) 声明写错档 / 写错名字：掉回原文并点名（不静默吞）
+  const badKind63 = compile63(['kind: checklist', 'id: l63', 'item: 一项', 'uses: 人数']);
+  check('uses 写在 checklist：掉回原文并点名只配 calculator / form',
+    Boolean(badKind63.degraded) && badKind63.degraded.includes('uses 只配 calculator / form'), String(badKind63.degraded));
+  const badName63 = compile63(['kind: calculator', 'id: c63c', 'param: 人数 | 8', 'formula: 肉 = 人数 * 0.4', 'uses: 单价']);
+  check('uses 点了一个这件界面没有的参数：掉回原文并点名（并列出它有的）',
+    Boolean(badName63.degraded) && badName63.degraded.includes('不是这件计算器的参数') &&
+      badName63.degraded.includes('人数'), String(badName63.degraded));
+  const badForm63 = compile63(['kind: form', 'id: f63c', 'field: 备注 | text | 口味', 'uses: 备注']);
+  check('uses 点了 text 字段：掉回原文并点名（参数只收数，text 格没数可填）',
+    Boolean(badForm63.degraded) && badForm63.degraded.includes('不是这张表单的 number 字段'), String(badForm63.degraded));
+  const deckBad63 = compile63(['kind: deck', 'part: compare', '  row: 甲 | 乙', '  row: 丙 | 丁', '  uses: 人数',
+    'part: checklist', '  id: ck63', '  item: 一项']);
+  check('deck 子块写错档：点名第几块（块内的错误也要说得出在哪）',
+    Boolean(deckBad63.degraded) && deckBad63.degraded.includes('第 1 块') &&
+      deckBad63.degraded.includes('uses 只配 calculator / form'), String(deckBad63.degraded));
+
+  // 7) 去重与卫生：同一件的同一个名字只报一次；非数不进表
+  ui63.resetUiState();
+  st63.uiReported.clear();
+  bodies63.length = 0;
+  ui63.setSceneParams({});
+  compile63(calcLines);
+  compile63(calcLines);
+  check('同一件界面刷两遍只报一条 ui_param_missing（正文每帧都会被重画）',
+    bodies63.filter((b) => b.name === 'ui_param_missing').length === 1,
+    JSON.stringify(bodies63.map((b) => b.name)));
+  ui63.setSceneParams({ 人数: '12' });
+  check('setSceneParams 只收数（字符串进来的不进表）',
+    JSON.stringify(ui63.getSceneParams()) === '{}', JSON.stringify(ui63.getSceneParams()));
+  const snapshot63 = JSON.parse(JSON.stringify(ui63.getSceneParams()));
+  snapshot63.x = 1;
+  check('getSceneParams 给出的是副本（改它不改模块里那份）', !('x' in ui63.getSceneParams()), '');
+
+  globalThis.fetch = realFetch63;
+  check('这一节无异常', errors.length === errsBefore63, errors.slice(errsBefore63).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

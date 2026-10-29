@@ -7,6 +7,8 @@ import { renderMarkdown, escapeHtml } from './markdown.js';
 import {
   readUiState,
   setUiDegradedListener,
+  setUiParamMissListener,
+  setSceneParams,
   setUiValues,
   writeUiState,
   resetUiState,
@@ -646,6 +648,8 @@ async function openNotebook(id, { carryComposer = false } = {}) {
   state.todos = notebook.todos || [];
   state.tasks = [];
   state.camera = null;
+  // 场上参数要赶在第一次编译之前（renderThread 里就会编译围栏），不能等 applySceneState。
+  setSceneParams(notebook.scene?.current?.params || {});
   hydrateUiState(notebook); // 内联控件的勾选/参数从盘上续回来，必须赶在渲台面之前
   $('emptyState')?.remove();
   renderThread();
@@ -1297,6 +1301,9 @@ function renderSceneCuts() {
  */
 function applySceneState() {
   const s = state.notebook?.scene || {};
+  // 场上参数是编译器那一侧的输入（第六十三轮）：编译发生在正文渲染时，所以必须在任何
+  // 一次重画之前就把台子上的数递过去。没开过场 = 空表，uses 退回各自的默认值。
+  setSceneParams(s.current?.params || {});
   for (const sc of [...(s.log || []), s.current].filter(Boolean)) {
     const block = ensureSceneBlock(sc);
     const chip = deepByClass(block, 'scene-phase')[0];
@@ -2998,10 +3005,13 @@ function uiCalcNodes(id) {
 function repaintUiCalc(id) {
   const rec = readUiState(id);
   if (!rec?.spec) return;
+  // 第六十三轮：盘上只存他自己拖过的值，其余数在编译时那份 spec.values 里（场上参数 > 默认值）。
+  // 两份合起来才是屏幕上此刻的这一排数——只读 state 会把没拖过的参数念成 undefined。
+  const values = { ...(rec.spec.values || {}), ...(rec.state || {}) };
   for (const box of uiCalcNodes(id)) {
     const readouts = box.querySelectorAll('.ui-param-value') || [];
     rec.spec.params.forEach((p, i) => {
-      if (readouts[i]) readouts[i].textContent = String(rec.state[p.name]);
+      if (readouts[i]) readouts[i].textContent = String(values[p.name]);
     });
     const outs = box.querySelectorAll('.ui-out') || [];
     const works = box.querySelectorAll('.ui-math-work') || [];
@@ -3010,10 +3020,10 @@ function repaintUiCalc(id) {
       if (holder) {
         // kids() 不是洁癖：children 是 HTMLCollection，没有 find——直接写会当场炸
         const target = kids(holder).find((c) => c.classList?.contains('ui-out-value')) || holder;
-        target.textContent = uiOutText(f.terms, rec.state, rec.spec.unit || '');
+        target.textContent = uiOutText(f.terms, values, rec.spec.unit || '');
       }
       // 算式与代入必须和结果同一次求值、同一份 spec：两行对不上比不摆更糟（第五十轮）。
-      if (works[i]) works[i].textContent = uiWork(f.terms, rec.state, rec.spec.unit || '');
+      if (works[i]) works[i].textContent = uiWork(f.terms, values, rec.spec.unit || '');
     });
   }
 }
@@ -3034,6 +3044,8 @@ function uiFormNodes(id) {
 function repaintUiForm(id) {
   const rec = readUiState(id);
   if (!rec?.spec) return;
+  // 同 repaintUiCalc（第六十三轮）：没填过的空格子在 spec.values 里（场上参数预填的也在那儿）。
+  const values = { ...(rec.spec.values || {}), ...(rec.state || {}) };
   for (const box of uiFormNodes(id)) {
     const outs = box.querySelectorAll('.ui-out') || [];
     const works = box.querySelectorAll('.ui-math-work') || [];
@@ -3041,11 +3053,11 @@ function repaintUiForm(id) {
       const holder = outs[i];
       if (holder) {
         const target = kids(holder).find((c) => c.classList?.contains('ui-out-value')) || holder;
-        target.textContent = uiOutText(f.terms, rec.state, '');
+        target.textContent = uiOutText(f.terms, values, '');
       }
       // 表单里空着的字段没有代入可言：uiWork 返回空串，CSS 把这一行藏掉——
       // 不拿 0 冒充学习者填过的值（输出仍按 0 算，那是表单原有的口径）。
-      if (works[i]) works[i].textContent = uiWork(f.terms, rec.state, '');
+      if (works[i]) works[i].textContent = uiWork(f.terms, values, '');
     });
   }
 }
@@ -3076,13 +3088,15 @@ function handoffUiState(id) {
       ? `我在清单「${name}」里勾了：${checked.slice(0, 5).join('、')}${checked.length > 5 ? '…' : ''}`
       : `我在清单「${name}」里还没有勾任何一项`;
   } else if (kind === 'calculator') {
-    const parts = (rec.spec?.params || []).map((p) => `${p.name}=${rec.state?.[p.name] ?? p.def}`);
+    // 他没拖过的参数按编译时那份算（场上参数 > 默认值）：递话递的是屏幕上那一排数，不是他动过哪几个。
+    const parts = (rec.spec?.params || []).map((p) =>
+      `${p.name}=${rec.state?.[p.name] ?? rec.spec?.values?.[p.name] ?? p.def}`);
     text = `我在计算器「${name}」里调到：${parts.join('、')}`;
   } else if (kind === 'form') {
     const fitVal = (v) => { const t = String(v ?? ''); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
     const filled = (rec.spec?.fields || [])
-      .filter((f) => { const v = rec.state?.[f.name]; return v !== '' && v !== undefined && v !== null; })
-      .map((f) => `${f.name}=${fitVal(rec.state[f.name])}`);
+      .filter((f) => { const v = rec.state?.[f.name] ?? rec.spec?.values?.[f.name]; return v !== '' && v !== undefined && v !== null; })
+      .map((f) => `${f.name}=${fitVal(rec.state?.[f.name] ?? rec.spec?.values?.[f.name])}`);
     text = filled.length
       ? `我在表单「${name}」里填了：${filled.slice(0, 5).join('、')}${filled.length > 5 ? '…' : ''}`
       : `我在表单「${name}」里还没有填任何一项`;
@@ -3253,7 +3267,8 @@ function handleUiDeskEvent(evt) {
     const state = { ...rec.state, [name]: value, uiKind: 'form' };
     setUiValues(formId, 'form', state);
     repaintUiForm(formId);
-    forwardUiState(formId, state, rec.state);
+    // 起点按屏幕上那份算（没填过的格子在 spec.values 里）：经过记的是"从显示的哪个值到哪个值"。
+    forwardUiState(formId, state, { ...(rec.spec?.values || {}), ...(rec.state || {}) });
     return { handled: true, kind: 'form', id: formId };
   }
 
@@ -3268,7 +3283,8 @@ function handleUiDeskEvent(evt) {
     const state = { ...rec.state, [name]: value, uiKind: 'calculator' };
     setUiValues(calcId, 'calculator', state);
     repaintUiCalc(calcId);
-    forwardUiState(calcId, state, rec.state);
+    // 同表单：起点是滑杆刚才停在的那个数（场上参数 / 默认值填进来的也在 spec.values 里）。
+    forwardUiState(calcId, state, { ...(rec.spec?.values || {}), ...(rec.state || {}) });
     return { handled: true, kind: 'calculator', id: calcId };
   }
 
@@ -3655,6 +3671,25 @@ function reportUiDegraded(reason, lines) {
   if (state.uiReported.has(key)) return;
   state.uiReported.add(key);
   forwardArtifactMessage({ type: 'event', name: 'ui_degraded', payload: { reason } }, 'inline-ui');
+}
+
+/**
+ * 编译器报来的「这一格没拿到场上参数」（第六十三轮）：他写了 uses: 人数，可台上没有这个名字。
+ * 界面照常长出来（用围栏里写的默认值），但不能让老师以为「人数」已经在起作用——挂成一条
+ * ui_param_missing 事件，下一回合在「制品里发生过的离散事件」里读得到。
+ *
+ * 去重与降级同一把尺：同一件界面的同一个名字在一次会话里只报一次（正文一块会被刷很多遍）。
+ */
+function reportUiParamMiss({ id, misses }) {
+  for (const m of misses || []) {
+    const key = `param|${id}|${m.name}`;
+    if (state.uiReported.has(key)) continue;
+    state.uiReported.add(key);
+    forwardArtifactMessage(
+      { type: 'event', name: 'ui_param_missing', payload: { name: m.name, why: m.why } },
+      uiStateKey(id),
+    );
+  }
 }
 
 // 「只要文字」那一档随第五十七轮删除：IUI 默认全开，没有全局开关（开关在编译器门口
@@ -5254,6 +5289,7 @@ function bindEvents() {
   // 界面档：接上编译器唯一的出口（它报"哪一段没编出来"）。IUI 默认全开——第五十七轮
   // 起没有"只要文字"开关了，台面第一帧就是 IUI。
   setUiDegradedListener(reportUiDegraded);
+  setUiParamMissListener(reportUiParamMiss);
   $('closeConfig').onclick = () => closeModal('configModal');
   $('configModal').onclick = (e) => {
     if (e.target === $('configModal')) closeModal('configModal');

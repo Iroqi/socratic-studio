@@ -11,6 +11,42 @@
 
 export const PHASES = ['open', 'teach', 'practice', 'assess', 'close'];
 
+/**
+ * 场上参数（第六十三轮）：这一台戏里共用的几个**数**。
+ *
+ * 为什么住在 scene 上、而不是 progress 上：参数是"这一场大家在用的口径"，跟台上摆着哪几件
+ * 道具是同一层的事。换场时照旧带着走（同 props 的承台语义）——一场演到一半换个场名就把
+ * 「人数=12」清掉，等于逼模型每场重新报一遍数，报漏了界面就各写各的。要清就显式传空。
+ *
+ * 只收数、只收几个：内容归正文（一段话、一个名字不是参数），指标类词也不许进来
+ * （那是 Invariant 4 一族）。名字的字符集跟 web/ui-compile.js 的 UI_IDENT 同一套——
+ * 参数名要在围栏里被写出来，两套字符集会让学生看得见的名字和能用的名字对不上。
+ */
+export const MAX_SCENE_PARAMS = 8;
+export const SCENE_PARAM_NAME = /^[A-Za-z_一-龥][\w一-龥]{0,11}$/;
+
+/**
+ * 指标键不许借参数表进来（Invariant 4）：参数是"这一场共用的量"（人数、单价、温度），
+ * 不是学情。名字里带 score / 进度 / 掌握 这类词的一律不收——界面上没有数值化学情，
+ * 参数表不能给它开后门。
+ */
+export const SCENE_PARAM_METRIC = /score|percent|pct|mastery|progress|grade|level|star|分数|得分|进度|掌握|正确率|百分比|评级|星级/i;
+
+/** 盘上 / 工具输入里的参数收窄：坏名字、非数、超量一律清掉（读盘不抛，写盘在工具那侧验）。 */
+export function sanitiseParams(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw)) {
+    if (Object.keys(out).length >= MAX_SCENE_PARAMS) break;
+    const name = String(k ?? '').trim();
+    if (!SCENE_PARAM_NAME.test(name)) continue;
+    if (SCENE_PARAM_METRIC.test(name)) continue;
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    out[name] = v;
+  }
+  return out;
+}
+
 // 相位是教学动作的名字，前端要能直接说出来；这套词表跟规则里的教学循环对齐，不自造第二套。
 export const PHASE_LABELS = {
   open: '开场',
@@ -48,6 +84,8 @@ export function openScene(state, { title, conceptId = null, phase = 'open' } = {
     // 承台：上一场留在台上的道具，本场一开始就有
     inheritedFrom: state.current ? state.current.id : null,
     props: state.current ? structuredClone(state.current.props || []) : [],
+    // 场上参数跟着走（同承台）：换场不是换口径，要清是显式的一手。
+    params: state.current ? structuredClone(state.current.params || {}) : {},
     openedAt: new Date().toISOString(),
   };
   const log = state.current ? [...(state.log || []), closeCurrent(state.current)] : [...(state.log || [])];
@@ -93,6 +131,17 @@ export function removeProp(state, artifactId) {
 }
 
 /**
+ * 换掉这一场的参数表。**整体替换**，不是合并：传什么就是全部（传空对象 = 这场不再共用
+ * 任何数）。跟 todos 同一把尺——"加了几个"和"就是这几个"是两件事，混着来最容易留下
+ * 一个谁都说不清的旧值。
+ */
+export function setParams(state, params) {
+  if (!state.current) throw new Error('还没开场，先把场开出来');
+  const current = { ...state.current, params: sanitiseParams(params) };
+  return { ...state, current };
+}
+
+/**
  * 进 system prompt 的那一句。只在真开过场之后才出话——
  * 没开场时不许写「当前无场景」这种空转，那只会让模型以为机器坏了去补一刀。
  */
@@ -119,9 +168,20 @@ export function renderSceneSnapshot(state) {
     // 快照这段文本是要直接贴进 prompt 的，第 8 节那条正则会连它一起扫）。
     props ? `台上道具：${props}` : '台上道具：（还没有——讲到的东西需要动手看就摆一件上来）',
     carry,
+  ].filter(Boolean);
+  // 场上参数：这一台戏共用的几个数。没有就不出话（同"没开场不许写当前无场景"那条）。
+  const pnames = Object.keys(c.params || {});
+  if (pnames.length) {
+    lines.push(
+      `场上参数（这一场共用，只收数）：${pnames.map((n) => `${n}=${c.params[n]}`).join('、')}`,
+      '  围栏里写 `uses: 参数名` 的那几件会先用这个数；学习者自己拖过 / 填过就以他的为准（那不会改回来）。' +
+        '换场照旧带着，要改 / 要清用 run_scene（action=params）。',
+    );
+  }
+  lines.push(
     // 无内部时钟这条要说给模型：台子不会自己走，它不动就是它不动。
     '相位没有时钟：你不调用 run_scene，台子就停在当前相位，学习者的沉默不是换场的信号。',
-  ].filter(Boolean);
+  );
   return lines.join('\n');
 }
 
@@ -152,6 +212,8 @@ export function normaliseSceneState(raw) {
           rel: p.rel || null,
         }))
       : [];
+    // 参数表是手改得坏的：坏名字、非数、超量在这里就洗掉（读盘不抛）。
+    current.params = sanitiseParams(current.params);
   }
   const log = Array.isArray(raw.log) ? raw.log.map(dropDeadDeskLedgers) : [];
   return {

@@ -1316,6 +1316,91 @@ check('README 是门面：不再写排查节与细节条款（/api/ 引用少于
     !/(percent|mastery|score|等级|星星)/.test(lifeSrc62), 'lifecycle.mjs 里出现了学情指标族的词');
 }
 
+// ────────────────────────────────────────── 第六十三轮：场上参数（一场共用的数只写一遍）
+/*
+ * 这一轮最容易坏的方式（每一条都是"看着能用、其实没接上"）：
+ *   ① 参数写成全局变量 / 第二套状态 —— 换场就丢，或者两本学习互相串；
+ *   ② 编译器把参数值当"他填的"落进 artifact_state —— 参数一改，界面再也跟不动；
+ *   ③ 界面写坏时静默吞掉 uses —— 老师以为 `人数` 在起作用，其实各写各的；
+ *   ④ 学习者的改动反向改场上参数 —— 一次拖动变成全场的改动；
+ *   ⑤ 指标键借参数表进来 —— Invariant 4 的后门。
+ * 五条都在这里钉住。
+ */
+{
+  const sceneSrc63 = fs.readFileSync(path.join(app, 'server', 'scene.mjs'), 'utf8');
+  const promptSrc63 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+  const uiSrc63 = fs.readFileSync(path.join(app, 'web', 'ui-compile.js'), 'utf8');
+  const hostSrc63 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+  const cssSrc63 = fs.readFileSync(path.join(app, 'web', 'styles.css'), 'utf8');
+
+  check('参数住在 scene.current（和台面同一层，不是第二套状态）',
+    /params: state\.current \? structuredClone\(state\.current\.params \|\| \{\}\) : \{\}/.test(sceneSrc63) &&
+      /export function setParams\(state, params\)/.test(sceneSrc63),
+    'scene.mjs 里找不到承台式的 params 克隆或 setParams');
+  check('写盘 / 读盘走同一个收窄函数（坏名字、非数、超量、指标键一处清）',
+    /export function sanitiseParams/.test(sceneSrc63) && /params: sanitiseParams\(params\)/.test(sceneSrc63) &&
+      /current\.params = sanitiseParams\(current\.params\)/.test(sceneSrc63));
+  check('指标键在参数表门口就被拦住（Invariant 4 不许从这儿开后门）',
+    /SCENE_PARAM_METRIC/.test(sceneSrc63) && /SCENE_PARAM_METRIC\.test\(name\)/.test(sceneSrc63) &&
+      /SCENE_PARAM_METRIC\.test\(name\)/.test(agentSrc), 'scene / agent 至少一侧没这一道');
+
+  // 名字的字符集必须是同一套：参数名要在围栏里被写出来，两套字符集就对不上。
+  const nameClass63 = '[A-Za-z_一-龥][\\w一-龥]';
+  check('参数名的字符集与围栏的 UI_IDENT 同一套（两边都写着同一个字符类）',
+    sceneSrc63.includes(`${nameClass63}{0,11}`) && uiSrc63.includes(`${nameClass63}*`),
+    `scene=${sceneSrc63.includes(nameClass63)} ui=${uiSrc63.includes(nameClass63)}`);
+  check('围栏侧的 uses 也守同一条长度尺（超过 12 字不可能对上场上参数）',
+    /name\.length > 12/.test(uiSrc63));
+
+  // 写入通道只有一个：run_scene 的 params 分支。入口多一条，迟早有一条绕过收窄。
+  const schemaAt63 = agentSrc.indexOf('name: TOOL_NAMES.RUN_SCENE');
+  const schema63 = schemaAt63 < 0 ? '' : agentSrc.slice(schemaAt63, schemaAt63 + 3000);
+  check('run_scene 的 schema 里有 params（整份数组，整体替换）',
+    /params:\s*Type\.Optional\([\s\S]{0,240}Type\.Array\(/.test(schema63) && /action === 'params'/.test(agentSrc),
+    schema63 ? schema63.slice(-400) : '找不到 run_scene 的 schema');
+  check('工具描述把 uses 说给模型（模型不认这个形状就只会各写各的）',
+    /uses: 名字/.test(schema63) || /uses/.test(schema63), schema63.slice(0, 200));
+  check('参数只收数（文字归正文，写进参数表会被拒）',
+    /参数只能收数|参数只收数|不是数/.test(agentSrc));
+
+  // ② 盘上只记他自己定的值：从参数 / 默认值填进来的不落 artifact_state。
+  check('计算器只把他拖过的值落盘（参数一改，界面还跟得动）',
+    /for \(const p of params\) if \(stored\[p\.name\] !== undefined\) owned\[p\.name\]/.test(uiSrc63));
+  check('表单只把他填过的非空格子落盘（同一条纪律）',
+    /for \(const f of parsed\) if \(stored\[f\.name\] !== undefined && stored\[f\.name\] !== ''\) owned\[f\.name\]/.test(uiSrc63));
+  check('解析顺序写死在代码里（他的值 > 场上参数 > 默认值）',
+    uiSrc63.indexOf('num(stored[p.name])') > 0 &&
+      uiSrc63.indexOf('num(stored[p.name])') < uiSrc63.indexOf('const shared = sceneParams[p.name]'),
+    '计算器里 stored 与 sceneParams 的先后变了');
+  check('③ 没接上不静默：界面有一句说明 + 一条 ui_param_missing',
+    /ui-param-note/.test(uiSrc63) && /onParamMiss/.test(uiSrc63) && /name: 'ui_param_missing'/.test(hostSrc63));
+  check('host 那一侧按 id + 名字去重（正文每帧重画，不许每帧报一条）',
+    /`param\|\$\{id\}\|\$\{m\.name\}`/.test(hostSrc63), '去重键不见了');
+  check('④ 没有反向传播：编译器不回写场上参数（拖动一次不是全场改动）',
+    (uiSrc63.match(/setSceneParams\(/g) || []).length === 1, // 只允许定义那一处
+    `ui-compile.js 里出现了 ${(uiSrc63.match(/setSceneParams\(/g) || []).length} 次`);
+  check('宿主在编译之前先把参数递进去（applySceneState 与 openNotebook 两处）',
+    /setSceneParams\(s\.current\?\.params \|\| \{\}\)/.test(hostSrc63) &&
+      /setSceneParams\(notebook\.scene\?\.current\?\.params \|\| \{\}\)/.test(hostSrc63),
+    '参数没在重画之前递进编译器');
+  check('开着对话换场时参数也跟着刷新（不只开本那一次）',
+    /function applySceneState\(\) \{[\s\S]{0,400}setSceneParams\(/.test(hostSrc63));
+  check('参数没接上那句说明有样式（不是裸文本），且与降级同一族存在感',
+    /\.ui-param-note\s*\{/.test(cssSrc63));
+
+  // 文档侧：模型读得到的三条（只配哪两档 / 写入通道 / 读得到 ui_param_missing）
+  check('APP_ADAPTER 说清 uses 只配 calculator / form',
+    promptSrc63.includes('能写 \\`uses\\`') &&
+      (promptSrc63.includes('uses 只配 calculator / form') || promptSrc63.includes('\\`calculator\\` / \\`form\\` 能写')));
+  check('APP_ADAPTER 点名 run_scene 的 params 动作与整体替换',
+    promptSrc63.includes("action: 'params'") && promptSrc63.includes('整体替换'));
+  check('APP_ADAPTER 把解析顺序、只收数、不回写三条都讲了',
+    promptSrc63.includes('学习者自己拖过 / 填过的值 > 场上参数 > 围栏里写的默认值') &&
+      promptSrc63.includes('参数只收数') && promptSrc63.includes('学习者的改动不会回头改场上参数'));
+  check('APP_ADAPTER 讲清 ui_param_missing（读得到才改得对）',
+    promptSrc63.includes('ui_param_missing'));
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;

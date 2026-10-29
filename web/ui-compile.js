@@ -176,6 +176,72 @@ export function setUiDegradedListener(fn) {
   onDegraded = typeof fn === 'function' ? fn : null;
 }
 
+/**
+ * 场上参数（第六十三轮）：这一台戏共用的几个数，由宿主从 scene.current.params 递进来。
+ *
+ * 编译器只做**代换**：`uses: 人数` 的格子在没有学习者自己的值之前，先用场上那个数。
+ * 解析顺序是 学习者自己的值 > 场上参数 > 围栏里写的默认值——他的动作永远压过约定，
+ * 而约定压过模型随手写的字面量。反向不成立：他拖了滑杆不会改回场上参数（一次拖动
+ * 变成全局改动，是最难查的那种 bug；而且"他的试算"和"全场的约定"本来就是两件事）。
+ *
+ * 递不进来（服务端编译、测试、还没开场）时是一张空表，`uses` 就退回各自写的默认值，
+ * 并在界面上说一句为什么——不静默。
+ */
+let sceneParams = {};
+export function setSceneParams(params) {
+  const out = {};
+  if (params && typeof params === 'object' && !Array.isArray(params)) {
+    for (const [k, v] of Object.entries(params)) {
+      if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+    }
+  }
+  sceneParams = out;
+}
+export function getSceneParams() {
+  return { ...sceneParams };
+}
+
+/** 某一格没拿到场上参数时叫一声（宿主去重后转成一条事件，下一轮模型读得到）。 */
+let onParamMiss = null;
+export function setUiParamMissListener(fn) {
+  onParamMiss = typeof fn === 'function' ? fn : null;
+}
+function noteParamMiss(id, miss) {
+  if (!id || !miss?.length) return;
+  try {
+    onParamMiss?.({ id, misses: miss.map(({ name, why }) => ({ name, why })) });
+  } catch {
+    /* 回报这条路炸了不该把界面带下去 */
+  }
+}
+
+/** `uses: 人数、单价` → ['人数','单价']。名字必须与参数名同一套字符（UI_IDENT）。 */
+const USES_MAX = 4;
+function readUses(fields) {
+  const names = [];
+  for (const raw of pick(fields, 'uses')) {
+    for (const part of String(raw).split(/[,，、]/)) {
+      const name = part.trim();
+      if (!name) continue;
+      if (!UI_IDENT.test(name)) return { error: `uses 里的「${name}」不是合法的参数名（字母 / 汉字起头，中间不许空格与 , * + |）` };
+      // 与 server/scene.mjs 的 SCENE_PARAM_NAME 同一条长度尺：再长就不可能对上场上参数。
+      if (name.length > 12) return { error: `uses 里的「${name}」太长了（场上参数名 ≤12 字）` };
+      names.push(name);
+    }
+  }
+  if (names.length > USES_MAX) return { error: `uses 最多 ${USES_MAX} 个参数（再多就不叫"共用"了）` };
+  if (new Set(names).size !== names.length) return { error: 'uses 里有重复的参数名' };
+  return { names };
+}
+
+/** 只有这两档有"能被填上的默认值 / 空格子"；别的档写了 uses 是语义词写错档（不静默吞）。 */
+function usesGuard(fields, kind) {
+  if (!pick(fields, 'uses').length) return null;
+  return { error: `uses 只配 calculator / form（${kind} 没有能被场上参数填上的默认值）` };
+}
+
+const paramNote = (text) => `<p class="ui-param-note">${escapeHtml(text)}</p>`;
+
 function degrade(reason, lines) {
   // partial=false 才走到这儿：还在流里的那一半是"没写完"，由上面那条路摆占位，不算失败。
   try {
@@ -653,7 +719,7 @@ function compileChecklist(fields, lines, partial) {
  */
 const FORM_MAX_FIELDS = 8;
 const FORM_HINT_MAX = 40;
-const FORM_FIELDS = new Set(['id', 'title', 'field', 'compute', 'handoff', 'assume', 'source']);
+const FORM_FIELDS = new Set(['id', 'title', 'field', 'compute', 'uses', 'handoff', 'assume', 'source']);
 
 function compileForm(fields, lines, partial) {
   const id = pick(fields, 'id')[0];
@@ -718,7 +784,7 @@ function compileForm(fields, lines, partial) {
     }
   }
   const bad = fields.filter(([k]) => !FORM_FIELDS.has(k)).map(([k]) => k);
-  if (bad.length) return { error: `「${bad[0]}」不是 form 的字段（form 只认 id / title / field / compute / handoff / assume / source）` };
+  if (bad.length) return { error: `「${bad[0]}」不是 form 的字段（form 只认 id / title / field / compute / uses / handoff / assume / source）` };
 
   const meta = readAssumes(fields);
   if (meta.error) return { error: meta.error };
@@ -726,14 +792,38 @@ function compileForm(fields, lines, partial) {
   if (src.error) return { error: src.error };
 
   // 值从宿主侧续：上次填到哪儿，重画就回到哪儿（缺 id 的那份新出现时用空值）。
+  // 第六十三轮：uses 的 number 字段在没有他自己的值之前先用场上参数（只 number——参数只收数）。
   const stored = readUiState(id)?.state || {};
+  const uses = readUses(fields);
+  if (uses.error) return { error: uses.error };
+  const bound = new Set(uses.names);
+  for (const n of bound) {
+    if (!numberNames.has(n)) {
+      return { error: `uses 里的「${n}」不是这张表单的 number 字段（参数只收数，text 格没数可填）` };
+    }
+  }
   const values = {};
+  const misses = [];
   for (const f of parsed) {
-    const v = stored[f.name];
+    let v = stored[f.name];
+    const empty = v === undefined || v === null || v === '';
+    if (empty && bound.has(f.name)) {
+      const shared = sceneParams[f.name];
+      if (typeof shared === 'number') v = String(shared);
+      else misses.push({ name: f.name, why: '没有这个数' });
+    }
     values[f.name] = v === undefined || v === null ? '' : String(v);
   }
-  const spec = { fields: parsed, formulas, title, assumes: meta.assumes, source: src.source };
-  writeUiState(id, 'form', { ...values, uiKind: 'form' }, spec);
+  const missHtml = misses.length
+    ? paramNote(misses.map((m) => `场上参数里还没有「${m.name}」，这一格先空着`).join('；'))
+    : '';
+  noteParamMiss(id, misses);
+  const spec = { fields: parsed, formulas, title, assumes: meta.assumes, source: src.source, values };
+  // 同 calculator（第六十三轮）：从场上参数预填的那几格不算他填的，不写进 artifact_state——
+  // 否则参数一改，这张表单永远停在第一次预填的数上。
+  const owned = {};
+  for (const f of parsed) if (stored[f.name] !== undefined && stored[f.name] !== '') owned[f.name] = values[f.name];
+  writeUiState(id, 'form', { ...owned, uiKind: 'form' }, spec);
   const inputs = parsed
     .map((f) => {
       const type = f.type === 'number' ? 'number' : 'text';
@@ -748,7 +838,7 @@ function compileForm(fields, lines, partial) {
       `<output class="ui-out-value">${uiOutText(f.terms, values, '')}</output></p>`)
     .join('');
   const math = mathHtml(formulas, values, '');
-  return { html: `${cap}<div class="ui-form" data-ui-form="${escapeHtml(id)}">${inputs}${outs}${math}${assumeHtml(meta.assumes)}${sourceHtml(src.source)}</div>${handoff ? handoffButton(id, handoff) : ''}`, shape: 'form' };
+  return { html: `${cap}<div class="ui-form" data-ui-form="${escapeHtml(id)}">${inputs}${outs}${math}${assumeHtml(meta.assumes)}${sourceHtml(src.source)}</div>${missHtml}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'form' };
 }
 
 /** form 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game / walk 同一把尺）。 */
@@ -859,12 +949,40 @@ function compileCalculator(fields, lines, partial) {
   if (formulas.length > 4) return { error: '输出最多 4 个' };
 
   // 值从宿主侧续：上次滑到哪儿，重画就回到哪儿（缺 id 的那份新出现时用默认值）。
+  // 第六十三轮：声明了 uses 的参数在没有他自己的值之前先用场上参数（解析顺序见 setSceneParams）。
   const stored = readUiState(id)?.state || {};
+  const uses = readUses(fields);
+  if (uses.error) return { error: uses.error };
+  const bound = new Set(uses.names);
+  const paramNames = new Set(params.map((p) => p.name));
+  for (const n of bound) {
+    if (!paramNames.has(n)) {
+      return { error: `uses 里的「${n}」不是这件计算器的参数（这件有的是：${[...paramNames].join(' / ')}）` };
+    }
+  }
   const values = {};
+  const misses = [];
   for (const p of params) {
-    const v = num(stored[p.name]);
+    let v = num(stored[p.name]);
+    if (v === null && bound.has(p.name)) {
+      const shared = sceneParams[p.name];
+      if (typeof shared !== 'number') {
+        misses.push({ name: p.name, why: '没有这个数' });
+      } else if ((p.lo !== null && shared < p.lo) || (p.hi !== null && shared > p.hi)) {
+        misses.push({ name: p.name, why: '超出范围' });
+      } else {
+        v = shared;
+      }
+    }
     values[p.name] = v === null ? p.def : v;
   }
+  // 拿不到就用这里写的默认值，并把原因摆在界面上——静默换数比不换更糟（学习者会以为这就是约定）。
+  const missHtml = misses.length
+    ? paramNote(misses.map((m) => (m.why === '超出范围'
+        ? `场上参数「${m.name}」= ${sceneParams[m.name]}，超了这件界面的范围，先用这里写的 ${values[m.name]}`
+        : `场上参数里还没有「${m.name}」，先用这里写的 ${values[m.name]}`)).join('；'))
+    : '';
+  noteParamMiss(id, misses);
   const unit = pick(fields, 'unit')[0] || '';
   const title = pick(fields, 'title')[0] || '';
   const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
@@ -874,8 +992,13 @@ function compileCalculator(fields, lines, partial) {
   if (meta.error) return { error: meta.error };
   const src = readSource(fields);
   if (src.error) return { error: src.error };
-  const spec = { params, formulas, unit, title, assumes: meta.assumes, source: src.source };
-  writeUiState(id, 'calculator', values, spec);
+  const spec = { params, formulas, unit, title, assumes: meta.assumes, source: src.source, values };
+  // 盘上只记**他自己定的**那几个值（第六十三轮）：从场上参数 / 默认值填进来的不进 artifact_state。
+  // 写进去就等于把"这一场共用的数"记成他的账——参数一改，滑杆再也跟不动了；
+  // 而那几个数本来就摆在导演台快照里，模型每回合都读得到，不必抄进他的账。
+  const owned = {};
+  for (const p of params) if (stored[p.name] !== undefined) owned[p.name] = values[p.name];
+  writeUiState(id, 'calculator', { ...owned, uiKind: 'calculator' }, spec);
   const sliders = params
     .map((p) => {
       const lo = p.lo ?? Math.min(0, p.def);
@@ -895,7 +1018,7 @@ function compileCalculator(fields, lines, partial) {
     )
     .join('');
   const math = mathHtml(formulas, values, unit);
-  return { html: `${cap}<div class="ui-calc" data-ui-calc="${escapeHtml(id)}">${sliders}${outs}${math}${assumeHtml(meta.assumes)}${sourceHtml(src.source)}</div>${handoff ? handoffButton(id, handoff) : ''}`, shape: 'calculator' };
+  return { html: `${cap}<div class="ui-calc" data-ui-calc="${escapeHtml(id)}">${sliders}${outs}${math}${assumeHtml(meta.assumes)}${sourceHtml(src.source)}</div>${missHtml}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'calculator' };
 }
 
 /**
@@ -1721,6 +1844,10 @@ function compileDeck(fields, lines) {
     }
     const metaErr = metaWordsError(child.fields, part.kind);
     if (metaErr) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${metaErr}` };
+    if (part.kind !== 'calculator' && part.kind !== 'form') {
+      const usesErr = usesGuard(child.fields, part.kind);
+      if (usesErr) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${usesErr.error}` };
+    }
     const r = COMPILERS[part.kind](child.fields, part.body);
     if (r.error) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${r.error}` };
     blocks.push(`<div class="ui-deck-part">${r.html}</div>`);
@@ -2385,6 +2512,11 @@ export function compileUiBlock(lines, partial) {
   if (kind !== 'deck') {
     const metaErr = metaWordsError(parsed.fields, kind);
     if (metaErr) return fail(metaErr);
+    // uses 只配 calculator / form（第六十三轮）：只有这两档有能被场上参数填上的默认值 / 空格子。
+    if (kind !== 'calculator' && kind !== 'form') {
+      const usesErr = usesGuard(parsed.fields, kind);
+      if (usesErr) return fail(usesErr.error);
+    }
   }
   if (lines.length > MAX_ITEMS + 6) return fail('这一段太长了，回到正文来说');
   try {

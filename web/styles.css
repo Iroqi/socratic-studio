@@ -1010,6 +1010,11 @@ html, body {
 .ui-degraded {
   margin: -0.4em 0 1em; font-size: 12px; color: var(--ink-3);
 }
+/* 场上参数没接上（第六十三轮）：界面照常长出来、用的是自己写的默认值，这句只说明为什么。
+   与降级同一种存在感——它也是"失败可见"，只是失败的是约定、不是编译。 */
+.ui-param-note {
+  margin: -0.2em 0 1em; font-size: 12px; color: var(--ink-3);
+}
 /* 流式占位：一帧帧重画会被它换掉，所以它不许有高度跳动以外的存在感——
    没有进度条、没有百分比（Invariant 4 违规指纹 ①，这一档连"假装在动"都不给）。 */
 .ui-skeleton {

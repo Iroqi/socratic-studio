@@ -14,9 +14,13 @@ import { saveNote } from './notes.mjs';
 import { jevDecide, DecisionError } from './decision.mjs';
 import {
   PHASE_LABELS,
+  MAX_SCENE_PARAMS,
+  SCENE_PARAM_NAME,
+  SCENE_PARAM_METRIC,
   normaliseSceneState,
   openScene,
   setPhase,
+  setParams,
   placeProp,
   removeProp,
 } from './scene.mjs';
@@ -478,13 +482,24 @@ export function buildTools() {
     {
       name: TOOL_NAMES.RUN_SCENE,
       description:
-        '导演台的手：把这一「场」开出来、换相位、把旧道具摆回台上。一场 = 一段连续的教学（一个概念的讲→做→验），不是每条消息一场——一个回合通常只开一场。action: open | phase | place | remove；phase 取 open/teach/practice/assess/close。**台子没有时钟**：你不点它，相位就停在那儿，学习者的沉默不是换场信号。open 要给一句学习者看得懂的场名（如「变量的盒子」），并把正在取景的概念 id 带上——中栏按场分段，正文、题卡、道具都落进这一场的格子里。share_artifact 交付的道具自动上台，不必 place；place 只用来把**以前那场**的道具再摆回来（跨场接着玩）。学习者扔掉的道具摆不回来，那是他的决定。',
+        '导演台的手：把这一「场」开出来、换相位、把旧道具摆回台上、定这一场共用的数。一场 = 一段连续的教学（一个概念的讲→做→验），不是每条消息一场——一个回合通常只开一场。action: open | phase | place | remove | params；phase 取 open/teach/practice/assess/close。**台子没有时钟**：你不点它，相位就停在那儿，学习者的沉默不是换场信号。open 要给一句学习者看得懂的场名（如「变量的盒子」），并把正在取景的概念 id 带上——中栏按场分段，正文、题卡、道具都落进这一场的格子里。share_artifact 交付的道具自动上台，不必 place；place 只用来把**以前那场**的道具再摆回来（跨场接着玩）。学习者扔掉的道具摆不回来，那是他的决定。**params 定这一场共用的几个数**（如人数 / 单价 / 本金）：围栏里写 `uses: 人数` 的 calculator / form 会先用它，几件界面就不会各写各的数；它只收数，整体替换（传空数组 = 这场不再共用），换场照旧带着。',
       parameters: Type.Object({
-        action: Type.String({ description: 'open | phase | place | remove' }),
+        action: Type.String({ description: 'open | phase | place | remove | params' }),
         title: Type.Optional(Type.String({ description: 'action=open 必填：一句话场名，学习者看得懂' })),
         phase: Type.Optional(Type.String({ description: 'open/phase 必填：open | teach | practice | assess | close' })),
         concept_id: Type.Optional(Type.String({ description: '这一场在演哪个概念（Graph 里的 id），取景跟着走' })),
         artifact_id: Type.Optional(Type.String({ description: 'place/remove 必填：制品 id' })),
+        params: Type.Optional(
+          Type.Array(
+            Type.Object({
+              name: Type.String({ description: '参数名：字母 / 汉字起头，≤12 字，别用空格与 , * + |' }),
+              value: Type.Union([Type.Number(), Type.String({ description: '写成数字字符串也认' })], {
+                description: '参数值：只收数（内容归正文，不归参数）',
+              }),
+            }),
+            { description: 'action=params 必填：整份参数表（整体替换，空数组=清空），最多 8 个' },
+          ),
+        ),
       }),
     },
     {
@@ -1632,8 +1647,27 @@ export class TeachingSession {
           }
           this.scene = placeProp(this.scene, row);
         }
+      } else if (action === 'params') {
+        const list = Array.isArray(args.params) ? args.params : null;
+        if (!list) return { ok: false, error: 'params 要给一份数组：[{ name: "人数", value: 12 }, …]（整体替换，空数组 = 清空）' };
+        if (list.length > MAX_SCENE_PARAMS) return { ok: false, error: `场上参数最多 ${MAX_SCENE_PARAMS} 个（再多就不叫"这一场共用的数"了）` };
+        const table = {};
+        for (const row of list) {
+          const name = String(row?.name ?? '').trim();
+          const value = Number(row?.value);
+          if (!SCENE_PARAM_NAME.test(name)) {
+            return { ok: false, error: `参数名「${name}」不合法（字母 / 汉字起头、≤12 字，中间不许空格与 , * + |）` };
+          }
+          if (SCENE_PARAM_METRIC.test(name)) {
+            return { ok: false, error: `参数名「${name}」是学情指标那一族——参数只收这一场共用的量（人数、单价、温度），分数 / 进度 / 掌握度不许进界面` };
+          }
+          if (!Number.isFinite(value)) return { ok: false, error: `参数「${name}」的值不是数——参数只收数，文字归正文` };
+          if (name in table) return { ok: false, error: `参数「${name}」写了两遍` };
+          table[name] = value;
+        }
+        this.scene = setParams(this.scene, table);
       } else {
-        return { ok: false, error: `未知 action: ${action}（open / phase / place / remove）` };
+        return { ok: false, error: `未知 action: ${action}（open / phase / place / remove / params）` };
       }
       saveSceneState(this.notebook.id, this.scene);
       this.emit({ type: 'scene', scene: this.scene.current, log: this.scene.log });
@@ -1646,12 +1680,26 @@ export class TeachingSession {
           ? '｜这一拍台上没有道具，学习者只能读字。要他动手就交付一件（share_artifact 会自动上台），' +
             '这一拍确实不需要就往下讲，不用为摆而摆。'
           : '';
+      const pnames = Object.keys(c.params || {});
+      const paramNote =
+        action === 'params'
+          ? pnames.length
+            ? `｜场上参数：${pnames.map((n) => `${n}=${c.params[n]}`).join('、')}。围栏里写 uses: 名字 的那几件会先用它。`
+            : '｜这一场不再共用任何参数（界面上还写着 uses 的会退回各自的默认值）。'
+          : '';
       return {
         ok: true,
-        scene: { id: c.id, index: c.index, title: c.title, phase: c.phase, props: (c.props || []).map((p) => p.id) },
+        scene: {
+          id: c.id,
+          index: c.index,
+          title: c.title,
+          phase: c.phase,
+          props: (c.props || []).map((p) => p.id),
+          params: { ...(c.params || {}) },
+        },
         note:
-          (action === 'open' ? `第 ${c.index} 场已开场` : '台子已更新') +
-          `：「${c.title}」· ${PHASE_LABELS[c.phase]}｜台上 ${propsOnDesk} 件${emptyDesk}`,
+          (action === 'open' ? `第 ${c.index} 场已开场` : action === 'params' ? '场上参数已更新' : '台子已更新') +
+          `：「${c.title}」· ${PHASE_LABELS[c.phase]}｜台上 ${propsOnDesk} 件${emptyDesk}${paramNote}`,
       };
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };
