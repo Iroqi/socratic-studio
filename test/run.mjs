@@ -1203,6 +1203,148 @@ check('整件折叠也如实说',
   uiTraceLines(manyProgress).some((l) => l.includes('件更早的界面整件折叠')),
   uiTraceLines(manyProgress).join('\n'));
 
+// ─────────────────────────────────────── 7b-3. 生命周期（第六十二轮）
+//
+// 快照从"全部历史"改成"这一轮的工作集"。红线只有一条：折叠是**上下文**的事，不是事实的事——
+// 不许删盘、不许把折进去读成"他不干了"、必须留 id 让人读得回，而且判据只能是被动事实。
+
+section('7b-3. 生命周期：工作集跟着台面走（更早的折成一行，按 id 读得回）');
+const {
+  activeStateIds,
+  foldStateSnapshot,
+  stateBrief,
+  MIN_ACTIVE_UI,
+  MAX_FOLDED_NAMES,
+  MAX_BRIEF_CHARS,
+} = await import('../server/lifecycle.mjs');
+
+// 六个 id：台上一件整页制品、本场动过两件内联界面、更早的三件（其中一件最近动过）。
+const lifeState = {
+  'ui:old1': { uiKind: 'calculator', 人数: 8 },
+  'ui:old2': { uiKind: 'checklist', done: { 停服: true } },
+  'ui:old3': { uiKind: 'explore', active: '齿轮' },
+  'ui:now1': { uiKind: 'form', 预算: 300 },
+  'ui:now2': { uiKind: 'chart', snap: '样本量=5' },
+  'art-page': { level: 3 },
+};
+const lifeTrace = {
+  version: 1,
+  entries: {
+    'ui:old1': { kind: 'calculator', steps: [{ at: '2026-10-28T01:00:00.000Z', d: [] }] },
+    'ui:old2': { kind: 'checklist', steps: [{ at: '2026-10-28T02:00:00.000Z', d: [] }] },
+    'ui:old3': { kind: 'explore', steps: [{ at: '2026-10-28T03:00:00.000Z', d: [] }] },
+    'ui:now1': { kind: 'form', steps: [{ at: '2026-10-28T05:10:00.000Z', d: [] }] },
+    'ui:now2': { kind: 'chart', steps: [{ at: '2026-10-28T05:20:00.000Z', d: [] }] },
+  },
+};
+const lifeScene = {
+  current: { id: 'scene-03', index: 3, openedAt: '2026-10-28T05:00:00.000Z', props: [{ id: 'art-page', title: '那一页' }] },
+  log: [],
+};
+const lifeProgress = { artifact_state: lifeState, ui_trace: lifeTrace };
+
+const lifeActive = activeStateIds(lifeProgress, lifeScene);
+check('台上的道具在场（工作集就是台面）', lifeActive.has('art-page'));
+check('这一场里落定过的界面在场（时间戳不早于开场）', lifeActive.has('ui:now1') && lifeActive.has('ui:now2'));
+const earlierOnly = { artifact_state: lifeState, ui_trace: { entries: { 'ui:old1': { steps: [{ at: '2026-10-28T01:00:00.000Z' }] } } } };
+check('上一场动过的不会被当成本场（判据是本场的开场时间，不是"最近看过"）',
+  !activeStateIds(earlierOnly, { current: { openedAt: '2026-10-28T05:00:00.000Z' } }, { floor: 0 }).has('ui:old1'));
+check('同一件，开场时间在它之前就是在场（这条线是可验的，不是感觉）',
+  activeStateIds(earlierOnly, { current: { openedAt: '2026-10-28T00:30:00.000Z' } }, { floor: 0 }).has('ui:old1'));
+const noDeskActive = activeStateIds(lifeProgress, { current: null });
+check(`没开台时保 ${MIN_ACTIVE_UI} 件在场（快照不许一片空）`, noDeskActive.size === MIN_ACTIVE_UI,
+  [...noDeskActive].join(','));
+check('没开台时保的是最近动过的（不是最早写入的）',
+  noDeskActive.has('ui:now2') && noDeskActive.has('ui:now1') && !noDeskActive.has('ui:old1'),
+  [...noDeskActive].join(','));
+check('activeStateIds 是纯函数（同一份盘+台，两次算出来一样）',
+  [...activeStateIds(lifeProgress, lifeScene)].sort().join(',') === [...activeStateIds(lifeProgress, lifeScene)].sort().join(','));
+// 没有经过的那批（旧本子 / 还没动过）只能按"键写进来的先后"倒着取。按正序切会把最早那几件
+// 保下来、把刚写的折进去——正好反了，而且模型会以为最近都在用那几件。
+const aging = {};
+for (let i = 1; i <= 9; i += 1) aging[`ui:s${i}`] = { uiKind: 'form', v: i };
+const agingActive = activeStateIds({ artifact_state: aging }, { current: null });
+check('没有经过时按写入先后倒着取（保的是最近几件，不是最早几件）',
+  agingActive.has('ui:s9') && !agingActive.has('ui:s1'), [...agingActive].join(','));
+
+const lifeView = foldStateSnapshot(lifeProgress, { active: lifeActive });
+const lifeText = lifeView.lines.join('\n');
+check('在场的逐件摆出来（这一轮要读的那几件一个不少）',
+  lifeText.includes('[ui:now1]') && lifeText.includes('预算=300') && lifeText.includes('[art-page]'),
+  lifeText);
+check('折进去的那件：一行里点名、并说清折了几件',
+  lifeView.folded.includes('ui:old1') && /另有 1 件更早的界面/.test(lifeText) && lifeText.includes('[ui:old1]'),
+  lifeText);
+check('折进去的**值**不进这一轮上下文（折的就是这一行的体积）',
+  !lifeText.includes('人数=8'), lifeText);
+check('折叠说明带上可读回的出口（不带 id 的折叠等于把记忆丢进黑洞）',
+  lifeText.includes('read_artifact_evidence') && lifeText.includes('读回来'));
+check('折叠不等于"他放弃了"（同一把尺：工作集变了，不是去留变了）',
+  lifeText.includes('不说明他放弃了这个概念') && lifeText.includes('也不说明他没在里面做过什么'));
+check('折叠自己不自称是删除（盘上键还在）', lifeText.includes('键和记录都还在盘上'));
+
+const briefLong = stateBrief({ 字段: 'x'.repeat(500) });
+check('单件快照仍然封顶（长值截断，不靠模型自己克制）', briefLong.length === MAX_BRIEF_CHARS, String(briefLong.length));
+check('note / hint 仍然不进快照（那是给页面看的，不是事实）',
+  stateBrief({ 人数: 8, note: '这行不该出现', hint: '这句也不该' }) === '人数=8',
+  stateBrief({ 人数: 8, note: '这行不该出现', hint: '这句也不该' }));
+
+const manyFolded = {};
+for (let i = 0; i < MAX_FOLDED_NAMES + 3; i += 1) manyFolded[`ui:x${i}`] = { uiKind: 'form', v: i };
+const manyView = foldStateSnapshot({ artifact_state: manyFolded }, { active: [] });
+const manyLine = manyView.lines.find((l) => l.includes('更早的界面')) || '';
+check(`折叠行最多点名 ${MAX_FOLDED_NAMES} 件（其余只报数，不无限长）`,
+  (manyLine.match(/\[ui:x/g) || []).length === MAX_FOLDED_NAMES && manyLine.includes('其余 3 件没点名'), manyLine);
+check('全部都在工作集里就不摆折叠行（没有就是没有）',
+  !foldStateSnapshot({ artifact_state: { 'ui:a': { v: 1 } } }, { active: ['ui:a'] }).lines.join('\n').includes('更早的界面'));
+check('没有状态就不摆空标题（空标题是噪声）',
+  foldStateSnapshot({ artifact_state: {} }, { active: [] }).lines.length === 0);
+
+// 接进 prompt：快照跟着台面走，而不是跟着"本子用过多少件"
+const lifeSnapshot = renderStateSnapshot({
+  id: meta.id,
+  graph: result.graph,
+  progress: { ...result.progress, artifact_evidence: [], notes: [], artifact_events: [], artifact_state: lifeState, ui_trace: lifeTrace, notes: [] },
+  scene: lifeScene,
+  patches: { patches: [] },
+});
+check('prompt 里在工作集的那件照旧逐字段摆',
+  lifeSnapshot.includes('[ui:now2]') && lifeSnapshot.includes('snap=样本量=5'), lifeSnapshot);
+check('prompt 里折进去的只剩 id（值不进上下文）',
+  lifeSnapshot.includes('[ui:old1]') && !lifeSnapshot.includes('人数=8'), lifeSnapshot);
+check('全折进折叠行时也不说"本轮没有记录"（那是假话：他有记录，只是不在工作集）',
+  !lifeSnapshot.includes('本轮没有记录'));
+check('折叠那一族不产出数值化学情（Invariant 4 照旧）',
+  !/(百分比|进度条|[0-9]+\s*%|score|百分制|等级认证|星星)/i.test(lifeSnapshot));
+
+// 工具那条路：不传 id 时只展开工作集；要细节就按 id 读——折叠必须可逆
+const lifeBucket = (id, extra = {}) => ({
+  id, title: null, kind: null, questions: [], evidence: [], state: {}, events: [], trace: [], ...extra,
+});
+const lifeSession = {
+  liveArtifacts: new Map([
+    ['ui:now1', lifeBucket('ui:now1', { state: { 预算: 300 } })],
+    ['art-page', lifeBucket('art-page', { state: { level: 3 } })],
+    ['ui:old1', lifeBucket('ui:old1', { state: { 人数: 8 } })],
+    ['art-fresh', lifeBucket('art-fresh', { state: { level: 1 }, createdAt: '2026-10-28T05:30:00.000Z' })],
+  ]),
+  progress: lifeProgress,
+  scene: lifeScene,
+};
+const lifeViewAll = session.artifactEvidenceView.call(lifeSession);
+const lifeIds = lifeViewAll.artifacts.map((a) => a.artifact_id);
+check('不传 id 时只展开工作集（prompt 里刚折起来的不从工具这条路全回来）',
+  lifeIds.includes('ui:now1') && lifeIds.includes('art-page') && !lifeIds.includes('ui:old1'), lifeIds.join(','));
+check('本回合刚交付的那件永远展开（跟工作集无关）', lifeIds.includes('art-fresh'), lifeIds.join(','));
+check('折起来的给一份 id 清单，并说清不展开≠不存在',
+  lifeViewAll.folded?.count === 1 && lifeViewAll.folded.ids.includes('ui:old1') &&
+    /工作集外/.test(lifeViewAll.folded_note) && /传进来读回/.test(lifeViewAll.folded_note),
+  JSON.stringify({ folded: lifeViewAll.folded, note: lifeViewAll.folded_note }));
+const lifeOne = session.artifactEvidenceView.call(lifeSession, 'ui:old1');
+check('按 id 读得回折起来的那件（折叠可逆；不可逆的折叠就是删了）',
+  lifeOne.artifacts.length === 1 && lifeOne.artifacts[0].state.人数 === 8,
+  JSON.stringify(lifeOne));
+
 // ─────────────────────────────────────── 7d. 教学规则本体在 server/rules/
 
 section('7d. 教学规则在 server/rules/，运行时注入');

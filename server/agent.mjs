@@ -22,6 +22,7 @@ import {
 } from './scene.mjs';
 import { injectArtifactRuntime, injectArtifactCsp, ARTIFACT_CONTRACT_NOTE } from './artifact.mjs';
 import { sanitiseTrace, MAX_TRACE_STEPS } from './ui-trace.mjs';
+import { activeStateIds } from './lifecycle.mjs';
 import { compileUiBlock } from '../web/ui-compile.js';
 
 /**
@@ -341,10 +342,10 @@ export function buildTools() {
     {
       name: TOOL_NAMES.READ_ARTIFACT,
       description:
-        '读回学习者在制品里做了什么。**这是页面型制品唯一的证据通道**——没有它就不能说学习者"在制品里试过了"。返回四类内容：① 答卷型交互的 evidence（作答次数/结果/作答内容/完成状态）；② 项目或游戏的 state 快照（关卡、尝试次数、当前参数这类客观事实）；③ 离散 events（level_cleared / bug_found 等）；④ 内联界面的 trace（他落定的那几步：从哪个值到哪个值，拖动中的中间帧不记——那是"怎么走到这"，不是学情）。这些只是机械记录不是结论：题目是否属于当前 concept、有没有过期重复、算不算概念错误、下一步怎么走，都由你判断。**反过来也成立——没有记录不等于学习者没做。**',
+        '读回学习者在制品里做了什么。**这是页面型制品唯一的证据通道**——没有它就不能说学习者"在制品里试过了"。返回四类内容：① 答卷型交互的 evidence（作答次数/结果/作答内容/完成状态）；② 项目或游戏的 state 快照（关卡、尝试次数、当前参数这类客观事实）；③ 离散 events（level_cleared / bug_found 等）；④ 内联界面的 trace（他落定的那几步：从哪个值到哪个值，拖动中的中间帧不记——那是"怎么走到这"，不是学情）。**不传 artifact_id 时只展开这一轮的工作集**（台上的、这一场动过的、本回合刚碰过的），更早的给一份 id 清单——要用其中哪件就把它的 id 传进来，别因为没展开就当成不存在。这些只是机械记录不是结论：题目是否属于当前 concept、有没有过期重复、算不算概念错误、下一步怎么走，都由你判断。**反过来也成立——没有记录不等于学习者没做。**',
       parameters: Type.Object({
         artifact_id: Type.Optional(
-          Type.String({ description: '只看某一份制品；省略则返回这一轮所有制品的回报' }),
+          Type.String({ description: '只看某一份制品（id 来自状态快照或上一次回报的 folded.ids）；省略则展开这一轮的工作集' }),
         ),
       }),
     },
@@ -998,6 +999,9 @@ export class TeachingSession {
         createdAt: new Date().toISOString(),
       };
     this.liveArtifacts.set(artifactId, bucket);
+    // 本回合碰过就记一笔（第六十二轮）：不指定 id 的 read_artifact_evidence 只展开工作集，
+    // 而"这一轮刚动过"是工作集里最实的那个依据——只靠台上的道具会漏掉刚滑了一下的内联界面。
+    bucket.touchedAt = new Date().toISOString();
 
     if (type === 'state') {
       const state = payload.state || ev.state || {};
@@ -1055,31 +1059,64 @@ export class TeachingSession {
     };
   }
 
-  /** 制品回报的读回视图：答卷证据 + 状态快照 + 离散事件。 */
+  /**
+   * 制品回报的读回视图：答卷证据 + 状态快照 + 离散事件 + 内联界面的经过。
+   *
+   * 第六十二轮：不指定 id 时只展开**这一轮的工作集**（台上的、这一场动过的、本回合刚交付
+   * 或刚碰过的），更早的折成一份 id 清单。以前这里把 liveArtifacts 整本推给模型——
+   * seedArtifacts 每回合把所有历史 id 都种进来，等于模型一调这个工具就把整本本子读回上下文，
+   * prompt 里刚折起来的那些又从工具这条路全回来了。要哪件的细节就把它的 id 传进来。
+   */
   artifactEvidenceView(artifactId) {
-    const items = artifactId
-      ? [this.liveArtifacts.get(artifactId)].filter(Boolean)
-      : [...this.liveArtifacts.values()];
-    if (!items.length) {
+    const view = (a) => ({
+      artifact_id: a.id,
+      title: a.title,
+      kind: a.kind,
+      questions_declared: a.questions,
+      evidence: a.evidence,
+      state: a.state,
+      events: a.events,
+      trace: a.trace || [],
+      observed_count: a.evidence.length + a.events.length,
+    });
+    if (artifactId) {
+      const one = this.liveArtifacts.get(artifactId);
+      if (!one) {
+        return {
+          artifacts: [],
+          note: '这一轮还没有任何制品交互记录。没有记录 ≠ 学习者没做；只是没观测到可读回的内容。',
+        };
+      }
+      return { artifacts: [view(one)], note: evidenceNote([one]) };
+    }
+
+    const all = [...this.liveArtifacts.values()];
+    if (!all.length) {
       return {
         artifacts: [],
         note: '这一轮还没有任何制品交互记录。没有记录 ≠ 学习者没做；只是没观测到可读回的内容。',
       };
     }
-    return {
-      artifacts: items.map((a) => ({
-        artifact_id: a.id,
-        title: a.title,
-        kind: a.kind,
-        questions_declared: a.questions,
-        evidence: a.evidence,
-        state: a.state,
-        events: a.events,
-        trace: a.trace || [],
-        observed_count: a.evidence.length + a.events.length,
-      })),
-      note: evidenceNote(items),
-    };
+    // 本回合刚交付 / 刚碰过的那些永远展开：它们是这一轮正在发生的事，
+    // 跟工作集无关（没开台时工作集里什么都没有，但刚交的那件必须读得到）。
+    const active = activeStateIds(this.progress, this.scene);
+    const inWork = all.filter((a) => active.has(a.id) || a.touchedAt || a.createdAt);
+    const folded = all.filter((a) => !(active.has(a.id) || a.touchedAt || a.createdAt));
+    const out = { artifacts: inWork.map(view) };
+    if (folded.length) {
+      const names = folded.slice(0, 20).map((a) => a.id);
+      out.folded = { count: folded.length, ids: names };
+      out.folded_note =
+        `更早的 ${folded.length} 件在这一轮的工作集外，没展开（不说明他放弃了这个概念，也不说明没做过）：` +
+        names.join('、') +
+        (folded.length > names.length ? ` 等（其余 ${folded.length - names.length} 件没点名）` : '') +
+        '。要看哪件就把它的 artifact_id 传进来读回。';
+    }
+    // 工作集空了但盘上还有：不许说"没观测到任何操作"——那是把折叠说成了没做过。
+    out.note = inWork.length
+      ? evidenceNote(inWork)
+      : '这一轮的工作集里没有制品；更早的记录在下面那份 id 清单里，按 id 读回即是原样。';
+    return out;
   }
 
   async execGetGraph(args) {

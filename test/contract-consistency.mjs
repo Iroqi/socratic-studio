@@ -1266,6 +1266,56 @@ check('README 是门面：不再写排查节与细节条款（/api/ 引用少于
     'ui-trace.mjs 里出现了学情指标族的词');
 }
 
+// ────────────────────────────────────────── 第六十二轮：生命周期（工作集跟着台面走）
+/*
+ * 这一轮动的是"每回合注入多少历史"这条线，最容易坏的方式有四种：
+ *   ① prompt 又变回全量遍历 —— 折叠形同虚设，而且没有任何断言会红；
+ *   ② 折叠顺手把键删了 —— 盘上少一段事实，"可读回"成了空话；
+ *   ③ 工具那条路把刚折起来的又整本推回来 —— prompt 省下的字节从工具口全吐出去；
+ *   ④ 折叠的判据里混进"这件没用了"这种判断 —— 宿主替学习者对概念去留下结论。
+ * 四条都在这里钉住。
+ */
+{
+  const lifeSrc62 = fs.readFileSync(path.join(app, 'server', 'lifecycle.mjs'), 'utf8');
+  const promptSrc62 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+
+  check('prompt 用工作集算在场，不再自己遍历全部 artifact_state',
+    /activeStateIds\(progress, notebook\.scene\)/.test(promptSrc62) && /foldStateSnapshot\(/.test(promptSrc62),
+    'prompt.mjs 里找不到 activeStateIds / foldStateSnapshot');
+  check('prompt 不再直接拼状态快照那几行（拼装只剩一处实现）',
+    !/artState\[id\]/.test(promptSrc62) && !/保守全部历史/.test(promptSrc62),
+    (promptSrc62.match(/artState\[id\][^\n]*/) || [''])[0]);
+  check('stateBrief 的口径仍是 300 字（第六十轮之前的那条线没被顺手放宽）',
+    /MAX_BRIEF_CHARS = 300/.test(lifeSrc62));
+  check('这套东西是纯函数（不读盘、不删键、不写文件）',
+    !/from 'node:fs'|fs\.|delete\s+progress/.test(lifeSrc62), 'lifecycle.mjs 里出现了 IO 或删除');
+  check('折叠行点名要带上 id（不带 id 的折叠=把记忆丢进黑洞）',
+    /\[?\$\{?id\}?\]?/.test(lifeSrc62) && /MAX_FOLDED_NAMES/.test(lifeSrc62));
+  check('折叠自带的诚实说明在注入文本里（不是删除 / 不是去留 / 按 id 读回）',
+    lifeSrc62.includes('键和记录都还在盘上') && lifeSrc62.includes('不说明他放弃了这个概念') &&
+      lifeSrc62.includes('read_artifact_evidence'), 'lifecycle.mjs 的说明句丢了');
+  // 注释里"这件没用了"是**反面**举例（说明我们不许这么判），扫的时候只扫真代码——
+  // 拿注释当证据会把钉子钉在散文上（同 scene.mjs 那条计时器检查）。
+  const lifeCode62 = lifeSrc62
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\/.*$/gm, '');
+  check('在场=台面+本场落定+最近几件（判据只有被动事实，没有"没用了"这种判断）',
+    /props/.test(lifeCode62) && /openedAt/.test(lifeCode62) && /MIN_ACTIVE_UI/.test(lifeCode62) &&
+      !/没用了|不再需要|他放弃/.test(lifeCode62.replace(/不说明他放弃了这个概念/g, '')),
+    'lifecycle.mjs 里出现了对学习者去留的判断');
+  check('没开台也有兜底（快照一片空比折叠过头更糟）', /MIN_ACTIVE_UI = [1-9]/.test(lifeCode62));
+
+  check('不传 id 的读回只展开工作集（折叠不能从工具这条路绕回去）',
+    /activeStateIds\(this\.progress, this\.scene\)/.test(agentSrc) && /folded_note/.test(agentSrc));
+  check('工具描述说清了折叠与传 id 读回（模型不认这个形状就只会以为记录没了）',
+    agentSrc.includes('不传 artifact_id 时只展开这一轮的工作集'));
+  check('APP_ADAPTER 说清"快照只摆这一轮的工作集"', promptSrc62.includes('快照只摆这一轮的工作集'));
+  check('APP_ADAPTER 禁止把折叠读成去留（与 artifact_retired 同一把尺）',
+    promptSrc62.includes('折进去了') && promptSrc62.includes('放弃了这个概念'));
+  check('折叠那一族没有数值化学情词（Invariant 4 照旧）',
+    !/(percent|mastery|score|等级|星星)/.test(lifeSrc62), 'lifecycle.mjs 里出现了学情指标族的词');
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;

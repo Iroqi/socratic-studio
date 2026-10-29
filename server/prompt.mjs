@@ -11,6 +11,7 @@ import { topoSortConcepts } from './graph.mjs';
 import { stateWord, retestCandidates } from './store.mjs';
 import { renderSceneSnapshot } from './scene.mjs';
 import { uiTraceLines } from './ui-trace.mjs';
+import { activeStateIds, foldStateSnapshot } from './lifecycle.mjs';
 
 const RULE_FILES = [
   ['main.md', '总则：主流程 / 关键门禁 / 表现能力'],
@@ -144,6 +145,9 @@ session 长度上限按 meta.learner_profile.pace 执行（runtime.md 的 pace �
    宿主另外记一本「经过」：他在界面里**落定**的每一步（松手 / 勾选 / 点定的那一刻，从哪个值到哪个值），
    拖动中的中间帧不记。下一回合状态快照里会摆出来——那是"他怎么走到这"，比"他现在停在哪"多一层；
    两者都只是机械记录，不是学情。
+   **快照只摆这一轮的工作集**（台上道具 + 这一场动过的 + 最近几件）：更早的折成一行带 id 的说明。
+   折叠不是删除，盘上键和记录都在——要用哪一件就把 id 交给 \`read_artifact_evidence\` 读回来；
+   也不要把"折进去了"读成"他放弃了这个概念"。
 2. **\`formula\` / \`compute\` 只认参数（字段）名、数字、\`+\` \`-\` \`*\` \`/\`**（形如 \`总额 = 本金 + 本金 * 0.03 * 月数\`、\`每人 = 金额 / 人数\`、\`余额 = 本金 - 支出\`；**除数不能是 0**——除零时界面会回一句"除数不能是 0"）。
    没有括号、函数——想表达"少一个"就用 \`-\`（写 \`本金 - 支出\`，不用负常数）。宿主不跑模型写的表达式，
    这是规定，不是限制不够。参数名可以用中文（\`人数\`），中间不许有空格和 \`* + |\`；
@@ -434,19 +438,12 @@ export function renderStateSnapshot(notebook) {
     );
   }
 
-  const artState = progress?.artifact_state || {};
-  const stateIds = Object.keys(artState);
-  if (stateIds.length) {
-    lines.push('\n制品 / 项目 / 游戏的状态快照（客观事实，不是结论）：');
-    for (const id of stateIds) {
-      const s = artState[id];
-      const brief = Object.entries(s)
-        .filter(([k]) => k !== 'note' && k !== 'hint')
-        .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`)
-        .join('，');
-      lines.push(`- [${id}] ${brief.slice(0, 300)}`);
-    }
-  }
+  // 工作集跟着台面走（第六十二轮）：台上的、这一场动过的逐件摆，其余折成一行带 id 的说明。
+  // 判据全是被动事实（台面 / 本场落定的时间戳 / 最近几件），宿主不判断"这件还有没有用"——
+  // 那是对学习者的去留下结论，越界了。折叠不是删除：键还在盘上，按 id 读得回。
+  const stateIds = Object.keys(progress?.artifact_state || {});
+  const stateView = foldStateSnapshot(progress, { active: activeStateIds(progress, notebook.scene) });
+  if (stateView.lines.length) lines.push(...stateView.lines);
 
   const traceLines = uiTraceLines(progress);
   if (traceLines.length) lines.push(...traceLines);
