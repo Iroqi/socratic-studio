@@ -467,11 +467,36 @@ for (const m of readmeDoc.matchAll(/\/api\/[^\s"'，。；）】、`]+/g)) {
   check(`README 里写到的 ${ref} 在 serve.mjs 有真路由（排查照抄不 404）`,
     routeSet.has(tpl), `模板 ${tpl} 不在 serve.mjs 路由清单里`);
 }
-// 第六十轮起 README 精简为门面（50 行内、不写排查节与细节条款）：/api/ 引用若还出现，
-// 上面逐条钉路由；这条钉门面本身——README 不许膨胀回"排查节"（细节收编至 git 提交信息）。
-check('README 是门面：不再写排查节与细节条款（/api/ 引用少于 10 处、体量在门面量级）',
-  readmeApiRefs < 10 && readmeDoc.length < 8000,
-  `README ${readmeDoc.length} 字符 / ${readmeApiRefs} 处 /api/ 引用`);
+// 「HTTP 接口」一节若被删空，上面那圈就一条都不跑——空节永远是绿的。这条钉住它有内容。
+check('README 的接口表不是空的（文档确实描述了这个服务暴露什么）', readmeApiRefs >= 10,
+  `只找到 ${readmeApiRefs} 处不重复的 /api/ 引用`);
+// 第六十轮起 README 精简为门面（50 行内、不写排查节与细节条款）；第六十四轮按用户要求
+// 删掉迭代年表、改成正式技术文档——门面量级那条随之作废，换成文档自身的结构断言：
+// 章节齐全、不再夹带逐轮年表、体量在技术文档量级。/api/ 引用仍逐条钉真路由（上面那段，
+// 与新文档的「HTTP 接口」一节同一个判据：文档不许写不存在的路由）。
+const README_SECTIONS = [
+  '## 1. 运行',
+  '## 2. 目录结构',
+  '## 3. 术语',
+  '## 4. 一次回合的生命周期',
+  '## 5. 状态模型',
+  '## 6. 内联界面',
+  '## 7. 不变量',
+  '## 8. HTTP 接口',
+  '## 9. 测试',
+  '## 10. 已知边界',
+  '## 11. 改动约定',
+];
+const missingSections = README_SECTIONS.filter((h) => !readmeDoc.includes(h));
+// 年表的两种指纹：标题，以及形如 `| 63 | 2026-10-29c |` 的行。只钉指纹不钉措辞——
+// 判断（哪一轮为什么这么做）归提交信息，文档只描述当前系统。
+const chronologyRows = readmeDoc.split('\n').filter((l) => /^\|\s*\d+\s*\|\s*\d{4}-\d{2}-\d{2}/.test(l));
+check('README 是技术文档：十一个章节齐全、不再夹带迭代年表、体量在文档量级',
+  missingSections.length === 0
+    && !readmeDoc.includes('迭代年表')
+    && chronologyRows.length === 0
+    && readmeDoc.length > 4000 && readmeDoc.length < 30000,
+  `README ${readmeDoc.length} 字符 / 缺 ${missingSections.join('、') || '无'} / 年表行 ${chronologyRows.length}`);
 
 // ──────────────────────────────────────────────── 承诺的兑现位置：文档说的守卫必须在删数据那一侧
 //
