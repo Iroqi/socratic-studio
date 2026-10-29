@@ -117,6 +117,10 @@ class Node {
   }
   set innerHTML(v) {
     this._innerHTML = String(v ?? '');
+    // 与真实 DOM 对齐：整体重写 = 旧孩子全部摘下（parentNode 归空）。
+    // 第六十五轮的稳定槽位靠"旧节点还活着、只是被摘下来"把同键界面换回来；
+    // 桩若不摘 parentNode，复用与未复用两种情形在测试里分不出来。
+    for (const c of this._kids) c.parentNode = null;
     this._kids = [];
   }
   append(...nodes) {
@@ -6917,6 +6921,175 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
 
   globalThis.fetch = realFetch63;
   check('这一节无异常', errors.length === errsBefore63, errors.slice(errsBefore63).join(' | '));
+}
+
+// ─── 56. 流里的界面是同一件（第六十五轮，学 IUI 的 "native, streamable components"）
+//
+// OpenAI 的编译器边生成边画界面；本仓的编译器也会"边写边长"。但宿主那层每帧 innerHTML
+// 重画会把已经长出来的界面一起换掉——滑杆拖到一半断掉、表单打字丢焦点、展开的数据表合上。
+// 这一节钉两件事：同键槽位换回旧节点；手压在上面时这一块不重画，松手 / 离开后补终态。
+{
+  const ui65 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const md65 = await import('file:///' + path.join(webDir, 'markdown.js').replace(/\\/g, '/'));
+  const {
+    state: st65,
+    handleTurnEvent: handle65,
+    renderChatLive: render65,
+    appendChatTurn: append65,
+    proseHeld: held65,
+    flushHeldProse: flush65,
+    noteUiPointerDown: down65,
+    noteUiPointerUp: up65,
+    adoptUiSlots: adopt65,
+    currentScene: scene65,
+    NO_SCENE: NO_SCENE65,
+  } = appModule.__hooks;
+
+  const errsBefore65 = errors.length;
+  const prevTurn65 = st65.turn;
+  ui65.resetUiState();
+  ui65.setSceneParams({});
+
+  // 6a) 键：同一段围栏两次编译同一个键；内容 / 场上参数 / partial 变了才换键
+  const lines65 = ['kind: steps', 'step: 一'];
+  const keyA65 = ui65.compileUiBlock(lines65, false).key;
+  const keyB65 = ui65.compileUiBlock(lines65, false).key;
+  check('同一段围栏两次编译是同一个键（流式重画认得出"同一件"）',
+    typeof keyA65 === 'string' && keyA65 === keyB65, `${keyA65} / ${keyB65}`);
+  check('换了内容才换键', ui65.compileUiBlock(['kind: steps', 'step: 二'], false).key !== keyA65);
+  check('还在长与写完了不是一个键（占位与成品要换节点）',
+    ui65.compileUiBlock(lines65, true).key !== keyA65);
+  const calcKey65 = ['kind: calculator', 'id: kc65', 'param: 人数 | 2 | 1 | 9', 'formula: 总 = 人数 * 2', 'uses: 人数'];
+  const beforeParam65 = ui65.compileUiBlock(calcKey65, false).key;
+  ui65.setSceneParams({ 人数: 3 });
+  check('场上参数变了也换键（界面显示的数换了，是真的改版）',
+    ui65.compileUiBlock(calcKey65, false).key !== beforeParam65);
+  ui65.setSceneParams({});
+  check('降级 / 占位也带键（失败的那一段同样有身份）',
+    typeof ui65.compileUiBlock(['kind: pie'], false).key === 'string' &&
+      typeof ui65.compileUiBlock(['kind: c'], true).key === 'string');
+
+  // 6b) 渲染器：界面坐在 .ui-slot 里；同文重画键一样；重复围栏各占一槽
+  const one65 = '```ui\nkind: steps\nstep: 一\n```';
+  const htmlA65 = md65.renderMarkdown(one65);
+  const slotKey65 = /class="ui-slot" data-ui-key="([^"]+)"/.exec(htmlA65)?.[1];
+  check('编译出的界面坐在稳定槽位里（.ui-slot[data-ui-key]）',
+    Boolean(slotKey65) && htmlA65.includes('ui-steps'), htmlA65.slice(0, 160));
+  const htmlB65 = md65.renderMarkdown(one65);
+  check('同一段正文重画两次，键一样',
+    /data-ui-key="([^"]+)"/.exec(htmlB65)?.[1] === slotKey65, htmlB65.slice(0, 120));
+  const dup65 = md65.renderMarkdown(`${one65}\n\n${one65}`);
+  const dupKeys65 = [...dup65.matchAll(/data-ui-key="([^"]+)"/g)].map((m) => m[1]);
+  check('两段一模一样的围栏各占一个槽位（第二个 ~2，身份不许撞车）',
+    dupKeys65.length === 2 && dupKeys65[0] !== dupKeys65[1] && dupKeys65[1].endsWith('~2'),
+    JSON.stringify(dupKeys65));
+
+  // 6c) 槽位复用：同键换回旧节点；换键才用新的；多槽保序
+  const host65 = doc.createElement('div');
+  const oldA65 = doc.createElement('div');
+  oldA65.className = 'ui-slot';
+  oldA65.dataset.uiKey = 'k65a';
+  host65.append(oldA65);
+  adopt65(host65);
+  host65.innerHTML = '';
+  const freshA65 = doc.createElement('div');
+  freshA65.className = 'ui-slot';
+  freshA65.dataset.uiKey = 'k65a';
+  host65.append(freshA65);
+  adopt65(host65);
+  check('同键槽位重画后换回旧节点（不是新造一个）',
+    host65.children.length === 1 && host65.children[0] === oldA65, `${host65.children.length}`);
+
+  host65.innerHTML = '';
+  const freshB65 = doc.createElement('div');
+  freshB65.className = 'ui-slot';
+  freshB65.dataset.uiKey = 'k65b';
+  host65.append(freshB65);
+  adopt65(host65);
+  check('键变了才用新节点（旧键的缓存同时丢掉）',
+    host65.children.length === 1 && host65.children[0] === freshB65);
+
+  const host2_65 = doc.createElement('div');
+  const firstA65 = doc.createElement('div');
+  firstA65.className = 'ui-slot';
+  firstA65.dataset.uiKey = 'k65x';
+  const firstB65 = doc.createElement('div');
+  firstB65.className = 'ui-slot';
+  firstB65.dataset.uiKey = 'k65y';
+  host2_65.append(firstA65, firstB65);
+  adopt65(host2_65);
+  host2_65.innerHTML = '';
+  const nextA65 = doc.createElement('div');
+  nextA65.className = 'ui-slot';
+  nextA65.dataset.uiKey = 'k65x';
+  const nextB65 = doc.createElement('div');
+  nextB65.className = 'ui-slot';
+  nextB65.dataset.uiKey = 'k65y';
+  host2_65.append(nextA65, nextB65);
+  adopt65(host2_65);
+  check('两个槽位各自复用，顺序不乱',
+    host2_65.children.length === 2 &&
+      host2_65.children[0] === firstA65 && host2_65.children[1] === firstB65,
+    `${host2_65.children.length}`);
+
+  // 6d) 手在界面上：打字 / 拖拽 / 收尾都不重画；离开后按终态补上
+  const t65 = { blocks: [], flow: null, sceneId: scene65()?.id || NO_SCENE65 };
+  t65.flow = append65(t65, { role: 'assistant', __live: true, timestamp: Date.now() });
+  st65.turn = t65;
+  handle65({ type: 'text_delta', delta: '第一句。' });
+  const b65 = t65.blocks[t65.blocks.length - 1];
+  render65(t65);
+  check('正常帧照旧重画（第一句上屏）', String(b65.node.innerHTML).includes('第一句'));
+
+  const input65 = doc.createElement('input');
+  input65.type = 'text';
+  b65.node.append(input65);
+  input65.focus();
+  check('焦点在文本输入框里：这一块算"手在界面上"', held65(b65.node) === true);
+  const frozen65 = String(b65.node.innerHTML);
+  b65.text += '\n\n第二句。';
+  b65.dirty = true;
+  render65(t65);
+  check('打字时流不重画这一块（第二句先不上屏）',
+    String(b65.node.innerHTML) === frozen65 && !String(b65.node.innerHTML).includes('第二句') && b65.dirty === true,
+    String(b65.node.innerHTML).slice(-80));
+  doc.body.focus();
+  flush65();
+  check('离开输入框后补上那一刷（终态完整）',
+    String(b65.node.innerHTML).includes('第二句') && b65.dirty === false);
+
+  const input2_65 = doc.createElement('input');
+  input2_65.type = 'range';
+  b65.node.append(input2_65);
+  doc.body.focus();
+  down65(input2_65);
+  check('指针按在滑杆上：这一块算"手在界面上"', held65(b65.node) === true);
+  b65.text += ' 第三句。';
+  b65.dirty = true;
+  render65(t65);
+  check('拖拽中流不重画（滑杆不会被换掉）', !String(b65.node.innerHTML).includes('第三句'));
+  up65();
+  check('松手后补上那一刷', String(b65.node.innerHTML).includes('第三句'));
+
+  const input3_65 = doc.createElement('input');
+  input3_65.type = 'text';
+  b65.node.append(input3_65);
+  input3_65.focus();
+  b65.text += '\n\n第四句。';
+  b65.dirty = true;
+  t65.settled = true;
+  render65(t65, true);
+  check('收尾那一刷也不抢手（settled 不许把正在输入的那一块重画掉）',
+    b65.dirty === true && !String(b65.node.innerHTML).includes('第四句'));
+  doc.body.focus();
+  flush65();
+  check('离开后按终态补上（未闭合围栏这时才降级，不永远摆"正在长"）',
+    String(b65.node.innerHTML).includes('第四句') && b65.dirty === false);
+
+  st65.turn = prevTurn65;
+  ui65.resetUiState();
+  ui65.setSceneParams({});
+  check('这一节无异常', errors.length === errsBefore65, errors.slice(errsBefore65).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

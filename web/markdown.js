@@ -99,6 +99,9 @@ export function renderMarkdown(src, { partial = false, _inner = false } = {}) {
   const lines = String(src ?? '').replace(/\r\n?/g, '\n').split('\n');
   const out = [];
   let sawUiFence = false;
+  // 第六十五轮：同一段围栏在相邻两帧里可能被编两次，键要一样，宿主才认得出"这是同一件"。
+  // 一段正文里真出现两段一模一样的围栏时，第二个加 ~2——键是身份，不是内容指纹的重复计数。
+  const uiKeys = new Map();
   let i = 0;
 
   while (i < lines.length) {
@@ -134,7 +137,15 @@ export function renderMarkdown(src, { partial = false, _inner = false } = {}) {
         const growing = partial && !closed;
         // 流里刚打出「```ui」这一行还不摆占位：下一帧就有内容了，闪一下占位就是抖
         if (growing && !fenced.trim()) continue;
-        out.push(compileUiBlock(buf, growing).html);
+        const r = compileUiBlock(buf, growing);
+        // canvas 的正文走制品通道（html 为空），这里没有可摆的东西
+        if (!r.html) continue;
+        // 稳定槽位：外面这一层 .ui-slot 是宿主复用的锚点（display:contents，不参与排版）。
+        // 键不变 = 同一件界面，重画时宿主把旧节点换回来；键变了 = 真的改版。
+        const n = (uiKeys.get(r.key) || 0) + 1;
+        uiKeys.set(r.key, n);
+        const key = n === 1 ? r.key : `${r.key}~${n}`;
+        out.push(`<div class="ui-slot" data-ui-key="${escapeHtml(key)}">${r.html}</div>`);
         continue;
       }
       // 流里刚打出「```js」这一行、正文还在后面：不摆一个空代码块，下一帧闪一下

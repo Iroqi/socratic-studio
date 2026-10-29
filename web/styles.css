@@ -1391,6 +1391,11 @@ html, body {
 .ui-text p:first-child { margin-top: 0; }
 .ui-text p:last-child { margin-bottom: 0; }
 
+/* 第六十五轮：稳定槽位。这一层只为给"同一件界面"一个可复用的锚点（data-ui-key），
+   不参与排版——display:contents 让里面的标题、表格、卡片照旧坐在正文的那条流里。
+   重画时宿主用旧节点把它换回来，展开态、焦点环、卡片内滚动都不会被换掉。 */
+.ui-slot { display: contents; }
+
 /* 台面顶部的现状条（第三十九轮：右栏并入会话界面）。整条在对话之上、
    卡片之下：待确认的结构改动置顶，其余折进原生 <details>。 */
 .desk-state { padding: 10px 0 2px; margin-bottom: 6px; }

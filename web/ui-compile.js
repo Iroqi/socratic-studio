@@ -2474,6 +2474,31 @@ const QUESTION_FIELDS = new Set(['id', 'question', 'header', 'option', 'multiSel
 const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
 
 /**
+ * 稳定键（第六十五轮，学 Intelligent UI 的 "native, streamable components" 那一手）：
+ * 同一段围栏、同一份场上参数、同一种「还在长 / 已写完」，编译出来的就是**同一件界面**。
+ * 宿主拿这个键在流式重画里把旧节点换回来，界面就不会每帧变成一张新截图。
+ *
+ * 键里**不含学习者自己的操作**：他拖过的值属于这件界面的状态，不属于它的版本；
+ * 把操作算进键，等于每拖一下都宣布"这是一件新界面"，节点复用也就免谈了。
+ * 键里含场上参数：参数换了，界面显示的数就换了，那是真的改版，必须换节点。
+ * partial 也进键：占位与成品不是一个东西，收尾那一帧要换。
+ */
+function hash32(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function uiKey(lines, partial) {
+  const spec = lines.join('\n');
+  const params = JSON.stringify(getSceneParams());
+  return `ui-${hash32(spec)}-${hash32(params)}-${partial ? 'p' : 'f'}`;
+}
+
+/**
  * 编译器入口。partial = 这一段还在流里长（围栏未闭合）。
  *
  * **partial 时一律不说"编不出来"**，只摆占位。这不是宽容，是流式那一路的必然：
@@ -2482,7 +2507,6 @@ const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: comp
  * 只有闭合了（或回合收尾了）才有权判定"这一段写坏了"——那是唯一的、也是最后的机会。
  */
 export function compileUiBlock(lines, partial) {
-  const fail = (why) => (partial ? { html: skeleton('正在把这个界面长出来…'), pending: true } : { html: degrade(why, lines), degraded: why });
   // 首行裸档名（第五十九轮）：词表按「id: / question: 字段」教，模型很自然把首行写成
   // 裸档名（question / calculator / …）而不是 kind: 前缀。编译器两种写法都认——
   // 裸档名归一成 kind: 行再走下面的特例与 parseFence。
@@ -2491,13 +2515,16 @@ export function compileUiBlock(lines, partial) {
     const at = lines.indexOf(lines.find((l) => l.trim()));
     lines = [...lines.slice(0, at), `kind: ${lead.toLowerCase()}`, ...lines.slice(at + 1)];
   }
+  // 键在归一之后算：`calculator` 与 `kind: calculator` 是同一件界面，不该得到两个键。
+  const key = uiKey(lines, partial);
+  const fail = (why) => (partial ? { html: skeleton('正在把这个界面长出来…'), pending: true, key } : { html: degrade(why, lines), degraded: why, key });
   // canvas 的 html 是多行正文，不能走 parseFence 的「字段: 值」通用拆（html 行会被当字段
   // 判坏，长行还会先撞「单行过长」）——首行声明 kind: canvas 就先按原文行整段编译。
   const firstMeaningful = lines.find((l) => l.trim());
   if (firstMeaningful && /^kind\s*:\s*canvas\s*$/i.test(firstMeaningful.trim())) {
     const r = compileCanvas(lines);
     if (r.error) return fail(r.error);
-    return { html: r.html, shape: r.shape, canvas: r.canvas };
+    return { html: r.html, shape: r.shape, canvas: r.canvas, key };
   }
   const parsed = parseFence(lines);
   if (parsed.error) return fail(parsed.error);
@@ -2525,7 +2552,7 @@ export function compileUiBlock(lines, partial) {
     // 而不是整块摆"正在长"的占位——这正是 IUI 编译器"界面随生成渐进出现"的那一路。
     const r = COMPILERS[kind](parsed.fields, lines, partial);
     if (r.error) return fail(r.error);
-    return { html: r.html, shape: r.shape, pending: r.pending || undefined };
+    return { html: r.html, shape: r.shape, pending: r.pending || undefined, key };
   } catch {
     return fail('编译时没兜住，原文照旧');
   }

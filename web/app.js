@@ -1831,7 +1831,124 @@ function moveToSceneBeat(turn) {
  * "切一刀"就没有存在理由了（形态 3 台面化的第一块地基就是这个）。
  * 脏是逐块记的，不是"只刷最后一块"：一帧里连着来"讲两句 + 落一张卡"时，
  * 最后那块是卡，只刷最后一块就等于那两句一个字都不上屏。
+ *
+ * 第六十五轮（学 Intelligent UI 的 "native, streamable components"）：
+ * **流式重画不等于每帧推倒重来。** 这一段正文里已经长出来的界面有两层保护——
+ *   ① 稳定槽位：编译出的每段围栏包在 .ui-slot[data-ui-key] 里，键由「围栏内容 + 场上参数 +
+ *      是否还在长」决定；重画后 adoptUiSlots 用旧节点换回同键的新节点。同一件界面在相邻
+ *      两帧里是同一个 DOM 对象：展开的数据表不合上、卡片里的滚动位置不跳、状态续得上。
+ *   ② 手压着就不刷：指针按在这一块里，或焦点落在输入框 / 数字框 / 滑杆 / 文本域上时，
+ *      这一块先不重画（dirty 留着）。老师的话可以等，学生正在打的那个字不能等。
+ * 按钮、勾选、展开器不拦：它们的落定已经写进状态，重画后按 id 续得回来；拦的只有
+ * "重画会打断正在进行的那一下"的那几类。收尾那一刷也不例外——settled 记在回合上，
+ * 等手离开再按终态画，未闭合的围栏那时才降级，不会永远摆着"正在长"。
  */
+
+/** 节点是否在 root 里面。桩与浏览器都只有 parentNode 这一条可靠的路。 */
+function within(node, root) {
+  for (let n = node; n; n = n.parentNode) {
+    if (n === root) return true;
+  }
+  return false;
+}
+
+/** 重画会打断"正在进行的那一下"的焦点类型：文本输入、数字、滑杆、文本域、可编辑区。
+ *  勾选 / 按钮 / 展开器不在内——它们落定即完事，重画只丢焦点环，不丢正在进行的输入。 */
+function isTypingFocus(el) {
+  if (!el) return false;
+  if (el.isContentEditable) return true;
+  const tag = String(el.tagName || '').toUpperCase();
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (tag !== 'INPUT') return false;
+  const type = String(el.type || 'text').toLowerCase();
+  return !['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'color'].includes(type);
+}
+
+function proseHeld(node) {
+  if (!node) return false;
+  if (node.__uiPointerHold) return true;
+  const ae = document.activeElement;
+  return Boolean(ae && ae !== node && within(ae, node) && isTypingFocus(ae));
+}
+
+/** 节点 -> { block, turn }：被手按住的块，等松手 / 离开后补那一刷。 */
+const heldProse = new Map();
+
+/**
+ * 重画之后把同键的旧节点换回来。缓存挂在正文节点上（换一场、换一本，节点没了缓存也就没了）；
+ * 只认这一帧还出现的键——没了就丢，不攒过期节点。
+ */
+function adoptUiSlots(node) {
+  const slots = node?.querySelectorAll ? [...node.querySelectorAll('.ui-slot')] : [];
+  if (!slots.length) return;
+  const cache = node.__uiSlots || (node.__uiSlots = new Map());
+  const seen = new Set();
+  for (const fresh of slots) {
+    const key = fresh?.dataset?.uiKey;
+    if (!key) continue;
+    seen.add(key);
+    const old = cache.get(key);
+    if (old && old !== fresh) {
+      const parent = fresh.parentNode;
+      if (parent?.insertBefore) {
+        parent.insertBefore(old, fresh);
+        fresh.remove?.();
+        cache.set(key, old);
+        continue;
+      }
+    }
+    cache.set(key, fresh);
+  }
+  for (const key of [...cache.keys()]) {
+    if (!seen.has(key)) cache.delete(key);
+  }
+}
+
+/** 刷一个文字块；顺手把槽位换回旧节点。 */
+function paintProseBlock(block, turn) {
+  if (!block?.node || block.text === undefined) return;
+  block.dirty = false;
+  // partial：这一回合还在长。未闭合的 ```ui 在流里是"还没写完"，不是"写坏了"，
+  // 渲染器据此摆占位而不是降级说明；settled 之后那一刷才允许说"这一段没编出来"。
+  block.node.innerHTML = renderMarkdown(block.text, { partial: !turn?.settled });
+  adoptUiSlots(block.node);
+  heldProse.delete(block.node);
+}
+
+/** 松手 / 焦点离开后补上欠着的那一刷。 */
+function flushHeldProse() {
+  if (!heldProse.size) return;
+  let paintedHere = false;
+  for (const [node, rec] of [...heldProse]) {
+    if (proseHeld(node)) continue;
+    paintProseBlock(rec.block, rec.turn);
+    if (rec.turn === state.turn) paintedHere = true;
+  }
+  if (paintedHere) scrollToBottom();
+}
+
+let pointerHeld = null;
+
+/** 指针按进正文的哪一块（第六十五轮）。抽成具名函数是为了测试能直接驱动。 */
+function noteUiPointerDown(target) {
+  let node = target;
+  while (node && !(node.classList?.contains('prose'))) node = node.parentNode;
+  if (!node) return;
+  const t = state.turn;
+  if (!t || !(t.blocks || []).some((b) => b.node === node)) return;
+  if (pointerHeld && pointerHeld !== node) pointerHeld.__uiPointerHold = false;
+  pointerHeld = node;
+  node.__uiPointerHold = true;
+}
+
+/** 松手：把指针那一份按住放掉，欠着的块这时才补刷。 */
+function noteUiPointerUp() {
+  if (!pointerHeld) return;
+  pointerHeld.__uiPointerHold = false;
+  pointerHeld = null;
+  flushHeldProse();
+}
+
 function renderChatLive(turn, force = false) {
   for (const b of turn?.blocks || []) {
     if (b.text === undefined || !b.node) continue;
@@ -1839,10 +1956,13 @@ function renderChatLive(turn, force = false) {
     // dirty 早被清掉——只看 dirty 就等于把 settled 那次判定吞掉，未闭合的 ```ui
     // 会永远摆着"正在把这个界面长出来…"，而它其实再也不会长了。
     if (!force && !b.dirty) continue;
-    b.dirty = false;
-    // partial：这一回合还在长。未闭合的 ```ui 在流里是"还没写完"，不是"写坏了"，
-    // 渲染器据此摆占位而不是降级说明；settled 之后那一刷才允许说"这一段没编出来"。
-    b.node.innerHTML = renderMarkdown(b.text, { partial: !turn.settled });
+    if (proseHeld(b.node)) {
+      // 手在界面上：先不刷。dirty 留着，松手 / 离开后由 flushHeldProse 按当时的终态补。
+      b.dirty = true;
+      heldProse.set(b.node, { block: b, turn });
+      continue;
+    }
+    paintProseBlock(b, turn);
   }
 }
 
@@ -2913,7 +3033,8 @@ function forwardArtifactMessage(payload, artifactId) {
 // ─────────────────────────────────────────────── 内联界面（```ui 档）的交互与回报
 //
 // 这一档的控件住在会话正文里，不在 iframe 沙箱里，所以它有两条 iframe 那条路没有的麻烦：
-// ① 正文每帧会被 innerHTML 重画，状态不能住在 DOM 上（住在 ui-compile.js 那份 Map 里）；
+// ① 正文在流里会被重画，状态不能住在 DOM 上（住在 ui-compile.js 那份 Map 里）；
+//    第六十五轮起，重画后同键的界面节点会被换回来——状态在 Map 里，身份在节点上，两边都在；
 // ② 控件是字符串拼出来的，挂不上 onclick——只能靠台面节点上的委托监听接住。
 //
 // 回报走的是**已有**那条 artifact-message 通道，不新开一条：内联控件和沙箱制品是同一族
@@ -5354,6 +5475,13 @@ function bindEvents() {
     toggleRail.onclick = () => document.querySelector('.layout').classList.toggle('rail-open');
   }
   document.addEventListener('keydown', handleGlobalKeydown);
+  // 第六十五轮：手在界面上时，流让路。指针按下 / 松开只管拖拽与选择；焦点那条走 focusout，
+  // 且要晚一拍读 activeElement——focusout 触发时焦点还没落定，当场读会把"移到隔壁格子"
+  // 误判成"离开了界面"，白白重画一次。两条都只记事实，渲染与否由 renderChatLive 判。
+  document.addEventListener('pointerdown', (e) => noteUiPointerDown(e.target), true);
+  document.addEventListener('pointerup', () => noteUiPointerUp(), true);
+  document.addEventListener('pointercancel', () => noteUiPointerUp(), true);
+  document.addEventListener('focusout', () => setTimeout(flushHeldProse, 0), true);
 }
 
 /**
@@ -5504,6 +5632,12 @@ export const __hooks = {
   sceneBlockEl,
   sceneIdsForMessages,
   renderChatLive,
+  // 第六十五轮：流里的界面（稳定槽位 / 手压着就不刷）
+  adoptUiSlots,
+  proseHeld,
+  flushHeldProse,
+  noteUiPointerDown,
+  noteUiPointerUp,
   resetDesk,
   updateDeskChrome,
   // 跨本搜索：左栏搜索入口（第十三轮）

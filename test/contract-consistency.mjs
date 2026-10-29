@@ -1426,6 +1426,94 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
     promptSrc63.includes('ui_param_missing'));
 }
 
+// ────────────────────────────────────────── 第六十五轮：流里的界面是同一件（稳定槽位 + 手压着不刷）
+/*
+ * 这一轮最容易坏的方式（每一条都会让"界面没被重画"退化成"界面每帧都是一张新截图"）：
+ *   ① 键里混进学习者的操作 / 帧号 / 时间 —— 每帧都是新界面，槽位等于没做；
+ *   ② 键算在裸档名归一之前 —— `calculator` 与 `kind: calculator` 成了两件；
+ *   ③ 只有成功分支带 key —— 降级 / 骨架 / 画布一出场就掉槽位；
+ *   ④ 同键并排渲染、不加 ~n —— 一段正文里两段相同围栏，第二件被第一件顶掉；
+ *   ⑤ force（收尾那一刷）绕开按住判断 —— 拖到一半的滑杆被拉回；
+ *   ⑥ 松手 / 失焦不补刷 —— 界面停在半路，永远等不到终态；
+ *   ⑦ .ui-slot 变成布局盒 —— 稳定是稳了，排版也变了；
+ *   ⑧ 有键但重画后不 adopt —— 旧节点还是被扔掉，状态照样丢。
+ * 八条都在这里钉住。
+ */
+{
+  const uiSrc65 = fs.readFileSync(path.join(app, 'web', 'ui-compile.js'), 'utf8');
+  const mdSrc65 = fs.readFileSync(path.join(app, 'web', 'markdown.js'), 'utf8');
+  const hostSrc65 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+  const cssSrc65 = fs.readFileSync(path.join(app, 'web', 'styles.css'), 'utf8');
+  const keyFn65 = uiSrc65.slice(uiSrc65.indexOf('function uiKey'), uiSrc65.indexOf('function uiKey') + 500);
+
+  check('① 键只由「围栏内容 + 场上参数 + 在长/写完」算出来',
+    /lines\.join\('\\n'\)/.test(keyFn65) &&
+      /JSON\.stringify\(getSceneParams\(\)\)/.test(keyFn65) &&
+      /\? 'p' : 'f'/.test(keyFn65),
+    'uiKey 里少了三样中的一样');
+  check('① 键里没有学习者的值 / 帧号 / 时间（同一件界面不因他拖一下而换身份）',
+    !/stored|artifact_state|frame|Date\.now|Math\.random|performance\.now/.test(keyFn65),
+    keyFn65);
+  check('② 键算在裸档名归一之后（两种写法是同一件界面）',
+    uiSrc65.indexOf('const key = uiKey(lines, partial);') > uiSrc65.indexOf('`kind: ${lead.toLowerCase()}`'),
+    'uiKey 在归一之前就算好了');
+  check('哈希是纯函数（同一段文本永远同一个键）',
+    /function hash32\(text\)/.test(uiSrc65) && /Math\.imul\(h, 0x01000193\)/.test(uiSrc65) &&
+      !/Date\.now|Math\.random/.test(uiSrc65.slice(uiSrc65.indexOf('function hash32'), uiSrc65.indexOf('function uiKey'))));
+  check('③ 降级 / 骨架 / 画布 / 成功四条出口都带 key',
+    /const fail = \(why\) => \(partial \? \{ html: skeleton\('正在把这个界面长出来…'\), pending: true, key \}/.test(uiSrc65) &&
+      /degraded: why, key \}\)/.test(uiSrc65) &&
+      /canvas: r\.canvas, key \}/.test(uiSrc65) &&
+      /pending: r\.pending \|\| undefined, key \}/.test(uiSrc65),
+    '有一条出口掉出了槽位');
+  check('④ 每段正文一个计数表，重复围栏加 ~n（键是身份，不是内容指纹的重复计数）',
+    /const uiKeys = new Map\(\)/.test(mdSrc65) &&
+      /const n = \(uiKeys\.get\(r\.key\) \|\| 0\) \+ 1/.test(mdSrc65) &&
+      /n === 1 \? r\.key : `\$\{r\.key\}~\$\{n\}`/.test(mdSrc65),
+    '重复围栏会撞成一个键');
+  check('④ 槽位 HTML 带 class 与 data-ui-key（宿主与样式都认这个锚点）',
+    /<div class="ui-slot" data-ui-key="\$\{escapeHtml\(key\)\}">/.test(mdSrc65));
+  check('⑧ 重画后按同键换回旧节点（不是并排、不是重建）',
+    /function adoptUiSlots\(node\)/.test(hostSrc65) &&
+      /parent\.insertBefore\(old, fresh\)/.test(hostSrc65) &&
+      /fresh\.remove\?\.\(\)/.test(hostSrc65),
+    'adoptUiSlots 没有把旧节点换回去');
+  check('⑧ 缓存挂在正文节点上，且只留这一帧还出现的键（不攒过期节点）',
+    /node\.__uiSlots \|\| \(node\.__uiSlots = new Map\(\)\)/.test(hostSrc65) &&
+      /if \(!seen\.has\(key\)\) cache\.delete\(key\)/.test(hostSrc65));
+  check('⑧ paint 的顺序是「写 innerHTML → 换回旧节点 → 清 hold」',
+    /block\.node\.innerHTML = renderMarkdown\(block\.text, \{ partial: !turn\?\.settled \}\);\s*adoptUiSlots\(block\.node\);/.test(hostSrc65) &&
+      /function paintProseBlock[\s\S]{0,400}heldProse\.delete\(block\.node\)/.test(hostSrc65));
+  check('⑤ force 也先过 proseHeld（收尾那一刷不能抢走正在拖的那一下）',
+    /function renderChatLive\(turn, force = false\)[\s\S]{0,700}if \(proseHeld\(b\.node\)\) \{[\s\S]{0,240}b\.dirty = true;[\s\S]{0,160}heldProse\.set\(b\.node, \{ block: b, turn \}\);[\s\S]{0,80}continue;/.test(hostSrc65),
+    'renderChatLive 的按住判断不在重画之前，或没把 dirty 留到补刷');
+  check('⑤ 流式路径只有 paintProseBlock 一处写正文（没有第二条绕开槽位的路）',
+    (hostSrc65.match(/(?:block|b)\.node\.innerHTML/g) || []).length === 1,
+    `app.js 里正文 innerHTML 赋值出现了 ${(hostSrc65.match(/(?:block|b)\.node\.innerHTML/g) || []).length} 次`);
+  check('⑤ 按住的两种情形：指针压着 / 焦点在会打断输入的控件里',
+    /node\.__uiPointerHold/.test(hostSrc65) &&
+      /document\.activeElement/.test(hostSrc65) &&
+      /within\(ae, node\) && isTypingFocus\(ae\)/.test(hostSrc65));
+  check('⑤ 勾选 / 单选不拦重画（落定即完事）；文本、数字、滑杆、文本域才拦',
+    /'TEXTAREA' \|\| tag === 'SELECT'/.test(hostSrc65) &&
+      /el\.isContentEditable/.test(hostSrc65) &&
+      /'checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'color'/.test(hostSrc65));
+  check('⑥ 松手 / 失焦补刷，且补刷前再查一次（焦点可能又落回去了）',
+    /function flushHeldProse\(\)[\s\S]{0,500}if \(proseHeld\(node\)\) continue;/.test(hostSrc65) &&
+      /function noteUiPointerUp\(\)[\s\S]{0,200}flushHeldProse\(\);/.test(hostSrc65));
+  check('⑥ 事件线四条都挂上，且都是捕获阶段（界面内部的 stopPropagation 挡不住）',
+    /addEventListener\('pointerdown', \(e\) => noteUiPointerDown\(e\.target\), true\)/.test(hostSrc65) &&
+      /addEventListener\('pointerup', \(\) => noteUiPointerUp\(\), true\)/.test(hostSrc65) &&
+      /addEventListener\('pointercancel', \(\) => noteUiPointerUp\(\), true\)/.test(hostSrc65) &&
+      /addEventListener\('focusout', \(\) => setTimeout\(flushHeldProse, 0\), true\)/.test(hostSrc65));
+  check('⑦ 槽位只当锚点，不参与排版（display: contents）',
+    /\.ui-slot\s*\{\s*display:\s*contents;\s*\}/.test(cssSrc65));
+  check('宿主把这些能力露给测试（不用读私有闭包也能驱动）',
+    /adoptUiSlots,/.test(hostSrc65) && /proseHeld,/.test(hostSrc65) &&
+      /flushHeldProse,/.test(hostSrc65) && /noteUiPointerDown,/.test(hostSrc65) &&
+      /noteUiPointerUp,/.test(hostSrc65));
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;
