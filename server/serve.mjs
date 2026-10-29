@@ -33,6 +33,7 @@ import { runTurn } from './agent.mjs';
 import { buildSystemPrompt } from './prompt.mjs';
 import { validateGraph, describeGraphForLearner, GraphValidationError } from './graph.mjs';
 import { placeProp, removeProp } from './scene.mjs';
+import { appendUiTrace } from './ui-trace.mjs';
 import { updateNote, deleteNote } from './notes.mjs';
 import { loadRulesText } from './prompt.mjs';
 import { TaskRunner } from './tasks.mjs';
@@ -1543,6 +1544,12 @@ function mergeArtifactMessage(progress, payload) {
         ...state,
       };
       changed = true;
+    }
+    // 第六十一轮：落定的那一步并进「经过」。快照回答"他现在停在哪"，
+    // 经过回答"他是怎么走到这的"——两个都要有，且分开存（一个会被覆盖，一个只追加）。
+    // 只在客户端明确交了 trace 时才记：拖动中的每一帧只更新快照，不进经过。
+    if (Array.isArray(payload.trace) && payload.trace.length) {
+      if (appendUiTrace(progress, artifactId, payload.trace, { at: payload.at, kind: state?.uiKind })) changed = true;
     }
   } else if (payload.type === 'event') {
     const name = String(payload.name || ev.name || 'event').slice(0, 80);

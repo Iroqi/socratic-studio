@@ -1515,6 +1515,54 @@ try {
       put(cred27, credBak);
     }
   }
+
+  /*
+   * ── 28. 界面的经过：落定的那几步真的落在盘上（第六十一轮，真服务）
+   *
+   * 快照（artifact_state）每帧被覆盖；经过（ui_trace）只追加。两条都从同一条
+   * artifact-message 进来，靠客户端带的 trace 分开——这条测试守的就是"分开"：
+   * 拖动帧只动快照、落定才动经过、整页制品不许混进来。
+   */
+  {
+    const nb28 = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '滑块怎么走' }) })).data.notebook.id;
+    const post28 = (body) => jfetch(`${BASE}/api/notebooks/${nb28}/artifact-message`, {
+      method: 'POST', headers: H, body: JSON.stringify(body),
+    });
+    const read28 = async () => (await jfetch(`${BASE}/api/notebooks/${nb28}`)).data.notebook.progress;
+    const state28 = (人数, trace) => ({
+      type: 'state', artifactId: 'ui:feast', state: { uiKind: 'calculator', 人数 },
+      ...(trace ? { trace } : {}),
+    });
+
+    await post28(state28(9));
+    await post28(state28(29));
+    let p28 = await read28();
+    check('拖动中的帧只更新快照、不进经过（快照=现在停在哪，经过=怎么走到这）',
+      p28.artifact_state['ui:feast'].人数 === 29 && !p28.ui_trace?.entries?.['ui:feast'],
+      JSON.stringify(p28.ui_trace));
+
+    await post28(state28(30, [{ k: '人数', from: 8, to: 30 }]));
+    p28 = await read28();
+    const entry28 = p28.ui_trace?.entries?.['ui:feast'];
+    check('松手那一步落盘（刷新/重启都还读得到）',
+      entry28?.steps?.length === 1 && entry28.steps[0].d[0].from === 8 && entry28.steps[0].d[0].to === 30,
+      JSON.stringify(entry28));
+    check('档名跟着记下来（prompt 里要说得出这是哪一档）', entry28?.kind === 'calculator', JSON.stringify(entry28));
+
+    await post28(state28(30, [{ k: '人数', from: 30, to: 30 }]));
+    p28 = await read28();
+    check('没变化的步不收（点了同一个值不是一步）',
+      p28.ui_trace.entries['ui:feast'].steps.length === 1, JSON.stringify(p28.ui_trace));
+
+    await post28({
+      type: 'state', artifactId: 'art-page', state: { level: 2 }, trace: [{ k: 'level', from: 1, to: 2 }],
+    });
+    p28 = await read28();
+    check('整页制品的 trace 不混进这本经过（ui: 前缀是唯一的门）',
+      !p28.ui_trace.entries['art-page'] && Object.keys(p28.ui_trace.entries).length === 1,
+      JSON.stringify(Object.keys(p28.ui_trace.entries)));
+    fs.rmSync(path.join(dataDir, 'notebooks', nb28), { recursive: true, force: true });
+  }
 } finally {
   server.kill();
   await sleep(400);

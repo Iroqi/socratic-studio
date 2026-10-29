@@ -10,6 +10,7 @@ import { RULES_DIR, MAX_DIALOGUE_MESSAGES, MAX_KEPT_LEARNER_MESSAGES } from './c
 import { topoSortConcepts } from './graph.mjs';
 import { stateWord, retestCandidates } from './store.mjs';
 import { renderSceneSnapshot } from './scene.mjs';
+import { uiTraceLines } from './ui-trace.mjs';
 
 const RULE_FILES = [
   ['main.md', '总则：主流程 / 关键门禁 / 表现能力'],
@@ -62,7 +63,7 @@ export const APP_ADAPTER = `
 | 生成 Learning Graph（DECOMPOSE 后） | \`update_learning_graph\`。保存前会走 protocols.md 的严格校验，校验不过会把具体问题回给你，请修正后重试。 |
 | Progress State 持久化 | 应用自动落盘（progress.json）。\`set_progress_state\` 是**你**推进状态的唯一入口（应用自己只写 §1.2 那条无条件的 Unknown→Seen，其余每一级都归你）。转换规则（runtime.md §1.2）由应用强制执行：一次只升一级；升级必须带 observed 证据；自报未验证的 concept 单次概念错误即降一级。被拒绝的转移会告诉你原因，按规则重来。 |
 | 内联可视化 / 交互物件 / 实战项目 / 游戏 | \`share_artifact\`。HTML 由你依据内容本身从零撰写，内联渲染在当前这一轮；**每一件都落盘，有稳定地址、能续玩、也能被学习者扔掉**（道具是有寿命的东西，不是一段贴完就没的正文）。**制品只给现象，不解释原因、不判对错、不藏答案键**（Invariant 4 第 ③ 条）。交互运行时由应用自动注入，**不要自己写 script 标签引用它**。两条回报通道：① 答卷型用 \`data-interaction\` / \`data-choice-id\` / \`data-concept-id\` / \`data-question-id\` 标注；② 项目/游戏/模拟器在脚本里调 \`window.SocraticStudio.report(state)\` 与 \`.emit(name, payload)\`。跨轮续玩带 \`initial_state\`。canvas / WebGL / 任意 JS 都能跑（沙箱里不引 CDN、不 fetch 外部文件；他真去取外部文件时宿主会回一条 \`csp_blocked\` 事件，读回来就能说清那条路走不通）。 |
-| **读回学习者在制品里做了什么** | \`read_artifact_evidence\`。**这是页面型制品唯一的证据通道。** 它返回三类内容：① 答卷型交互的 evidence（作答次数/结果/作答内容）；② 项目或游戏的 state 快照（关卡、尝试次数、当前参数这类客观事实）；③ 离散 events（level_cleared / bug_found 等）。没有它就不能说学习者"在制品里试过了"——那属于凭感觉，违反 Invariant 4。**没有记录也不等于他没做**，别拿缺记录当判定依据。 |
+| **读回学习者在制品里做了什么** | \`read_artifact_evidence\`。**这是页面型制品唯一的证据通道。** 它返回四类内容：① 答卷型交互的 evidence（作答次数/结果/作答内容）；② 项目或游戏的 state 快照（关卡、尝试次数、当前参数这类客观事实）；③ 离散 events（level_cleared / bug_found 等）；④ 内联界面的 trace（他落定的那几步，拖动中的中间帧不记）。没有它就不能说学习者"在制品里试过了"——那属于凭感觉，违反 Invariant 4。**没有记录也不等于他没做**，别拿缺记录当判定依据。 |
 | **反过来：让制品当场改变** | \`push_artifact_command\`。给还开着的制品下发指令——切换关卡、注入一个 bug、改参数。制品用 \`window.SocraticStudio.onCommand((name, payload) => …)\` 订阅。学习者关掉页面后指令作废，那时退回对话讲。 |
 | 读回当前 Graph 与学习状态 | \`get_learning_graph\`。续学、写讲解或制品、判断下一步之前先读。 |
 | PATCH 写入 feedback | \`propose_graph_patch\`。high 置信度由应用直接合并；medium/low 落成待确认记录，你需要把它译写成自然语言问学习者。 |
@@ -138,6 +139,11 @@ session 长度上限按 meta.learner_profile.pace 执行（runtime.md 的 pace �
 
 1. **\`checklist\`、\`form\`、\`calculator\`、\`diagram\`、\`explore\`、\`game\`、\`walkthrough\`、\`map\` 与带 \`slider\` 的 \`chart\` 必须写 \`id\`**（同一本里别撞车，用 \`idslug\` 这类短英文）。
    学习者的勾选、滑到的值、点过哪个节点、**填进表单的值**、**点开看过哪一面**、**试过哪个选择**、**走到哪一步**、**滑到哪张快照**与**点开看过哪个点**由宿主按 id 存着，重画、刷新、下一回合都续得回来；没有 id 就编不出来。
+   **同一个 id 就是同一件界面**：下一轮要改它（换参数、加一条、改公式）就沿用同一个 id 重写围栏——
+   他的勾选 / 参数 / 填过的值会原样续进去；改了 id 就是新的一件，等于让他白填一遍。
+   宿主另外记一本「经过」：他在界面里**落定**的每一步（松手 / 勾选 / 点定的那一刻，从哪个值到哪个值），
+   拖动中的中间帧不记。下一回合状态快照里会摆出来——那是"他怎么走到这"，比"他现在停在哪"多一层；
+   两者都只是机械记录，不是学情。
 2. **\`formula\` / \`compute\` 只认参数（字段）名、数字、\`+\` \`-\` \`*\` \`/\`**（形如 \`总额 = 本金 + 本金 * 0.03 * 月数\`、\`每人 = 金额 / 人数\`、\`余额 = 本金 - 支出\`；**除数不能是 0**——除零时界面会回一句"除数不能是 0"）。
    没有括号、函数——想表达"少一个"就用 \`-\`（写 \`本金 - 支出\`，不用负常数）。宿主不跑模型写的表达式，
    这是规定，不是限制不够。参数名可以用中文（\`人数\`），中间不许有空格和 \`* + |\`；
@@ -442,6 +448,9 @@ export function renderStateSnapshot(notebook) {
     }
   }
 
+  const traceLines = uiTraceLines(progress);
+  if (traceLines.length) lines.push(...traceLines);
+
   const artEvents = progress?.artifact_events || [];
   if (artEvents.length) {
     lines.push('\n制品里发生过的离散事件（只追加的事实流水）：');
@@ -458,7 +467,7 @@ export function renderStateSnapshot(notebook) {
     }
   }
 
-  if (!evidence.length && !stateIds.length && !artEvents.length) {
+  if (!evidence.length && !stateIds.length && !artEvents.length && !traceLines.length) {
     lines.push(
       '\n制品回报：本轮没有记录。没有记录不等于学习者没做，只是没读到可记录的内容——' +
         '需要证据时让他在制品里操作，再调 read_artifact_evidence 读回。',

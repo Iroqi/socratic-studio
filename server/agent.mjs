@@ -21,6 +21,7 @@ import {
   removeProp,
 } from './scene.mjs';
 import { injectArtifactRuntime, injectArtifactCsp, ARTIFACT_CONTRACT_NOTE } from './artifact.mjs';
+import { sanitiseTrace, MAX_TRACE_STEPS } from './ui-trace.mjs';
 import { compileUiBlock } from '../web/ui-compile.js';
 
 /**
@@ -340,7 +341,7 @@ export function buildTools() {
     {
       name: TOOL_NAMES.READ_ARTIFACT,
       description:
-        '读回学习者在制品里做了什么。**这是页面型制品唯一的证据通道**——没有它就不能说学习者"在制品里试过了"。返回三类内容：① 答卷型交互的 evidence（作答次数/结果/作答内容/完成状态）；② 项目或游戏的 state 快照（关卡、尝试次数、当前参数这类客观事实）；③ 离散 events（level_cleared / bug_found 等）。这些只是机械记录不是结论：题目是否属于当前 concept、有没有过期重复、算不算概念错误、下一步怎么走，都由你判断。**反过来也成立——没有记录不等于学习者没做。**',
+        '读回学习者在制品里做了什么。**这是页面型制品唯一的证据通道**——没有它就不能说学习者"在制品里试过了"。返回四类内容：① 答卷型交互的 evidence（作答次数/结果/作答内容/完成状态）；② 项目或游戏的 state 快照（关卡、尝试次数、当前参数这类客观事实）；③ 离散 events（level_cleared / bug_found 等）；④ 内联界面的 trace（他落定的那几步：从哪个值到哪个值，拖动中的中间帧不记——那是"怎么走到这"，不是学情）。这些只是机械记录不是结论：题目是否属于当前 concept、有没有过期重复、算不算概念错误、下一步怎么走，都由你判断。**反过来也成立——没有记录不等于学习者没做。**',
       parameters: Type.Object({
         artifact_id: Type.Optional(
           Type.String({ description: '只看某一份制品；省略则返回这一轮所有制品的回报' }),
@@ -991,6 +992,9 @@ export class TeachingSession {
         evidence: [],
         state: {},
         events: [],
+        // 第六十一轮：本轮内联界面的「经过」（落定的那几步）。与盘上 progress.ui_trace
+        // 同一套记录口径：只追加、有上限、只记变了什么。本回合内 read_artifact_evidence 读得到。
+        trace: [],
         createdAt: new Date().toISOString(),
       };
     this.liveArtifacts.set(artifactId, bucket);
@@ -998,6 +1002,11 @@ export class TeachingSession {
     if (type === 'state') {
       const state = payload.state || ev.state || {};
       if (state && typeof state === 'object') bucket.state = { ...bucket.state, ...state };
+      const step = sanitiseTrace(payload.trace);
+      if (step.length) {
+        bucket.trace.push({ at: payload.at || new Date().toISOString(), d: step });
+        while (bucket.trace.length > MAX_TRACE_STEPS) bucket.trace.shift();
+      }
       this.emit({ type: 'artifact_state', artifactId, state: bucket.state });
       return true;
     }
@@ -1066,6 +1075,7 @@ export class TeachingSession {
         evidence: a.evidence,
         state: a.state,
         events: a.events,
+        trace: a.trace || [],
         observed_count: a.evidence.length + a.events.length,
       })),
       note: evidenceNote(items),

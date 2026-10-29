@@ -1101,6 +1101,108 @@ const snapshotNoRetire = renderStateSnapshot({
 check('没撤过时不许摆那句解释（没说错对象的提示比不提示更糟）',
   !snapshotNoRetire.includes('别拿去劝'), '常驻说明也是噪声');
 
+// ─────────────────────────────────────── 7b-2. 界面的经过（第六十一轮）
+//
+// 快照回答"他现在停在哪"，经过回答"他是怎么走到这的"。这一族的红线：
+// 只记落定那一步（中间帧不是选择）、只追加、有上限且折叠要如实说、永不产生分数。
+
+section('7b-2. 界面的经过：落定的那几步（滑块中间帧不算一步）');
+const {
+  appendUiTrace,
+  sanitiseTrace,
+  stepText,
+  uiTraceLines,
+  MAX_TRACE_STEPS,
+  MAX_TRACE_IDS,
+} = await import('../server/ui-trace.mjs');
+
+// 一步都没有变化 = 没有这一步（点了同一个选项、拖回原值都不算）
+check('从 8 拖到 8 不是一步（没变化不许记）',
+  sanitiseTrace([{ k: '人数', from: 8, to: 8 }]).length === 0);
+check('uiKind 不许当字段记（它是档名，不是他动过的东西）',
+  sanitiseTrace([{ k: 'uiKind', from: 'chart', to: 'chart' }]).length === 0);
+check('坏项丢掉、好项留下（一步里坏一个字段不连坐其余字段）',
+  sanitiseTrace([{ k: '', from: 1, to: 2 }, { k: '人数', from: 1, to: 2 }, 'x']).length === 1);
+check('一件界面一步人话：人数 8 → 12',
+  stepText({ k: '人数', from: 8, to: 12 }) === '人数 8 → 12', stepText({ k: '人数', from: 8, to: 12 }));
+check('勾选一步说清加了谁、撤了谁',
+  stepText({ k: 'done', added: ['停服'], removed: ['备份'] }) === '勾选 +「停服」、勾选 −「备份」',
+  stepText({ k: 'done', added: ['停服'], removed: ['备份'] }));
+
+const traceBook = { version: 1, entries: {}, dropped: 0 };
+const traceProgress = { ui_trace: traceBook };
+check('整页制品的回报不进这本经过（ui: 前缀是唯一的门）',
+  appendUiTrace(traceProgress, 'art-abc', [{ k: '得数', from: 1, to: 2 }], { at: '2026-10-28T02:00:00.000Z' }) === false
+  && Object.keys(traceBook.entries).length === 0);
+appendUiTrace(traceProgress, 'ui:feast', [{ k: '人数', from: 8, to: 12 }], { at: '2026-10-28T02:00:00.000Z', kind: 'calculator' });
+appendUiTrace(traceProgress, 'ui:feast', [{ k: '人数', from: 12, to: 16 }], { at: '2026-10-28T02:01:00.000Z' });
+check('经过只追加（不像快照那样被覆盖）',
+  traceBook.entries['ui:feast'].steps.length === 2, JSON.stringify(traceBook.entries['ui:feast']));
+check('档名跟着记下来（prompt 里要说得出这是哪一档）',
+  traceBook.entries['ui:feast'].kind === 'calculator');
+
+const traceSnapshot = renderStateSnapshot({
+  id: meta.id,
+  graph: result.graph,
+  progress: { ...result.progress, artifact_evidence: [], artifact_state: {}, notes: [], artifact_events: [], ui_trace: traceBook },
+  patches: { patches: [] },
+});
+check('经过进 prompt（老师读得到"他怎么走到这"）',
+  traceSnapshot.includes('他在这几件界面上落定过的几步') && traceSnapshot.includes('人数 8 → 12'),
+  traceSnapshot.split('\n').find((l) => l.includes('ui:feast')));
+check('经过自带的诚实说明在场（中间帧不记、条数比实际少、没记录≠没动过）',
+  traceSnapshot.includes('中间帧不记') && traceSnapshot.includes('不等于他没动过'));
+check('经过里没有数值化学情（不拿次数当努力 / 掌握）',
+  !/(百分比|进度条|[0-9]+\s*%|score|百分制)/i.test(traceSnapshot));
+const noTraceSnapshot = renderStateSnapshot({
+  id: meta.id,
+  graph: result.graph,
+  progress: { ...result.progress, artifact_evidence: [], artifact_state: {}, notes: [], artifact_events: [] },
+  patches: { patches: [] },
+});
+check('没动过就不摆空标题（空标题是噪声）',
+  !noTraceSnapshot.includes('落定过的几步'));
+
+const onlyTraceSnapshot = renderStateSnapshot({
+  id: meta.id,
+  graph: result.graph,
+  progress: { ...result.progress, artifact_evidence: [], artifact_state: {}, notes: [], artifact_events: [], ui_trace: traceBook },
+  patches: { patches: [] },
+});
+check('只有经过时不说"本轮没有记录"（那是假话）',
+  !onlyTraceSnapshot.includes('本轮没有记录') && onlyTraceSnapshot.includes('落定过的几步'));
+
+// 上限：单件 40 步；超了丢最旧的，并如实说折叠了多少
+const capProgress = { ui_trace: { version: 1, entries: {}, dropped: 0 } };
+for (let i = 0; i < MAX_TRACE_STEPS + 5; i += 1) {
+  appendUiTrace(capProgress, 'ui:cap', [{ k: '样本量', from: i, to: i + 1 }], { at: `2026-10-28T03:00:${String(i).padStart(2, '0')}.000Z` });
+}
+const capEntry = capProgress.ui_trace.entries['ui:cap'];
+check(`单件经过封顶 ${MAX_TRACE_STEPS} 步（不无限长）`,
+  capEntry.steps.length === MAX_TRACE_STEPS, String(capEntry.steps.length));
+check('折叠过多少如实记数（截断不许装作"这就是全部"）',
+  capEntry.trimmed === 5, String(capEntry.trimmed));
+check('prompt 里说出折叠了多少',
+  uiTraceLines(capProgress).some((l) => l.includes('更早的') && l.includes('步已折叠')),
+  uiTraceLines(capProgress).join('\n'));
+const firstShown = uiTraceLines(capProgress, { maxSteps: 3 }).find((l) => l.includes('ui:cap'));
+check('只摆最近几步（老师要的是刚才那几步，不是从头念一遍）',
+  firstShown.includes('44 → 45') && !firstShown.includes('0 → 1'), firstShown);
+
+// 件数上限：挤掉最久没动的那一件，并如实说整件折叠
+const manyProgress = { ui_trace: { version: 1, entries: {}, dropped: 0 } };
+for (let i = 0; i < MAX_TRACE_IDS + 2; i += 1) {
+  appendUiTrace(manyProgress, `ui:n${i}`, [{ k: 'x', from: i, to: i + 1 }], { at: `2026-10-28T04:00:${String(i).padStart(2, '0')}.000Z` });
+}
+check(`最多记 ${MAX_TRACE_IDS} 件界面（不无限长）`,
+  Object.keys(manyProgress.ui_trace.entries).length === MAX_TRACE_IDS,
+  String(Object.keys(manyProgress.ui_trace.entries).length));
+check('挤掉的是最久没动的那件（不是刚动过的）',
+  !manyProgress.ui_trace.entries['ui:n0'] && Boolean(manyProgress.ui_trace.entries[`ui:n${MAX_TRACE_IDS + 1}`]));
+check('整件折叠也如实说',
+  uiTraceLines(manyProgress).some((l) => l.includes('件更早的界面整件折叠')),
+  uiTraceLines(manyProgress).join('\n'));
+
 // ─────────────────────────────────────── 7d. 教学规则本体在 server/rules/
 
 section('7d. 教学规则在 server/rules/，运行时注入');
@@ -1228,6 +1330,21 @@ check('state 浅合并保留全部 key', (() => {
   const s = session.artifactEvidenceView(gameId).artifacts[0].state;
   return s.level === 2 && s.attempts === 3 && s.currentParam === 'a=0.5';
 })());
+
+// 第六十一轮：内联界面的经过在本回合内就读得回（read_artifact_evidence 的第四类）。
+// 拖动帧不带 trace、只更新快照；落定那一下才多一步——与盘上 progress.ui_trace 同一套口径。
+check('落定的那一步本回合就读得回', session.recordArtifactEvidence({
+  artifactId: 'ui:feast', type: 'state', state: { uiKind: 'calculator', 人数: 30 },
+  trace: [{ k: '人数', from: 8, to: 30 }],
+}) === true && (() => {
+  const t = session.artifactEvidenceView('ui:feast').artifacts[0].trace;
+  return t.length === 1 && t[0].d[0].from === 8 && t[0].d[0].to === 30;
+})());
+session.recordArtifactEvidence({ artifactId: 'ui:feast', type: 'state', state: { uiKind: 'calculator', 人数: 31 } });
+check('拖动帧不进本回合的经过（快照动了、这一步不算）',
+  session.artifactEvidenceView('ui:feast').artifacts[0].trace.length === 1);
+check('经过里没有分数 / 对错（它是走过哪几步，不是学情）',
+  !/score|mastery|percent|correct/.test(JSON.stringify(session.artifactEvidenceView('ui:feast').artifacts[0].trace)));
 
 // event：只追加 + 同 (name, at) 去重
 check('event 上报被接受', session.recordArtifactEvidence({

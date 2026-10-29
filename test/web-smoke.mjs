@@ -795,6 +795,32 @@ check('界面回看列出那张卡（只出现象，不出现数字）',
   deepAll(deskBodyEl(), 'ui-state-card').length === 1
   && (deepAll(deskBodyEl(), 'ui-state-card')[0]?.textContent || '').includes('还没勾'),
   deepAll(deskBodyEl(), 'ui-state-card')[0]?.textContent);
+
+// 第六十一轮：回看卡除了「现在停在哪」，还要给「怎么走到这」（同一份 progress.ui_trace）。
+early.state.notebook.progress.ui_trace = {
+  version: 1,
+  entries: {
+    'ui:勾过一遍': {
+      kind: 'checklist',
+      steps: [
+        { at: '2026-10-29T01:00:00.000Z', d: [{ k: 'done', added: ['停服'], removed: [] }] },
+        { at: '2026-10-29T01:01:00.000Z', d: [{ k: 'done', added: ['备份'], removed: ['停服'] }] },
+      ],
+      trimmed: 0,
+    },
+  },
+  dropped: 0,
+};
+early.renderDeskState();
+const cardWithTrace = (deepAll(deskBodyEl(), 'ui-state-card')[0]?.textContent || '');
+check('回看卡给出经过（他怎么走到这，不只现在停在哪）',
+  cardWithTrace.includes('经过：') && cardWithTrace.includes('勾选+停服') && cardWithTrace.includes('勾选−停服'),
+  cardWithTrace);
+check('经过只摆最近三步（不把整条流水摊成第二本账）',
+  !cardWithTrace.includes('更早的') && cardWithTrace.indexOf('勾选+停服') < cardWithTrace.indexOf('勾选+备份'),
+  cardWithTrace);
+early.state.notebook.progress.ui_trace = undefined;
+early.renderDeskState();
 early.state.notebook.progress.artifact_state = {};
 early.state.tasks = [{ id: 't-1', status: 'running', title: '整理长素材' }];
 early.renderDeskState();
@@ -4299,6 +4325,46 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     un.handled === false, JSON.stringify(un));
   check('这一档里没有判分的位置（报回来的只有勾了没/滑到哪，没有对错）',
     !/correct|incorrect|score|result/.test(JSON.stringify(ui.readUiState('feast').state)), JSON.stringify(ui.readUiState('feast').state));
+
+  // 第六十一轮：界面的经过——拖动中的每一帧只更新快照，落定那一下才交一步。
+  // 起点必须是**这次动作之前**的值（8），不是上一帧（29）：中间帧不是选择。
+  st39.uiReported.clear();
+  ui.resetUiState();
+  ui.writeUiState('drift', 'calculator', { 人数: 8, uiKind: 'calculator' }, {
+    params: [{ name: '人数', def: 8, lo: 2, hi: 20 }], formulas: [{ out: '肉', terms: [[{ p: '人数' }, { n: 0.4 }]] }], unit: '公斤',
+  });
+  const bodies39 = [];
+  const realFetch61 = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (/\/artifact-message$/.test(url)) bodies39.push(JSON.parse(opts.body));
+    return realFetch61(url, opts);
+  };
+  const slide = (type, value) => handleUiDeskEvent({ type, target: { dataset: { uiSlider: 'drift', uiParam: '人数' }, value } });
+  slide('input', '9');
+  slide('input', '29');
+  check('拖动中的帧不带经过（像素级的中间值不是学习者做的选择）',
+    bodies39.length === 2 && bodies39.every((b) => !b.trace), JSON.stringify(bodies39.map((b) => b.trace)));
+  slide('change', '30');
+  const settledBody = bodies39[bodies39.length - 1];
+  check('松手那一下交一步（快照之外的"他怎么走到这"）',
+    Array.isArray(settledBody.trace) && settledBody.trace.length === 1, JSON.stringify(settledBody.trace));
+  check('这一步的起点是动作开始前的 8，不是上一帧的 29',
+    settledBody.trace[0].k === '人数' && settledBody.trace[0].from === 8 && settledBody.trace[0].to === 30,
+    JSON.stringify(settledBody.trace[0]));
+  check('拖回来的那一步也照记（8 → 30 → 12 是真走过的路）',
+    (slide('change', '12'), bodies39[bodies39.length - 1].trace[0].from === 30
+      && bodies39[bodies39.length - 1].trace[0].to === 12),
+    JSON.stringify(bodies39[bodies39.length - 1].trace));
+  check('没有变化的落定不算一步（点了同一个值不给经过）',
+    (slide('change', '12'), bodies39[bodies39.length - 1].trace === undefined),
+    JSON.stringify(bodies39[bodies39.length - 1].trace));
+  const tick39 = { dataset: { uiCheck: 'lst1', uiItem: '停服' }, checked: true };
+  handleUiDeskEvent({ type: 'change', target: tick39 });
+  const tickBody = bodies39[bodies39.length - 1];
+  check('勾选那一步说清加了谁（表类字段记增量，不抄整张表）',
+    Array.isArray(tickBody.trace) && tickBody.trace[0].k === 'done'
+      && JSON.stringify(tickBody.trace[0].added) === '["停服"]', JSON.stringify(tickBody.trace));
+  globalThis.fetch = realFetch61;
 
   // 10) 降级回报：一条、只一条
   let posted39 = [];

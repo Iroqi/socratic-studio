@@ -2917,6 +2917,70 @@ const UI_PREFIX = 'ui:';
 
 const uiStateKey = (id) => `${UI_PREFIX}${id}`;
 
+// ─────────────────────────────────────────────── 界面的经过（第六十一轮）
+//
+// 快照（artifact_state）每帧被覆盖，回答"他现在停在哪"；经过只追加，回答"他怎么走到这"——
+// 他在 5 和 30 之间来回比过，还是随手停在 30，对老师下一句话是两种证据。
+// 但**中间帧不是选择**：滑杆拖动时每动一像素就来一次 input，把那些像素记成"步"，
+// 真正的两步反而被埋掉。所以只在落定那一刻交一步：input 帧照旧更新快照（界面要跟着手走），
+// change / click / 键盘落定时才把 trace 交给宿主（server/ui-trace.mjs 只做校验与落盘）。
+//
+// 这是界面状态的一部分，不是学情：只记"从哪个值到哪个值"，不记时长、不记次数当成绩。
+
+const uiRuns = new Map(); // id -> Map(字段 -> 这次动作开始前的值)
+
+/** 记下每个字段动之前的样子；一次动作里只认第一次（中间帧不许覆盖起点）。 */
+function noteUiRun(id, state, prev) {
+  let run = uiRuns.get(id);
+  if (!run) {
+    run = new Map();
+    uiRuns.set(id, run);
+  }
+  for (const k of Object.keys(state)) {
+    if (k === 'uiKind' || run.has(k)) continue;
+    run.set(k, prev ? prev[k] : undefined);
+  }
+  return run;
+}
+
+/** 把"这次动作的开始值 → 落定值"拼成一步；没有变化就返回 null（没变化不算一步）。 */
+function takeUiTrace(id, state) {
+  const run = uiRuns.get(id);
+  uiRuns.delete(id);
+  if (!run) return null;
+  const out = [];
+  for (const [k, from] of run) {
+    const to = state[k];
+    const fromObj = from && typeof from === 'object' ? from : null;
+    const toObj = to && typeof to === 'object' ? to : null;
+    if (fromObj || toObj) {
+      // done / viewed / tried / visited 这一族：记加进来与去掉了哪几个键，
+      // 不把整张表抄一遍（表会越来越长，抄一遍等于每步都记全量）。
+      const added = Object.keys(toObj || {}).filter((x) => toObj[x] && !fromObj?.[x]).slice(0, 8);
+      const removed = Object.keys(fromObj || {}).filter((x) => fromObj[x] && !toObj?.[x]).slice(0, 8);
+      if (added.length || removed.length) out.push({ k, added, removed });
+    } else if (!Object.is(from, to)) {
+      out.push({ k, from: from ?? null, to: to ?? null });
+    }
+  }
+  return out.length ? out : null;
+}
+
+/**
+ * 内联界面的状态回报。`prev` 是这次动作之前的那份 state（各档 handler 手里都有）。
+ * 落定时多带一个 trace；拖动中的帧只带 state。两条用的是同一条 artifact-message 通道
+ * （不新开一条：读回与注入只认这一处）。
+ */
+function forwardUiState(id, state, prev) {
+  const body = { type: 'state', state };
+  noteUiRun(id, state, prev);
+  if (uiSettling) {
+    const trace = takeUiTrace(id, state);
+    if (trace) body.trace = trace;
+  }
+  forwardArtifactMessage(body, uiStateKey(id));
+}
+
 /** 台面上现在的内联计算器（按 class 找：桩与浏览器在这一手上语义一致）。 */
 function uiCalcNodes(id) {
   return (document.querySelectorAll('.ui-calc') || []).filter((n) => n.dataset?.uiCalc === id);
@@ -3077,11 +3141,15 @@ function handoffUiState(id) {
   return true;
 }
 
+// input 是拖动中的每一帧，change / click / keydown 是落定。经过只认落定那一下。
+let uiSettling = true;
+
 /**
  * 台面委托接住一次控件动作。返回值里的 `handled` 只为测试好看，浏览器不看。
  * 只做两件事：更新那份状态、就地重画——判定一个字都不在这儿发生（Invariant 4 ③）。
  */
 function handleUiDeskEvent(evt) {
+  uiSettling = evt?.type !== 'input';
   const node = evt?.target;
   if (!node) return { handled: false };
 
@@ -3159,7 +3227,7 @@ function handleUiDeskEvent(evt) {
     if (node.checked) done[item] = true;
     else delete done[item];
     setUiValues(listId, 'checklist', { uiKind: 'checklist', done });
-    forwardArtifactMessage({ type: 'state', state: { uiKind: 'checklist', done } }, uiStateKey(listId));
+    forwardUiState(listId, { uiKind: 'checklist', done }, rec?.state);
     return { handled: true, kind: 'checklist', id: listId };
   }
 
@@ -3185,7 +3253,7 @@ function handleUiDeskEvent(evt) {
     const state = { ...rec.state, [name]: value, uiKind: 'form' };
     setUiValues(formId, 'form', state);
     repaintUiForm(formId);
-    forwardArtifactMessage({ type: 'state', state }, uiStateKey(formId));
+    forwardUiState(formId, state, rec.state);
     return { handled: true, kind: 'form', id: formId };
   }
 
@@ -3200,7 +3268,7 @@ function handleUiDeskEvent(evt) {
     const state = { ...rec.state, [name]: value, uiKind: 'calculator' };
     setUiValues(calcId, 'calculator', state);
     repaintUiCalc(calcId);
-    forwardArtifactMessage({ type: 'state', state }, uiStateKey(calcId));
+    forwardUiState(calcId, state, rec.state);
     return { handled: true, kind: 'calculator', id: calcId };
   }
 
@@ -3217,7 +3285,7 @@ function handleUiDeskEvent(evt) {
     if (!snap) return { handled: false };
     setUiValues(chartId, 'chart', { snap: snap.name, uiKind: 'chart' });
     repaintUiChart(chartId);
-    forwardArtifactMessage({ type: 'state', state: { snap: snap.name, uiKind: 'chart' } }, uiStateKey(chartId));
+    forwardUiState(chartId, { snap: snap.name, uiKind: 'chart' }, rec.state);
     return { handled: true, kind: 'chart', id: chartId };
   }
 
@@ -3235,7 +3303,7 @@ function handleUiDeskEvent(evt) {
     const state = { ...rec.state, active: name, viewed, uiKind: 'explore' };
     setUiValues(exploreId, 'explore', state);
     repaintUiExplore(exploreId);
-    forwardArtifactMessage({ type: 'state', state }, uiStateKey(exploreId));
+    forwardUiState(exploreId, state, rec.state);
     return { handled: true, kind: 'explore', id: exploreId };
   }
 
@@ -3258,7 +3326,7 @@ function handleUiDeskEvent(evt) {
     const state = { ...rec.state, active, viewed, uiKind: 'map' };
     setUiValues(mapId, 'map', state);
     repaintUiMap(mapId);
-    forwardArtifactMessage({ type: 'state', state }, uiStateKey(mapId));
+    forwardUiState(mapId, state, rec.state);
     return { handled: true, kind: 'map', id: mapId };
   }
 
@@ -3277,7 +3345,7 @@ function handleUiDeskEvent(evt) {
     const state = { ...rec.state, last: name, tried, uiKind: 'game' };
     setUiValues(gameId, 'game', state);
     repaintUiGame(gameId);
-    forwardArtifactMessage({ type: 'state', state }, uiStateKey(gameId));
+    forwardUiState(gameId, state, rec.state);
     return { handled: true, kind: 'game', id: gameId };
   }
 
@@ -3309,7 +3377,7 @@ function handleUiDeskEvent(evt) {
     const state = { ...rec.state, active, viewed, uiKind: 'diagram' };
     setUiValues(id, 'diagram', state);
     repaintUiDiagram(id);
-    forwardArtifactMessage({ type: 'state', state }, uiStateKey(id));
+    forwardUiState(id, state, rec.state);
     return { handled: true, kind: 'diagram', id };
   }
   return { handled: false };
@@ -3516,7 +3584,7 @@ function advanceUiWalk(id, dir) {
   const state = { ...rec.state, last: move.name, visited, uiKind: 'walkthrough' };
   setUiValues(id, 'walkthrough', state);
   repaintUiWalk(id);
-  forwardArtifactMessage({ type: 'state', state }, uiStateKey(id));
+  forwardUiState(id, state, rec.state);
   return { handled: true, kind: 'walkthrough', id };
 }
 
@@ -3562,6 +3630,7 @@ function hydrateUiState(notebook) {
   const id = notebook?.id || null;
   if (id === state.uiHydratedFrom) return;
   resetUiState();
+  uiRuns.clear(); // 换本子：上一本没落定的动作不许顶着同一个 id 记到这一本头上
   state.uiReported.clear(); // 上一本那些降级说明不该占着这一本的位
   state.uiHydratedFrom = id;
   const stored = notebook?.progress?.artifact_state || {};
@@ -3957,8 +4026,28 @@ function renderUiStatePanel(body) {
       if (s.last) card.append(el('div', 'state-note', `· 现在停在：${fit(s.last)}`));
       if (!visited.length && !s.last) card.append(el('div', 'state-note', '· 还没开始走'));
     }
+    // 第六十一轮：经过（落定的那几步）。快照上面刚说完"现在停在哪"，这里说"怎么走到这"——
+    // 学习者自己回看得到，老师下一轮也读得到（同一份 progress.ui_trace，不是一个新账本）。
+    const line = uiTraceLine(state.notebook?.progress?.ui_trace, key);
+    if (line) card.append(el('div', 'state-note', `· 经过：${line}`));
   }
   body.append(card);
+}
+
+/** 一份 ui_trace 里某一件的最近三步，拼成"人数 8 → 12 → 16"这样一行（只读展示）。 */
+function uiTraceLine(book, key) {
+  const steps = book?.entries?.[key]?.steps || [];
+  const words = { done: '勾选', viewed: '看过', tried: '试过', visited: '走到', active: '停在', last: '停在', snap: '快照' };
+  const short = (v) => { const t = String(v); return t.length > 24 ? `${t.slice(0, 23)}…` : t; };
+  const text = (d) => (d || []).map((x) => {
+    const label = words[x.k] || x.k;
+    if (Array.isArray(x.added) || Array.isArray(x.removed)) {
+      return [...(x.added || []).map((a) => `${label}+${short(a)}`), ...(x.removed || []).map((r) => `${label}−${short(r)}`)].join(' ');
+    }
+    return `${label} ${short(x.from ?? '（空）')}→${short(x.to ?? '（空）')}`;
+  }).filter(Boolean).join('；');
+  const shown = steps.slice(-3).map((s) => text(s.d)).filter(Boolean);
+  return shown.length ? shown.join(' → ') : '';
 }
 
 /** 取景：把镜头钉在某个概念上（台面顶部的现状条跟着重画）。 */

@@ -1222,6 +1222,50 @@ check('README 是门面：不再写排查节与细节条款（/api/ 引用少于
     '上限被改了：放宽预算要连同理由一起改，不许顺手');
 }
 
+// ────────────────────────────────────────── 第六十一轮：界面的经过（落定的那几步）
+/*
+ * 这一轮的新词横跨三处（客户端记、服务端存、prompt 摆），最容易坏的方式是"只改了一处"：
+ *   ① 客户端绕过 forwardUiState 直接 POST —— 经过永远空，且没有任何断言会红；
+ *   ② 中间帧与落定用同一条路 —— 滑杆一拖几十步，真正的两步被埋掉；
+ *   ③ 服务端把整页制品的 trace 也并进来 —— 两条账混成一条。
+ * 三条都在这里钉住。
+ */
+{
+  const traceSrc61 = fs.readFileSync(path.join(app, 'server', 'ui-trace.mjs'), 'utf8');
+  const promptSrc61 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+  const serveSrc61 = fs.readFileSync(path.join(app, 'server', 'serve.mjs'), 'utf8');
+
+  check('内联界面的状态回报只走 forwardUiState（绕过它=经过永远是空的）',
+    !/forwardArtifactMessage\(\{\s*type: 'state'[\s\S]{0,80}uiStateKey/.test(hostSrc),
+    (hostSrc.match(/forwardArtifactMessage\(\{\s*type: 'state'[^\n]*uiStateKey/) || [''])[0]);
+  check('九档 handler 都接了 forwardUiState（少一档就是那一档没有经过）',
+    (hostSrc.match(/forwardUiState\(/g) || []).length >= 10,
+    String((hostSrc.match(/forwardUiState\(/g) || []).length));
+  check('拖动帧与落定按事件类型分开（input 不是落定）',
+    /uiSettling = evt\?\.type !== 'input'/.test(hostSrc));
+  check('换本子时清掉没落定的动作（上一本的手不许记到这一本头上）',
+    /uiRuns\.clear\(\)/.test(hostSrc));
+
+  check('宿主只记 ui: 前缀的经过（整页制品走 artifact_events，两条账不许混）',
+    /startsWith\(UI_TRACE_PREFIX\)/.test(traceSrc61));
+  check('经过有上限（不无限长）', /MAX_TRACE_STEPS/.test(traceSrc61) && /MAX_TRACE_IDS/.test(traceSrc61));
+  check('折叠要如实记数（截断不许装作"这就是全部"）',
+    /trimmed/.test(traceSrc61) && /已折叠/.test(traceSrc61) && /整件折叠/.test(traceSrc61));
+  check('没变化的步不收（点回原值不是一步）', /from === to/.test(traceSrc61));
+  check('服务端只在 state 分支里并经过（event / evidence 不带这本账）',
+    /type === 'state'[\s\S]{0,900}appendUiTrace/.test(serveSrc61),
+    'serve.mjs 的 mergeArtifactMessage 里找不到 state 分支中的 appendUiTrace');
+  check('prompt 里有经过那一段（老师读得到"他怎么走到这"）',
+    /uiTraceLines\(/.test(promptSrc61) && traceSrc61.includes('落定过的几步'));
+  check('APP_ADAPTER 说清"同一个 id 就是同一件界面"（改版不换 id，接得回他的值）',
+    promptSrc61.includes('同一个 id 就是同一件界面'));
+  check('经过自带的诚实说明进了注入文本（中间帧不记 / 没记录≠没动过 / 不许算分）',
+    traceSrc61.includes('中间帧不记') && traceSrc61.includes('不等于他没动过') && traceSrc61.includes('算分'));
+  check('经过里没有数值化学情的词（那是 Invariant 4 一族）',
+    !/(percent|mastery|score|等级|星星)/.test(traceSrc61),
+    'ui-trace.mjs 里出现了学情指标族的词');
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;
