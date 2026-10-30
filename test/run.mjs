@@ -1188,6 +1188,56 @@ check(
   !snapshot.includes('回马枪候选') && !promptNoEvidence.includes('回马枪候选'),
 );
 
+// ───────────────────────── 图谱快照跟台面走（第六十七轮）─────────────────────────
+// 台面开过场之后，结构跟着工作集走：这一场的概念、回马枪候选、带着下一步计划/观察的
+// 概念才摆全结构（依赖 / 易错 / 讲解要点），其余只列名字与状态。路由信号（状态词 /
+// 下一步计划 / 观察）一字不减；折叠不删除——完整字段在盘上，模型要讲某概念时先调
+// get_learning_graph 读回。台面没开就全部摆全（冷启动/路由期结构是唯一依据）。
+const foldGraph = {
+  meta: { topic: '折叠探针', pedagogy: 'programming' },
+  concepts: [
+    { id: 'fold-a', name: '概念甲', summary: '甲的一句话定义', depends_on: [], misconceptions: ['甲的一个易错点'] },
+    { id: 'fold-b', name: '概念乙', summary: '乙的一句话定义', depends_on: ['fold-a'], misconceptions: [] },
+    { id: 'fold-c', name: '概念丙', summary: '丙的一句话定义', depends_on: ['fold-b'], misconceptions: ['丙的两个易错点', '丙的另一个易错点'] },
+    { id: 'fold-d', name: '概念丁', summary: '丁的一句话定义', depends_on: ['fold-c'], misconceptions: ['丁的一个易错点'] },
+  ],
+};
+const foldProgress = {
+  concepts: {
+    'fold-a': { state: 'applied', next_action: '刚讲完，出个调试题', note: '用 var 的例子没接住' },
+    'fold-b': { state: 'seen' },
+    'fold-c': { state: 'understood' },
+    'fold-d': { state: 'unknown' },
+  },
+  notes: [],
+  artifact_evidence: [
+    { question_id: 'fold-c:q', concept_id: 'fold-c', result: 'incorrect', response: '答错了', attempts: 2, completed: false, interaction_type: 'choice' },
+  ],
+};
+const foldBase = { id: 'nb-fold', graph: foldGraph, progress: foldProgress, patches: { patches: [] } };
+const foldCold = renderStateSnapshot(foldBase); // 没开台：全部摆全（与旧行为一致）
+const foldOpen = renderStateSnapshot({
+  ...foldBase,
+  scene: { current: { id: 'scene-01', title: '概念乙', phase: 'teach', conceptId: 'fold-b', props: [], params: {} } },
+});
+check('没开台时图谱全量摆全（兼容旧行为）',
+  foldCold.includes('甲的一句话定义') && foldCold.includes('｜前置：fold-a') && foldCold.includes('｜易错：甲的一个易错点'));
+check('开台后场上的概念摆全结构', foldOpen.includes('乙的一句话定义') && foldOpen.includes('｜前置：fold-a'));
+check('开台后回马枪候选的概念摆全结构', foldOpen.includes('丙的一句话定义') && foldOpen.includes('｜易错：丙的两个易错点'));
+check('开台后带下一步计划的概念摆全结构', foldOpen.includes('甲的一句话定义') && foldOpen.includes('下一步计划：刚讲完，出个调试题') && foldOpen.includes('观察：用 var 的例子没接住'));
+check('开台后场外概念只列名字与状态', (() => {
+  const lines = foldOpen.split('\n').map((l) => l.trim());
+  const line = lines.find((l) => l.startsWith('- 概念丁 [fold-d]'));
+  return Boolean(line) && !line.includes('丁的一句话定义') && !line.includes('｜易错：');
+})());
+check('折叠概念的状态词仍在', foldOpen.includes('- 概念丁 [fold-d] — 待学'));
+check('折叠说明如实点名并指向读回通道',
+  foldOpen.includes('其余 1 个概念只列名字与状态') && foldOpen.includes('get_learning_graph 读回'));
+check('折叠说明不产出掌握式结论', !/已掌握|掌握度|mastery|百分比|[0-9]+\s*%/i.test(foldOpen));
+check('折叠后的快照仍没有数值化学习量',
+  !/(百分比|进度条|[0-9]+\s*%|score|百分制|等级认证|星星)/i.test(foldOpen));
+check('开台后场外概念的结构正文不再进快照', !foldOpen.includes('丁的一句话定义'));
+
 // 学习者扔掉一件道具，模型读到的应该是"工作集变了"，不是"他对这个概念撒手了"。
 // 这一句只在他真撤过的快照里出现——常驻的免责声明也是噪声（同取景条那条账）。
 const retiredEvents = [

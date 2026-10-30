@@ -384,17 +384,49 @@ export function renderStateSnapshot(notebook) {
       ordered = concepts;
     }
     lines.push(`\nLearning Graph（${concepts.length} 个概念，按依赖排序）：`);
+
+    // 结构跟着台面走（第六十七轮）：台面开过场之后，这一场的概念与回马枪候选才摆全结构
+    // （依赖 / 易错 / 讲解要点），其余只列名字与状态——路由信号（状态词 / 下一步计划 / 观察）
+    // 一字不减，省掉的是结构正文。折叠不是删除：完整字段在盘上，要讲某概念时先调
+    // get_learning_graph 读回，别凭印象补（与第六十二轮对制品状态的那把尺同一把）。
+    // 台面还没开（还在分解 / 路由期）就全部摆全——那时模型正要挑第一个概念，结构是它唯一的依据。
+    const foldEvidence = progress?.artifact_evidence || [];
+    const working = new Set();
+    const inScene = notebook.scene?.current?.conceptId;
+    if (inScene) working.add(inScene);
+    for (const r of retestCandidates(foldEvidence)) {
+      if (r.concept) working.add(r.concept);
+    }
+    for (const [id, p] of Object.entries(progress?.concepts || {})) {
+      if (p && (p.next_action || p.note)) working.add(id);
+    }
+    const foldWhenSceneOpen = Boolean(notebook.scene?.current);
+
     for (const c of ordered) {
       const p = progress?.concepts?.[c.id];
       const word = p ? stateWord(p.state) : '待学';
       const flag = p?.unverified_self_report ? '（自报，未验证）' : '';
-      lines.push(
-        `- ${c.name} [${c.id}] — ${word}${flag}｜${c.summary}` +
-          (c.depends_on?.length ? `｜前置：${c.depends_on.join(', ')}` : '') +
-          (c.misconceptions?.length ? `｜易错：${c.misconceptions.join('；')}` : ''),
-      );
+      if (foldWhenSceneOpen && !working.has(c.id)) {
+        lines.push(`- ${c.name} [${c.id}] — ${word}${flag}`);
+      } else {
+        lines.push(
+          `- ${c.name} [${c.id}] — ${word}${flag}｜${c.summary}` +
+            (c.depends_on?.length ? `｜前置：${c.depends_on.join(', ')}` : '') +
+            (c.misconceptions?.length ? `｜易错：${c.misconceptions.join('；')}` : ''),
+        );
+      }
       if (p?.next_action) lines.push(`    下一步计划：${p.next_action}`);
       if (p?.note) lines.push(`    观察：${p.note}`);
+    }
+    if (foldWhenSceneOpen) {
+      const folded = ordered.filter((c) => !working.has(c.id)).length;
+      if (folded > 0) {
+        lines.push(
+          `  （其余 ${folded} 个概念只列名字与状态：依赖 / 易错 / 讲解要点没全列——` +
+            '完整结构在盘上，要讲某一个时先调 get_learning_graph 读回它的字段，别凭印象补全。' +
+            '折叠不说明它没被学过：状态词就在上面。）',
+        );
+      }
     }
   }
 
