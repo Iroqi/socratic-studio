@@ -845,6 +845,22 @@ html, body {
 .ui-map-pane-note { margin: 0; font-size: 12.5px; color: var(--ink-2); }
 .ui-map-pane-hint { margin: 0; font-size: 12.5px; color: var(--ink-3); }
 
+/* figure（第六十八轮）：自由几何的内联图——模型声明形状与坐标，编译器生成 SVG。
+   上色仍只借量过的 token：形状底是 --surface-2、描边是 --ink-2，强调那一个借
+   --accent / --accent-soft（与 diagram 的选中节点同一把尺）；不写死任何颜色，
+   图因此跟着主题走。开放形状（折线 / 路径）不填色——围起来的"里面"不是内容的一部分。
+   静态图没有交互态，样式里也没有 hover / active 那一族。 */
+.ui-figure { display: block; max-width: 100%; height: auto; margin: 0 0 1em; }
+.ui-fig-shape { fill: var(--surface-2); stroke: var(--ink-2); stroke-width: 1.4; }
+.ui-fig-open { fill: none; }
+.ui-fig-shape.is-solid { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.8; }
+.ui-fig-shape.is-hollow { fill: none; stroke: var(--ink-2); stroke-width: 1.4; }
+.ui-fig-shape.is-dashed { fill: none; stroke: var(--ink-2); stroke-width: 1.4; stroke-dasharray: 5 4; }
+.ui-fig-arrow { stroke: var(--ink-2); stroke-width: 1.6; }
+.ui-fig-arrow-head { fill: var(--ink-2); }
+.ui-fig-arrow-label { fill: var(--ink-3); font-size: 11.5px; }
+.ui-fig-label { fill: var(--ink); font-size: 12.5px; }
+
 /* handoff（第二十九轮）：交互档把状态递回对话的按钮。底色仍只借 --surface-2
    （那条"底色全用量过的 surface-2"的账不许破），hover 只换文字与描边，不引新背景。 */
 .ui-handoff {

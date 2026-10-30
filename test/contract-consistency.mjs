@@ -1186,6 +1186,16 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
     (metaKinds || []).join(',') === 'calculator,form,chart', (metaKinds || []).join(','));
   const promptLines25 = promptSrc25.split('\n');
   const rowOf25 = (kind) => promptLines25.find((l) => l.includes('| \\`' + kind + '\\` |')) || '';
+  // 第六十八轮：figure 的 alt 是编译期门槛（不是无障碍补丁）。提示、README、编译器三处
+  // 说同一句话；哪一处松掉，模型就会开始画"说不清让人看到什么"的图。
+  {
+    const figRow = rowOf25('figure');
+    check('提示里 figure 那行把 alt 写成必填（写不出"这张图让人看到什么"就不该画）',
+      /alt/.test(figRow) && /必填/.test(figRow), figRow.slice(0, 160));
+    check('README 的档位表里有 figure 一行', /\| \`figure\` \|/.test(readmeDoc), '');
+    check('编译器里缺 alt 是硬错（终态才判；流里先顶一句中性读屏名）',
+      /没有 alt/.test(uiSrc) && /!alt && !partial/.test(uiSrc), '');
+  }
   check('提示里算数那三档的每一行都写了 assume 与 source（教了才可能写对）',
     ['calculator', 'form', 'chart'].every((kind) => /assume/.test(rowOf25(kind)) && /source/.test(rowOf25(kind))),
     ['calculator', 'form', 'chart'].map((kind) => `${kind}:${/assume/.test(rowOf25(kind))}/${/source/.test(rowOf25(kind))}`).join(' '));

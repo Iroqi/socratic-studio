@@ -22,7 +22,7 @@
 import { escapeHtml } from './escape.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
+export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'figure', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -299,6 +299,7 @@ function compileCompare(fields, lines) {
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const rows = pick(fields, 'row');
   if (rows.length < 2) return { error: '并排对照至少两行' };
   const grid = rows.map((r) => r.split('|').map((c) => c.trim()));
@@ -333,6 +334,7 @@ function compileSteps(fields, lines, partial) {
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const items = pick(fields, 'step');
   if (items.length < 1) return { error: '没有一行 step' };
   const title = pick(fields, 'title')[0] || '';
@@ -370,6 +372,7 @@ function compileTimeline(fields, lines, partial) {
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const items = pick(fields, 'time');
   if (items.length < 1) return { error: '没有一行 time' };
   const title = pick(fields, 'title')[0] || '';
@@ -525,6 +528,7 @@ function compileMap(fields, lines, partial) {
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
 
   // 逐行收点：名字是身份，位置是内容。流里那一行还没写完（`stop: 康定 | 3`）不算写坏——
   // 那一行先不长，已写出的点照常上台（与 steps / timeline 同一把尺：渐进是流里的宽容）。
@@ -683,6 +687,7 @@ function compileChecklist(fields, lines, partial) {
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
   if (items.some((s) => !s)) return { error: '有一行是空的' };
@@ -747,6 +752,7 @@ function compileForm(fields, lines, partial) {
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (questionWords(fields)) return { error: QUESTION_ONLY };
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
   const parsed = [];
@@ -922,6 +928,7 @@ function compileCalculator(fields, lines, partial) {
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const params = [];
   for (const p of pick(fields, 'param')) {
     const parts = p.split('|').map((s) => s.trim());
@@ -1270,6 +1277,7 @@ function compileDiagram(fields) {
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -1430,6 +1438,462 @@ function compileDiagram(fields) {
   return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'diagram' };
 }
 
+// ── 自由图解 ────────────────────────────────────────────────────────────
+/**
+ * figure（第六十八轮，学 Intelligent UI 组件库里"把概念画出来"那一手——官方旗舰用例
+ * 「机翼怎么产生升力」不是一段话，是一张能对着问的图）：模型写几何，宿主生成 SVG。
+ *
+ * 词表里以前没有"自由几何"。diagram 是节点与连线的网，map 是示意位置，chart 是数据，
+ * canvas 是整页——`artifact.md` §6 写着"结构 / 流程 / 因果 → 内联 SVG"，可内联这一层
+ * 没有承接它的档，每画一个剖面就得开一张整页制品。这一档补的就是那条缝：一种形状
+ * 说不清的东西（剖面、构造、受力、光路），不必升级成一次"装软件"。
+ *
+ * 为什么不收 HTML / SVG 原文：本仓的编译器只做"从声明的语义长成 DOM"，从不把模型写的
+ * markup 塞进宿主页面（formula 那一手同理：宿主不跑模型写的表达式，自己从组项表生成
+ * 算式）。所以这里没有消毒器，只有一份词法——类型、坐标、路径命令，越界一律退回原文并
+ * 点名。path 的 d 由解析器**重新生成**，模型写的那串字符一个字节都不进 DOM。
+ *
+ * `alt` 必填不是无障碍补丁，是 `artifact.md` §7 动作 1 的编译期形态：**写不出一句
+ * "这张图让人看到什么"，就说明这张图还不该画**。它同时是读屏名与读者能拿到的
+ * 最后一句人话。
+ *
+ * 静态图没有"学习者在里面做过什么"：不进 UI_STATEFUL、不要求 id、不写 artifact_state。
+ * 学习者对图的交互仍然是对话——指着图问"这里为什么这样连"，是模型接着讲。
+ */
+const FIGURE_FIELDS = new Set(['kind', 'title', 'alt', 'frame', 'shape', 'label', 'arrow']);
+const FIGURE_MAX_SHAPES = 20;
+const FIGURE_MAX_LABELS = 12;
+const FIGURE_MAX_ARROWS = 8;
+const FIGURE_NAME_MAX = 24;
+const FIGURE_ALT_MAX = 160;
+const FIGURE_LABEL_MAX = 40;
+const FIGURE_ARROW_LABEL_MAX = 20;
+const FIGURE_W_MIN = 160;
+const FIGURE_W_MAX = 640;
+const FIGURE_H_MIN = 100;
+const FIGURE_H_MAX = 480;
+const FIGURE_TYPES = ['rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path'];
+const FIGURE_STYLES = ['solid', 'soft', 'hollow', 'dashed'];
+
+/** 几何数字：只认十进制（含小数与负号），最多保留两位小数——画图不需要更多精度。 */
+const FIG_NUM = /^-?(?:\d+\.?\d*|\.\d+)$/;
+const figNum = (n) => {
+  const r = Math.round(n * 100) / 100;
+  return Object.is(r, -0) ? '0' : String(r);
+};
+function figCoord(raw) {
+  const s = String(raw ?? '').trim();
+  if (!FIG_NUM.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+/** `x,y` 一对。只判形状，不判范围——范围要把名字带进错误里，调用处知道是哪一个 shape。 */
+function figPoint(raw) {
+  const m = /^\s*(-?(?:\d+\.?\d*|\.\d+))\s*,\s*(-?(?:\d+\.?\d*|\.\d+))\s*$/.exec(String(raw ?? ''));
+  if (!m) return null;
+  const x = Number(m[1]);
+  const y = Number(m[2]);
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+const figInFrame = (x, y, W, H) => x >= 0 && x <= W && y >= 0 && y <= H;
+
+/**
+ * path 的词法：M L H V Q C S T Z，大小写 = 绝对 / 相对（与 SVG 一致）。不认弧线 A——
+ * 弧线两个半径、旋转、大弧 / 扫掠四个参数写错任何一个都画不出你以为的那条线，
+ * 教学图里的曲线用 Q / C 就够。返回重新生成的 d，而不是原文：进 DOM 的每个字符
+ * 都是从这里吐出来的数字。
+ */
+function figurePath(raw, W, H) {
+  const src = String(raw ?? '');
+  if (src.length > 180) {
+    return { error: `path 太长（${src.length} 字）：一行控制在 180 字内，长曲线拆成几条 shape` };
+  }
+  const toks = [];
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    if (/[\s,]/.test(ch)) { i += 1; continue; }
+    if (/[MmLlHhVvQqCcSsTtZz]/.test(ch)) { toks.push(ch); i += 1; continue; }
+    const m = /^-?(?:\d+\.?\d*|\.\d+)/.exec(src.slice(i));
+    if (!m) return { error: `path 里有不认得的字符「${ch}」（只认 M L H V Q C S T Z 与数字，不认弧线 A）` };
+    toks.push(Number(m[0]));
+    i += m[0].length;
+  }
+  if (!toks.length) return { error: 'path 的 d 是空的' };
+  if (toks[0] !== 'M' && toks[0] !== 'm') return { error: 'path 要以 M 开头（先落笔，再画）' };
+
+  const seg = [];
+  let idx = 0;
+  let cmd = '';
+  let cx = 0; let cy = 0;
+  let sx = 0; let sy = 0;
+  let qc = null;
+  let cc = null;
+  let started = false;
+  const outOfFrame = () => ({ error: `path 画到图框外了（frame 是 ${W}x${H}）` });
+
+  while (idx < toks.length) {
+    if (typeof toks[idx] === 'string') {
+      cmd = toks[idx];
+      idx += 1;
+    } else if (!cmd) {
+      return { error: 'path 要以 M 开头（先落笔，再画）' };
+    }
+    const up = cmd.toUpperCase();
+    const rel = cmd !== up;
+    const take = (n) => {
+      const vals = [];
+      for (let j = 0; j < n; j += 1) {
+        if (typeof toks[idx] !== 'number') return null;
+        vals.push(toks[idx]);
+        idx += 1;
+      }
+      return vals;
+    };
+    if (up === 'Z') {
+      seg.push('Z');
+      cx = sx; cy = sy;
+      qc = null; cc = null;
+      if (idx < toks.length && typeof toks[idx] !== 'string') {
+        return { error: 'Z 后面要跟一个新的命令（Z 不带参数）' };
+      }
+      continue;
+    }
+    if (up === 'M') {
+      const a = take(2);
+      if (!a) return { error: 'M 后面要跟两个数（x y）' };
+      const x = rel ? cx + a[0] : a[0];
+      const y = rel ? cy + a[1] : a[1];
+      if (!figInFrame(x, y, W, H)) return outOfFrame();
+      seg.push(`M ${figNum(x)} ${figNum(y)}`);
+      sx = x; sy = y; cx = x; cy = y;
+      started = true;
+      qc = null; cc = null;
+      // M 之后紧跟的坐标对按 L 处理（SVG 的隐式规则）；相对模式沿用同一个大小写。
+      cmd = rel ? 'l' : 'L';
+      continue;
+    }
+    if (!started) return { error: 'path 要以 M 开头（先落笔，再画）' };
+    if (up === 'L' || up === 'T') {
+      const a = take(2);
+      if (!a) return { error: `${up} 后面要跟两个数` };
+      const x = rel ? cx + a[0] : a[0];
+      const y = rel ? cy + a[1] : a[1];
+      if (!figInFrame(x, y, W, H)) return outOfFrame();
+      if (up === 'L') {
+        seg.push(`L ${figNum(x)} ${figNum(y)}`);
+        qc = null; cc = null;
+      } else {
+        const kx = qc ? 2 * cx - qc.x : cx;
+        const ky = qc ? 2 * cy - qc.y : cy;
+        seg.push(`Q ${figNum(kx)} ${figNum(ky)} ${figNum(x)} ${figNum(y)}`);
+        qc = { x: kx, y: ky };
+        cc = null;
+      }
+      cx = x; cy = y;
+      continue;
+    }
+    if (up === 'H' || up === 'V') {
+      const a = take(1);
+      if (!a) return { error: `${up} 后面要跟一个数` };
+      const x = up === 'H' ? (rel ? cx + a[0] : a[0]) : cx;
+      const y = up === 'V' ? (rel ? cy + a[0] : a[0]) : cy;
+      if (!figInFrame(x, y, W, H)) return outOfFrame();
+      seg.push(`${up} ${figNum(up === 'H' ? x : y)}`);
+      cx = x; cy = y;
+      qc = null; cc = null;
+      continue;
+    }
+    if (up === 'Q') {
+      const a = take(4);
+      if (!a) return { error: 'Q 的参数个数不对（Q 要 4 个数：控制点 x,y 终点 x,y）' };
+      const kx = rel ? cx + a[0] : a[0];
+      const ky = rel ? cy + a[1] : a[1];
+      const x = rel ? cx + a[2] : a[2];
+      const y = rel ? cy + a[3] : a[3];
+      if (!figInFrame(x, y, W, H)) return outOfFrame();
+      seg.push(`Q ${figNum(kx)} ${figNum(ky)} ${figNum(x)} ${figNum(y)}`);
+      qc = { x: kx, y: ky };
+      cc = null;
+      cx = x; cy = y;
+      continue;
+    }
+    if (up === 'C' || up === 'S') {
+      const a = take(up === 'C' ? 6 : 4);
+      if (!a) return { error: `${up} 的参数个数不对（C 要 6 个数、S 要 4 个数）` };
+      let k1x;
+      let k1y;
+      let k2x;
+      let k2y;
+      let x;
+      let y;
+      if (up === 'C') {
+        k1x = rel ? cx + a[0] : a[0];
+        k1y = rel ? cy + a[1] : a[1];
+        k2x = rel ? cx + a[2] : a[2];
+        k2y = rel ? cy + a[3] : a[3];
+        x = rel ? cx + a[4] : a[4];
+        y = rel ? cy + a[5] : a[5];
+      } else {
+        k1x = cc ? 2 * cx - cc.x : cx;
+        k1y = cc ? 2 * cy - cc.y : cy;
+        k2x = rel ? cx + a[0] : a[0];
+        k2y = rel ? cy + a[1] : a[1];
+        x = rel ? cx + a[2] : a[2];
+        y = rel ? cy + a[3] : a[3];
+      }
+      if (!figInFrame(x, y, W, H)) return outOfFrame();
+      seg.push(`C ${figNum(k1x)} ${figNum(k1y)} ${figNum(k2x)} ${figNum(k2y)} ${figNum(x)} ${figNum(y)}`);
+      cc = { x: k2x, y: k2y };
+      qc = null;
+      cx = x; cy = y;
+      continue;
+    }
+    return { error: `path 里不认得的命令「${cmd}」（只认 M L H V Q C S T Z）` };
+  }
+  if (!started) return { error: 'path 要以 M 开头（先落笔，再画）' };
+  return { d: seg.join(' ') };
+}
+
+/**
+ * 图上的文字标签。SVG 的 <text> 不换行：长标签会顶出画布被裁掉，
+ * 而裁掉半句话比不写更糟——按锚点算出这一行能放几个字，超了收短并在 <title>
+ * 里留全文（与 diagram 的 fitText 同一把尺：看得见的少一点，事实一个字不少）。
+ */
+function figureLabelEl(text, x, y, anchor, W) {
+  const room = anchor === 'start' ? W - x : anchor === 'end' ? x : 2 * Math.min(x, W - x);
+  const maxChars = Math.max(4, Math.floor(room / 12));
+  const shown = fitText(text, maxChars);
+  const title = shown.length < String(text).length ? `<title>${escapeHtml(text)}</title>` : '';
+  return (
+    `<text class="ui-fig-label" x="${figNum(x)}" y="${figNum(y)}" text-anchor="${anchor}" dominant-baseline="middle">` +
+    `${title}${escapeHtml(shown)}</text>`
+  );
+}
+
+function compileFigure(fields, lines, partial) {
+  if (pick(fields, 'handoff').length) {
+    return { error: 'figure 是静态图：图里没有可交回的状态，handoff 只配交互档' };
+  }
+  if (pick(fields, 'id').length) {
+    return { error: 'figure 是静态图：图里没有"学习者做过什么"可记，不写 id——要指着图问就在正文里说' };
+  }
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（数值逐项查是 chart 的形状）' };
+  if (pick(fields, 'node').length || pick(fields, 'edge').length) {
+    return { error: 'node / edge 是 diagram 的字段：谁连着谁用 diagram，形状与构造用 figure' };
+  }
+  if (pick(fields, 'stop').length || pick(fields, 'route').length) {
+    return { error: 'stop / route 是 map 的字段：谁在哪儿用 map，形状与构造用 figure' };
+  }
+  const stray = fields.filter(([k]) => !FIGURE_FIELDS.has(k)).map(([k]) => k);
+  if (stray.length) {
+    return { error: `「${stray[0]}」不是 figure 的字段（figure 只认 alt / frame / shape / label / arrow / title）` };
+  }
+
+  const title = pick(fields, 'title')[0] || '';
+  const alt = (pick(fields, 'alt')[0] || '').trim();
+  if (alt.length > FIGURE_ALT_MAX) {
+    return { error: `alt 太长了（≤${FIGURE_ALT_MAX} 字）：它是一句话，不是一段讲解` };
+  }
+
+  // frame：画布多大，坐标就按这个尺寸写。不写默认 320x180（一块内联界面的常见宽度）。
+  let W = 320;
+  let H = 180;
+  const rawFrame = pick(fields, 'frame');
+  if (rawFrame.length > 1) return { error: 'frame 只写一行（宽x高）' };
+  if (rawFrame.length) {
+    const m = /^(\d{2,4})\s*[x×*]\s*(\d{2,4})$/i.exec(rawFrame[0].trim());
+    const ok = m && Number(m[1]) >= FIGURE_W_MIN && Number(m[1]) <= FIGURE_W_MAX &&
+      Number(m[2]) >= FIGURE_H_MIN && Number(m[2]) <= FIGURE_H_MAX;
+    if (!ok) {
+      return {
+        error: `frame「${rawFrame[0]}」不合法（要写成 宽x高，宽 ${FIGURE_W_MIN}–${FIGURE_W_MAX}、高 ${FIGURE_H_MIN}–${FIGURE_H_MAX}）`,
+      };
+    }
+    W = Number(m[1]);
+    H = Number(m[2]);
+  }
+
+  // 流里那一行还没写完（`shape: 机翼 | po`）不算写坏：这一行先不长，已写出的照常上台。
+  // 终态再撞就是真写坏了——当场退回原文并点名，不把半张图当成一张图。
+  const soft = (why) => (partial ? null : { error: why });
+  const shapes = [];
+  const labels = [];
+  const arrows = [];
+  const names = new Set();
+
+  for (const raw of pick(fields, 'shape')) {
+    const parts = String(raw).split('|').map((s) => s.trim());
+    if (parts.length < 3 || parts.length > 4) {
+      const e = soft(`shape「${String(raw).slice(0, 32)}」要写成「名字 | 类型 | 几何」（样式可省）`);
+      if (e) return e;
+      continue;
+    }
+    const [name, typeRaw, geom] = parts;
+    const style = (parts[3] || 'soft').trim();
+    const type = typeRaw.toLowerCase();
+    if (!name) { const e = soft('有一个 shape 的名字是空的'); if (e) return e; continue; }
+    if (name.length > FIGURE_NAME_MAX) { const e = soft(`shape 的名字「${name}」太长了（≤${FIGURE_NAME_MAX} 字）`); if (e) return e; continue; }
+    if (names.has(name)) { const e = soft(`「${name}」写了两遍：shape 的身份是名字`); if (e) return e; continue; }
+    if (!FIGURE_TYPES.includes(type)) {
+      const e = soft(`「${name}」的类型「${typeRaw}」不认得（只认 ${FIGURE_TYPES.join(' / ')}）`);
+      if (e) return e;
+      continue;
+    }
+    if (!FIGURE_STYLES.includes(style)) {
+      const e = soft(`「${name}」的样式「${style}」不认得（只认 ${FIGURE_STYLES.join(' / ')}）`);
+      if (e) return e;
+      continue;
+    }
+    const out = (what) => soft(`「${name}」的${what}落在图框外（frame 是 ${W}x${H}，坐标从 0 开始）`);
+    let el = null;
+    if (type === 'rect' || type === 'circle' || type === 'ellipse' || type === 'line') {
+      const nums = geom.split(/[\s,]+/).filter(Boolean).map(figCoord);
+      const need = type === 'circle' ? 3 : 4;
+      if (nums.length !== need || nums.some((n) => n === null)) {
+        const shapeHint = {
+          rect: 'x,y,宽,高', circle: '圆心x,圆心y,半径', ellipse: '圆心x,圆心y,横半径,纵半径', line: 'x1,y1,x2,y2',
+        }[type];
+        const e = soft(`「${name}」的 ${type} 要写成「${shapeHint}」（都是数，用逗号隔开）`);
+        if (e) return e;
+        continue;
+      }
+      if (type === 'rect') {
+        const [x, y, w, h] = nums;
+        if (w <= 0 || h <= 0) { const e = soft(`「${name}」的宽高要是正数`); if (e) return e; continue; }
+        if (!figInFrame(x, y, W, H) || !figInFrame(x + w, y + h, W, H)) { const e = out('矩形'); if (e) return e; continue; }
+        el = ['rect', `x="${figNum(x)}" y="${figNum(y)}" width="${figNum(w)}" height="${figNum(h)}" rx="4"`];
+      } else if (type === 'circle') {
+        const [x, y, r] = nums;
+        if (r <= 0) { const e = soft(`「${name}」的半径要是正数`); if (e) return e; continue; }
+        if (!figInFrame(x - r, y - r, W, H) || !figInFrame(x + r, y + r, W, H)) { const e = out('圆'); if (e) return e; continue; }
+        el = ['circle', `cx="${figNum(x)}" cy="${figNum(y)}" r="${figNum(r)}"`];
+      } else if (type === 'ellipse') {
+        const [x, y, rx, ry] = nums;
+        if (rx <= 0 || ry <= 0) { const e = soft(`「${name}」的两个半径都要是正数`); if (e) return e; continue; }
+        if (!figInFrame(x - rx, y - ry, W, H) || !figInFrame(x + rx, y + ry, W, H)) { const e = out('椭圆'); if (e) return e; continue; }
+        el = ['ellipse', `cx="${figNum(x)}" cy="${figNum(y)}" rx="${figNum(rx)}" ry="${figNum(ry)}"`];
+      } else {
+        const [x1, y1, x2, y2] = nums;
+        if (!figInFrame(x1, y1, W, H) || !figInFrame(x2, y2, W, H)) { const e = out('线段'); if (e) return e; continue; }
+        el = ['line', `x1="${figNum(x1)}" y1="${figNum(y1)}" x2="${figNum(x2)}" y2="${figNum(y2)}"`];
+      }
+    } else if (type === 'polyline' || type === 'polygon') {
+      const pts = geom.split(/\s+/).filter(Boolean).map(figPoint);
+      if (pts.some((p) => !p) || pts.length < (type === 'polygon' ? 3 : 2)) {
+        const e = soft(`「${name}」的 ${type} 要写成「x,y x,y x,y」（${type === 'polygon' ? '至少三个点' : '至少两个点'}，点之间用空格隔开）`);
+        if (e) return e;
+        continue;
+      }
+      if (pts.some((p) => !figInFrame(p.x, p.y, W, H))) { const e = out('顶点'); if (e) return e; continue; }
+      el = [type, `points="${pts.map((p) => `${figNum(p.x)},${figNum(p.y)}`).join(' ')}"`];
+    } else {
+      const r = figurePath(geom, W, H);
+      if (r.error) { const e = soft(`「${name}」的 path 没编出来：${r.error}`); if (e) return e; continue; }
+      el = ['path', `d="${r.d}"`];
+    }
+    names.add(name);
+    // 名字进 <title>：悬停能看到，读屏拿到的是整张图的 alt——两层，各说各的那一层。
+    shapes.push(`<${el[0]} class="${figureClass(type, style)}" ${el[1]}><title>${escapeHtml(name)}</title></${el[0]}>`);
+  }
+
+  for (const raw of pick(fields, 'label')) {
+    const parts = String(raw).split('|').map((s) => s.trim());
+    if (parts.length < 2 || parts.length > 3) {
+      const e = soft(`label「${String(raw).slice(0, 32)}」要写成「文字 | x,y」或「文字 | x,y | 对齐」`);
+      if (e) return e;
+      continue;
+    }
+    const [text, pos, align = 'middle'] = parts;
+    if (!text) { const e = soft('有一个 label 的文字是空的'); if (e) return e; continue; }
+    if (text.length > FIGURE_LABEL_MAX) { const e = soft(`标签「${text.slice(0, 12)}…」太长了（≤${FIGURE_LABEL_MAX} 字）`); if (e) return e; continue; }
+    const p = figPoint(pos);
+    if (!p || !figInFrame(p.x, p.y, W, H)) { const e = soft(`标签「${text}」的位置「${pos}」不是图框里的「x,y」`); if (e) return e; continue; }
+    if (!['start', 'middle', 'end'].includes(align)) { const e = soft(`标签「${text}」的对齐只认 start / middle / end`); if (e) return e; continue; }
+    labels.push({ text, x: p.x, y: p.y, align });
+  }
+
+  for (const raw of pick(fields, 'arrow')) {
+    const [geom, ...rest] = String(raw).split('|').map((s) => s.trim());
+    const label = rest.join(' ').trim();
+    const halves = geom.split('>').map((s) => s.trim());
+    const from = halves.length === 2 ? figPoint(halves[0]) : null;
+    const to = halves.length === 2 ? figPoint(halves[1]) : null;
+    if (!from || !to) {
+      const e = soft(`arrow「${String(raw).slice(0, 32)}」要写成「x1,y1 > x2,y2」（标签可省，写在 | 后面）`);
+      if (e) return e;
+      continue;
+    }
+    if (!figInFrame(from.x, from.y, W, H) || !figInFrame(to.x, to.y, W, H)) {
+      const e = soft(`arrow「${geom}」的端点落在图框外（frame 是 ${W}x${H}）`);
+      if (e) return e;
+      continue;
+    }
+    if (label.length > FIGURE_ARROW_LABEL_MAX) { const e = soft(`箭头标签太长了（≤${FIGURE_ARROW_LABEL_MAX} 字）`); if (e) return e; continue; }
+    arrows.push({ from, to, label });
+  }
+
+  if (shapes.length > FIGURE_MAX_SHAPES) {
+    const e = soft(`形状太多了（最多 ${FIGURE_MAX_SHAPES} 个：一张图讲一件事，删到删不动为止）`);
+    if (e) return e;
+  }
+  if (labels.length > FIGURE_MAX_LABELS) {
+    const e = soft(`标签太多了（最多 ${FIGURE_MAX_LABELS} 个）`);
+    if (e) return e;
+  }
+  if (arrows.length > FIGURE_MAX_ARROWS) {
+    const e = soft(`箭头太多了（最多 ${FIGURE_MAX_ARROWS} 条）`);
+    if (e) return e;
+  }
+  if (!shapes.length) {
+    const e = soft('一个 shape 都没有：figure 至少要画出一个形状');
+    if (e) return e;
+    return { html: skeleton('正在把这张图长出来…'), pending: true };
+  }
+  if (!alt && !partial) {
+    return { error: '没有 alt：写一句"这张图让人看到什么"——写不出来，就说明这张图还不该画' };
+  }
+
+  // 箭头 marker 的 id 由内容决定：同一张图重画仍是同一个 marker，两张图不会撞 id。
+  const markerId = `ui-fig-arrow-${hashText(`${alt}\n${rawFrame.join()}\n${pick(fields, 'shape').join('\n')}`)}`;
+  const arrowEls = arrows
+    .map((a) => {
+      const midX = (a.from.x + a.to.x) / 2;
+      const midY = (a.from.y + a.to.y) / 2;
+      return (
+        `<line class="ui-fig-arrow" x1="${figNum(a.from.x)}" y1="${figNum(a.from.y)}" ` +
+        `x2="${figNum(a.to.x)}" y2="${figNum(a.to.y)}" marker-end="url(#${markerId})"/>` +
+        (a.label ? `<text class="ui-fig-arrow-label" x="${figNum(midX)}" y="${figNum(midY - 6)}" text-anchor="middle">${escapeHtml(a.label)}</text>` : '')
+      );
+    })
+    .join('');
+  const labelEls = labels.map((l) => figureLabelEl(l.text, l.x, l.y, l.align, W)).join('');
+
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const aria = alt || '这张图还在长';
+  const svg =
+    `<svg class="ui-figure" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">` +
+    `<title>${escapeHtml(aria)}</title>` +
+    `<defs><marker id="${markerId}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+    `<path class="ui-fig-arrow-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>` +
+    shapes.join('') + arrowEls + labelEls +
+    `</svg>`;
+  return { html: `${cap}${svg}`, shape: 'figure', pending: partial || undefined };
+}
+
+/** 类型的开放形状不填色（折线围起来的"里面"不是内容的一部分）。 */
+function figureClass(type, style) {
+  const open = type === 'line' || type === 'polyline' || type === 'path';
+  return `ui-fig-shape${open ? ' ui-fig-open' : ''}${style === 'soft' ? '' : ` is-${style}`}`;
+}
+
+/** figure 的专属词写在别的档 = 语义词写错档：不许静默吞（与 stop / node / table 同一把尺）。 */
+function figureWords(fields) {
+  return pick(fields, 'shape').length > 0 || pick(fields, 'label').length > 0 ||
+    pick(fields, 'arrow').length > 0 || pick(fields, 'frame').length > 0 || pick(fields, 'alt').length > 0;
+}
+const FIGURE_ONLY = 'shape / label / arrow / frame / alt 只配 figure（把形状与构造画出来，别的档没有"几何"这回事）';
+
 // ── 分段探索 ─────────────────────────────────────────────────────────────
 /**
  * explore（第三十三轮，学 IUI 官方旗舰演示「Select a system to explore its role」——
@@ -1506,6 +1970,7 @@ function compileExplore(fields) {
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -1583,6 +2048,7 @@ function compileGame(fields) {
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -1682,6 +2148,7 @@ function compileWalkthrough(fields) {
   }
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const title = pick(fields, 'title')[0] || '';
   const handoff = pick(fields, 'handoff')[0] || '';
   if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
@@ -2085,6 +2552,7 @@ function compileSuggest(fields) {
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const picks = pick(fields, 'pick').map((s) => s.trim()).filter(Boolean);
   if (!picks.length) return { error: '至少写一行 pick（一句想让学习者接着问的话）' };
   if (picks.length > SUGGEST_MAX) return { error: `最多 ${SUGGEST_MAX} 个分支（多了就是菜单，不是建议）` };
@@ -2199,6 +2667,7 @@ function compileChart(fields) {
   if (canvasWords(fields)) return { error: CANVAS_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const meta = readAssumes(fields);
   if (meta.error) return { error: meta.error };
   const src = readSource(fields);
@@ -2601,6 +3070,7 @@ function compileQuestion(fields) {
   if (walkWords(fields)) return { error: WALK_ONLY };
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
+  if (figureWords(fields)) return { error: FIGURE_ONLY };
   const ids = pick(fields, 'id');
   if (ids.length > 1) return { error: 'id 写了两遍' };
   if (!ids.length) return { error: '提问要有一个 id（服务端按它收作答，缺了没人接得住）' };
@@ -2668,7 +3138,7 @@ function compileQuestion(fields) {
 /** question 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
 const QUESTION_FIELDS = new Set(['id', 'question', 'header', 'option', 'multiSelect', 'allowText', 'conceptId']);
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, figure: compileFigure, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
 
 /**
  * 稳定键（第六十五轮，学 Intelligent UI 的 "native, streamable components" 那一手）：

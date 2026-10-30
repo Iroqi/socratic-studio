@@ -4086,6 +4086,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     form: ['id: f1', 'field: 金额 | number | 120', 'field: 人数 | number | 3', 'compute: 每人 = 金额 / 人数'],
     calculator: ['id: k1', 'param: 人数 | 3 | 1 | 20', 'param: 金额 | 120 | 0 | 1000', 'formula: 每人 = 金额 / 人数'],
     diagram: ['id: d1', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙'],
+    figure: ['alt: 甲乙两块并排', 'shape: 甲 | rect | 10,10,60,40', 'shape: 乙 | circle | 200,60,20'],
     explore: ['id: e1', 'tab: 基础', 'tab: 进阶'],
     chart: ['type: line', 'series: 一月 = 1,2', 'series: 二月 = 3,4'],
     suggest: ['pick: 再举个例子', 'pick: 换一个'],
@@ -7520,6 +7521,132 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   ui57.resetUiState();
   ui57.setSceneParams({});
   check('这一节无异常', errors.length === errsBefore57, errors.slice(errsBefore57).join(' | '));
+}
+
+// ─── 58. figure：把形状与构造画出来（第六十八轮，学 IUI 组件库里"把概念画出来"那一手）
+// 十七档里此前没有"自由几何"：diagram 是节点与连线的网、map 是示意位置、chart 是数据、
+// canvas 是整页。artifact.md §6 写着"结构 / 流程 / 因果 → 内联 SVG"，可内联这一层没有
+// 承接它的档。这一档收的是**声明的几何**，不是模型的 markup：类型、坐标、路径命令全部
+// 过词法，path 的 d 由解析器重新生成；alt 是编译期门槛（写不出"这张图让人看到什么"就不画）。
+{
+  console.log('\n58. figure（自由几何：模型写坐标、宿主生成 SVG；alt 是门槛）');
+  const errsBefore58 = errors.length;
+  const ui58 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const compile58 = (lines, partial) => ui58.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const deg58 = (lines) => ui58.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  const wing = [
+    'kind: figure',
+    'title: 机翼为什么产生升力',
+    'alt: 上表面气流更快、压力更低，合力的向上分量就是升力',
+    'frame: 320x180',
+    'shape: 机翼 | polygon | 40,140 140,140 175,92 70,92 | solid',
+    'shape: 上表面气流 | path | M 16,86 Q 70,44 150,56 | hollow',
+    'label: 更快的气流 | 150,36',
+    'arrow: 108,116 > 108,74 | 升力',
+  ];
+  const h58 = compile58(wing).html;
+
+  // 1) 形状：SVG 出来、frame 进 viewBox、读屏名就是 alt
+  check('编译成一张 SVG：viewBox 照 frame、role=img、aria-label 就是 alt',
+    h58.includes('class="ui-figure"') && h58.includes('viewBox="0 0 320 180"') &&
+    h58.includes('role="img"') && h58.includes('aria-label="上表面气流更快、压力更低，合力的向上分量就是升力"'),
+    h58.slice(0, 400));
+  check('title 是可见图注，alt 是读屏那句（两层各说各的）',
+    h58.includes('<p class="ui-cap">机翼为什么产生升力</p>') && h58.includes('<title>上表面气流更快'),
+    h58.slice(0, 260));
+  check('多边形与路径都按声明长出来（样式只有一处变化：solid = 强调）',
+    h58.includes('<polygon class="ui-fig-shape is-solid" points="40,140 140,140 175,92 70,92">') &&
+    h58.includes('<path class="ui-fig-shape ui-fig-open is-hollow" d="M 16 86 Q 70 44 150 56">'),
+    h58.slice(300, 800));
+  check('开放形状不填色（折线与路径围起来的"里面"不是内容的一部分）',
+    h58.includes('ui-fig-open'), h58.slice(300, 700));
+  check('标签落在声明的坐标上、带锚点（长标签收短，全文留在 title）',
+    h58.includes('<text class="ui-fig-label" x="150" y="36" text-anchor="middle"'),
+    h58.slice(600, 900));
+  check('箭头是一条带 marker 的线，标签在中间（方向是内容，不是装饰）',
+    h58.includes('class="ui-fig-arrow"') && h58.includes('marker-end="url(#ui-fig-arrow-') &&
+    h58.includes('class="ui-fig-arrow-label"') && h58.includes('>升力<'),
+    h58.slice(500, 900));
+  check('同一份围栏两次编译一模一样（流里每帧重编，图不能跳来跳去）',
+    compile58(wing).html === h58);
+
+  // 2) 几何校验：越出词法就退回原文并点名，绝不"画个大概"
+  check('没有 alt 不编（写不出"这张图让人看到什么"，就说明它还不该画）',
+    deg58(['kind: figure', 'shape: a | rect | 10,10,40,30']).includes('没有 alt'),
+    deg58(['kind: figure', 'shape: a | rect | 10,10,40,30']));
+  check('不认得的类型点名说清楚（只认七种）',
+    deg58(['kind: figure', 'alt: x', 'shape: a | blob | 10,10']).includes('不认得'),
+    deg58(['kind: figure', 'alt: x', 'shape: a | blob | 10,10']));
+  check('坐标落在图框外当场退回（不裁、不猜、不缩小）',
+    deg58(['kind: figure', 'alt: x', 'shape: a | circle | 10,10,40']).includes('落在图框外'),
+    deg58(['kind: figure', 'alt: x', 'shape: a | circle | 10,10,40']));
+  check('frame 写坏了说清楚范围（宽 160–640、高 100–480）',
+    deg58(['kind: figure', 'alt: x', 'frame: 40x20', 'shape: a | rect | 1,1,2,2']).includes('frame'),
+    deg58(['kind: figure', 'alt: x', 'frame: 40x20', 'shape: a | rect | 1,1,2,2']));
+  check('path 不认弧线 A：说清只认哪几条命令',
+    /弧线|不认得/.test(deg58(['kind: figure', 'alt: x', 'shape: a | path | M 10 10 A 20 20 0 0 1 40 40'])),
+    deg58(['kind: figure', 'alt: x', 'shape: a | path | M 10 10 A 20 20 0 0 1 40 40']));
+  check('path 不以 M 开头不编（先落笔再画）',
+    deg58(['kind: figure', 'alt: x', 'shape: a | path | L 10 10']).includes('要以 M 开头'),
+    deg58(['kind: figure', 'alt: x', 'shape: a | path | L 10 10']));
+  check('相对命令也算得出同样的绝对坐标（m/l 与 M/L 一条词法）',
+    compile58(['kind: figure', 'alt: x', 'shape: a | path | m 10 10 l 20 0 l 0 20 z']).html.includes('d="M 10 10 L 30 10 L 30 30 Z"'),
+    compile58(['kind: figure', 'alt: x', 'shape: a | path | m 10 10 l 20 0 l 0 20 z']).html.slice(0, 400));
+  check('同一个名字写两遍不编（shape 的身份是名字）',
+    deg58(['kind: figure', 'alt: x', 'shape: a | rect | 0,0,10,10', 'shape: a | rect | 20,20,10,10']).includes('写了两遍'),
+    deg58(['kind: figure', 'alt: x', 'shape: a | rect | 0,0,10,10', 'shape: a | rect | 20,20,10,10']));
+
+  // 3) 静态：没有 id、没有 data-*、不进 UI_STATEFUL（图里没有"他做过什么"）
+  check('figure 不写 id（静态图没有要在界面上留下的状态）',
+    deg58(['kind: figure', 'alt: x', 'id: f1', 'shape: a | rect | 0,0,10,10']).includes('不写 id'),
+    deg58(['kind: figure', 'alt: x', 'id: f1', 'shape: a | rect | 0,0,10,10']));
+  check('编译出的 DOM 里一个 data-ui-* 都没有（状态这条线根本没接到这一档）',
+    !/data-ui-/.test(h58));
+  check('figure 不在 UI_STATEFUL 里（静态形状没有"他做过什么"这回事）',
+    !ui58.UI_STATEFUL.includes('figure'));
+
+  // 4) 写错档：几何词写进别的档 = 语义词写错档，不许静默吞
+  check('shape 写在 steps 里被点名（别的档没有"几何"这回事）',
+    deg58(['kind: steps', 'step: 一', 'shape: 甲 | rect | 0,0,10,10']).includes('只配 figure'),
+    deg58(['kind: steps', 'step: 一', 'shape: 甲 | rect | 0,0,10,10']));
+  check('shape 写在 map 里也被点名（地点不是形状：谁在哪儿用 stop）',
+    deg58(['kind: map', 'stop: 甲 | 10,10', 'shape: 乙 | rect | 0,0,10,10']).includes('只配 figure'),
+    deg58(['kind: map', 'stop: 甲 | 10,10', 'shape: 乙 | rect | 0,0,10,10']));
+  check('arrow 写在 form 里也被点名（表单没有要画的箭头）',
+    deg58(['kind: form', 'id: f1', 'field: 名字 | text', 'arrow: 0,0 > 10,10']).includes('只配 figure'),
+    deg58(['kind: form', 'id: f1', 'field: 名字 | text', 'arrow: 0,0 > 10,10']));
+  check('node / edge 写在 figure 里也被点名（谁连着谁用 diagram）',
+    deg58(['kind: figure', 'alt: x', 'node: 甲', 'edge: 甲 -> 乙']).includes('diagram'),
+    deg58(['kind: figure', 'alt: x', 'node: 甲', 'edge: 甲 -> 乙']));
+
+  // 5) 流里那一路：没闭合 ≠ 写坏了
+  const p58 = compile58(['kind: figure', 'frame: 320x180', 'shape: 机翼 | polygon | 40,140 140,140 175,92 70,92', 'shape: 气流 | po'], true);
+  check('流里有一行只写到类型：已写出的形状照常上台，摆 pending 不报错',
+    p58.pending === true && !p58.degraded && p58.html.includes('ui-figure') && p58.html.includes('机翼'),
+    String(p58.degraded || p58.html).slice(0, 300));
+  check('流里还没有 alt：先用一句中性读屏名顶着，收尾再要',
+    p58.html.includes('aria-label="这张图还在长"'), p58.html.slice(0, 220));
+  const p58b = compile58(['kind: figure', 'shape: a | rect | 0,0,10,10', 'shape: 机翼 | po'], false);
+  check('同样的半行到终态就是硬错（渐进是流里的宽容，不是终态的松绑）',
+    Boolean(p58b.degraded) && p58b.degraded.includes('shape'), String(p58b.degraded));
+
+  // 6) XSS：几何是声明的，文字照旧转义——图里也长不出脚本
+  const x58 = compile58(['kind: figure', 'alt: <img src=x onerror=alert(1)>', 'label: 甲"><script>x</script> | 10,10']).html;
+  check('alt 与标签里的标签被转义（属性位也跑不掉）',
+    !x58.includes('<img') && !x58.includes('<script') && x58.includes('&lt;img'), x58.slice(0, 500));
+  const y58 = compile58(['kind: figure', 'alt: a" onload="alert(1)', 'shape: a | rect | 0,0,10,10']).html;
+  check('alt 里的引号挤不出事件处理器', y58.includes('&quot;') && !y58.includes('onload="alert'), y58.slice(0, 300));
+
+  // 7) deck：figure 是可拼块（一张图 + 一段步骤）
+  const d58 = compile58(['kind: deck', 'title: 杠杆', 'part: figure',
+    '  alt: 支点在中间，力臂更长的一侧更省力',
+    '  shape: 杠杆 | line | 20,90,300,90 | solid',
+    '  shape: 支点 | polygon | 148,90 160,108 136,108',
+    'part: steps', '  step: 先找支点', '  step: 再量力臂']).html;
+  check('deck 里能拼 figure（与 steps 并排，各走自己那一档）',
+    d58.includes('ui-figure') && d58.includes('ui-steps') && d58.includes('ui-deck'), d58.slice(0, 400));
+
+  check('这一节无异常', errors.length === errsBefore58, errors.slice(errsBefore58).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
