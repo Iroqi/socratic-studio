@@ -22,7 +22,7 @@
 import { escapeHtml } from './escape.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'deck', 'question', 'canvas'];
+export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -42,8 +42,9 @@ export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'met
  * walkthrough 第三十六轮："走到哪一步"就是状态（一次只露一步，逐步走完一个问题）。
  * form 第四十四轮："填进去的值"就是状态（学习者的数/话放进界面，按 id 续着）。
  * map 第四十七轮："点开看了哪个点"就是状态（点位落在示意框里，点一个看它的那句话）。
+ * arrange 第六十六轮："他排成什么顺序 / 分进哪一栏"就是状态（亲手摆，按 id 续着）。
  */
-export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map'];
+export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map', 'arrange'];
 
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
@@ -1733,6 +1734,202 @@ function compileWalkthrough(fields) {
   return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'walkthrough' };
 }
 
+// ── 亲手摆（第六十六轮）──────────────────────────────────────────────────
+/**
+ * arrange（第六十六轮，学 Intelligent UI 的 "interactive experiences / direct
+ * manipulation" 那一面，不学"界面替学习者判定"）：让学习者亲手摆一组东西——
+ * 排先后（mode: order）或分进几栏（mode: bucket）。此前十六档把"点 / 滑 / 勾 / 填 /
+ * 走"都做全了，唯独没有"摆"：规则一直写着"排序、分桶表达不了，退回让他用自己的话产出"。
+ * 这一档补的就是那条缝。
+ *
+ * **界面里没有答案键**（Invariant 4 第 ③ 条在结构上的版本）：
+ *   · order 的初始顺序就是围栏里 item 的书写顺序——模型必须**故意打乱**，别按正确顺序写；
+ *     正确的先后属于教学内容，留在对话里判；
+ *   · bucket 的条目一律先落在「待分」，bucket 行只写栏名，语法上**没有**"哪条该进哪栏"
+ *     的位置。
+ * 状态按 id 续：order 记现在的顺序，place 记每条在哪一栏；两者都只记"他摆成什么样"，
+ * 不记"摆对没"。handoff 把当前摆法机械地拼回对话（与其它交互档同一把尺，不自动发）。
+ */
+const ARRANGE_MIN_ITEMS = 2;
+const ARRANGE_MAX_ITEMS = 8;
+const ARRANGE_ITEM_MAX = 40;
+const ARRANGE_MIN_BUCKETS = 2;
+const ARRANGE_MAX_BUCKETS = 4;
+const ARRANGE_BUCKET_MAX = 12;
+const ARRANGE_FIELDS = new Set(['id', 'mode', 'title', 'item', 'bucket', 'handoff']);
+const ARRANGE_FIELDS_TEXT = 'id / mode / title / item / bucket / handoff';
+
+/** 排序的显示顺序：宿主记下的顺序里仍存在的项按原顺序，新写的项按围栏顺序接在后面。 */
+export function mergeArrangeOrder(state, items) {
+  const list = Array.isArray(items) ? items : [];
+  const stored = Array.isArray(state?.order) ? state.order : [];
+  const seen = new Set();
+  const out = [];
+  for (const name of stored) {
+    if (list.includes(name) && !seen.has(name)) {
+      out.push(name);
+      seen.add(name);
+    }
+  }
+  for (const name of list) {
+    if (!seen.has(name)) {
+      out.push(name);
+      seen.add(name);
+    }
+  }
+  return out;
+}
+
+function compileArrange(fields, lines, partial) {
+  const ids = pick(fields, 'id');
+  if (ids.length > 1) return { error: 'id 写了两遍' };
+  const id = ids[0] || '';
+  const modes = pick(fields, 'mode');
+  if (modes.length > 1) return { error: 'mode 写了两遍' };
+  const modeRaw = (modes[0] || '').trim();
+  const mode = modeRaw.toLowerCase();
+  const items = pick(fields, 'item').map((s) => s.trim());
+  const buckets = pick(fields, 'bucket').map((s) => s.trim());
+  const title = pick(fields, 'title')[0] || '';
+  const handoff = pick(fields, 'handoff')[0] || '';
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+
+  // 流里还没写出 mode：这一帧不知道是排序还是分栏，只摆占位（与半行 stop 同一路）。
+  if (!mode) {
+    if (partial) return { html: skeleton('正在把这个界面长出来…'), pending: true };
+    return { error: 'arrange 要写 mode: order（调顺序）或 mode: bucket（分栏）' };
+  }
+  if (mode !== 'order' && mode !== 'bucket') return { error: `mode 只认 order / bucket（「${modeRaw}」不是）` };
+  const bad = fields.filter(([k]) => !ARRANGE_FIELDS.has(k)).map(([k]) => k);
+  if (bad.length) return { error: `「${bad[0]}」不是 arrange 的字段（arrange 只认 ${ARRANGE_FIELDS_TEXT}）` };
+  if (!items.length) {
+    if (partial) return { html: skeleton('正在把这个界面长出来…'), pending: true };
+    return { error: '一行 item 都没有（至少两条才摆得起来）' };
+  }
+  if (items.some((s) => !s)) return { error: '有一行 item 是空的' };
+  if (items.some((s) => s.length > ARRANGE_ITEM_MAX)) return { error: `item 太长了（≤${ARRANGE_ITEM_MAX} 字）` };
+  if (new Set(items).size !== items.length) return { error: '两条 item 一模一样：摆的是哪一条说不清' };
+  if (items.length > ARRANGE_MAX_ITEMS) return { error: `条目太多了（最多 ${ARRANGE_MAX_ITEMS} 条，多了是清单不是排列）` };
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
+  if (mode === 'order') {
+    if (buckets.length) return { error: 'bucket 只配 mode: bucket（排序没有分栏）' };
+  } else {
+    if (buckets.some((s) => !s)) return { error: '有一行 bucket 是空的（栏名不能空着）' };
+    if (buckets.some((s) => s.length > ARRANGE_BUCKET_MAX)) return { error: `栏名太长了（≤${ARRANGE_BUCKET_MAX} 字）` };
+    if (new Set(buckets).size !== buckets.length) return { error: '两栏同名：分进哪一栏说不清' };
+    if (!partial && buckets.length < ARRANGE_MIN_BUCKETS) return { error: `分栏至少要 ${ARRANGE_MIN_BUCKETS} 栏（一栏分不出东西）` };
+    if (buckets.length > ARRANGE_MAX_BUCKETS) return { error: `栏太多了（最多 ${ARRANGE_MAX_BUCKETS} 栏，多了是目录不是分栏）` };
+  }
+  if (items.length < ARRANGE_MIN_ITEMS && !partial) return { error: `至少 ${ARRANGE_MIN_ITEMS} 条 item（一条没得摆）` };
+
+  if (!id) {
+    if (!partial) return { error: '这个排列没有 id：摆好的样子没地方续' };
+    // 流里还没写出 id：先把已写出的条目长出来，控件禁用（与 checklist / form 同一手法）。
+    if (mode === 'order') {
+      const rows = items
+        .map(
+          (name) =>
+            `<li class="ui-arrange-item"><span class="ui-arrange-text">${cell(name)}</span>` +
+            `<span class="ui-arrange-move">` +
+            `<button type="button" class="ui-arrange-btn" disabled aria-label="还在生成，先不能往上移">↑</button>` +
+            `<button type="button" class="ui-arrange-btn" disabled aria-label="还在生成，先不能往下移">↓</button>` +
+            `</span></li>`,
+        )
+        .join('');
+      return {
+        html: `${cap}<div class="ui-arrange ui-arrange-order">` +
+          `<ol class="ui-arrange-list" role="group" aria-label="用上移、下移按钮调顺序（还在生成，先不能调）">${rows}</ol>` +
+          `<p class="ui-arrange-hint">正在生成，稍后可以调顺序</p></div>`,
+        shape: 'arrange',
+        pending: true,
+      };
+    }
+    const chips = items
+      .map((name) => `<button type="button" class="ui-chip" disabled aria-pressed="false">${cell(name)}</button>`)
+      .join('');
+    const bins = buckets
+      .map(
+        (name) =>
+          `<div class="ui-bin"><div class="ui-bin-head"><span class="ui-bin-name">${cell(name)}</span>` +
+          `<button type="button" class="ui-arrange-place" disabled>放这里</button></div>` +
+          `<div class="ui-bin-items"></div></div>`,
+      )
+      .join('');
+    return {
+      html: `${cap}<div class="ui-arrange ui-arrange-bucket">` +
+        `<div class="ui-arrange-tray" role="group" aria-label="还没分的条目">${chips}</div>` +
+        `<div class="ui-arrange-bins">${bins}</div>` +
+        `<p class="ui-arrange-hint">正在生成，稍后可以分栏</p></div>`,
+      shape: 'arrange',
+      pending: true,
+    };
+  }
+
+  const stored = readUiState(id)?.state || {};
+  const spec = { mode, items, buckets, title };
+
+  if (mode === 'order') {
+    const order = mergeArrangeOrder(stored, items);
+    // partial 不落 order：流里那一半随时会重排，写下来会把刚排好的顺序冲掉；
+    // 终态才把陈旧条目滤掉（同一件界面改版时，删掉的行不该继续占着位置）。
+    writeUiState(id, 'arrange', partial ? { ...stored, uiKind: 'arrange' } : { uiKind: 'arrange', order }, spec);
+    const groupAria = title
+      ? `排列「${title}」：用上移、下移按钮调顺序`
+      : '用上移、下移按钮调顺序';
+    const rows = order
+      .map((name, i) => {
+        const item = escapeHtml(name);
+        const up = i === 0 ? ' disabled' : '';
+        const down = i === order.length - 1 ? ' disabled' : '';
+        return (
+          `<li class="ui-arrange-item" data-ui-item="${item}">` +
+          `<span class="ui-arrange-text">${cell(name)}</span>` +
+          `<span class="ui-arrange-move">` +
+          `<button type="button" class="ui-arrange-btn" data-ui-arrange-move="${escapeHtml(id)}" data-ui-item="${item}" data-ui-dir="up" aria-label="把「${item}」往上移"${up}>↑</button>` +
+          `<button type="button" class="ui-arrange-btn" data-ui-arrange-move="${escapeHtml(id)}" data-ui-item="${item}" data-ui-dir="down" aria-label="把「${item}」往下移"${down}>↓</button>` +
+          `</span></li>`
+        );
+      })
+      .join('');
+    const body =
+      `<div class="ui-arrange ui-arrange-order" data-ui-arrange="${escapeHtml(id)}">` +
+      `<ol class="ui-arrange-list" role="group" aria-label="${escapeHtml(groupAria)}">${rows}</ol>` +
+      `<p class="ui-arrange-hint">用 ↑ ↓ 调顺序；这里只记你排的样子，不判对错</p>` +
+      `</div>`;
+    return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'arrange' };
+  }
+
+  const valid = new Set(buckets);
+  const place = {};
+  const saved = stored.place && typeof stored.place === 'object' ? stored.place : {};
+  for (const name of items) {
+    const bin = saved[name];
+    if (valid.has(bin)) place[name] = bin;
+  }
+  writeUiState(id, 'arrange', partial ? { ...stored, uiKind: 'arrange' } : { uiKind: 'arrange', place }, spec);
+  const chip = (name) =>
+    `<button type="button" class="ui-chip" data-ui-arrange-item="${escapeHtml(id)}" data-ui-item="${escapeHtml(name)}" aria-pressed="false">${cell(name)}</button>`;
+  const tray = items.filter((name) => !place[name]).map(chip).join('');
+  const bins = buckets
+    .map((bucket) => {
+      const binItems = items.filter((name) => place[name] === bucket).map(chip).join('');
+      return (
+        `<div class="ui-bin">` +
+        `<div class="ui-bin-head"><span class="ui-bin-name">${cell(bucket)}</span>` +
+        `<button type="button" class="ui-arrange-place" data-ui-arrange-bin="${escapeHtml(id)}" data-ui-bucket="${escapeHtml(bucket)}" aria-label="把选中的那条放进「${escapeHtml(bucket)}」">放这里</button></div>` +
+        `<div class="ui-bin-items">${binItems}</div></div>`
+      );
+    })
+    .join('');
+  const body =
+    `<div class="ui-arrange ui-arrange-bucket" data-ui-arrange="${escapeHtml(id)}">` +
+    `<div class="ui-arrange-tray" role="group" aria-label="还没分的条目">${tray}</div>` +
+    `<div class="ui-arrange-bins">${bins}</div>` +
+    `<p class="ui-arrange-hint">点一条拿起，再点一栏的「放这里」；栏里的条目点一下收回待分。只记你分的样子，不判对错</p>` +
+    `</div>`;
+  return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'arrange' };
+}
+
 // ── 组合 ────────────────────────────────────────────────────────────────
 /**
  * deck（第三十七轮，学 IUI 官方博文 "leaving the model room to decide how the pieces
@@ -2471,7 +2668,7 @@ function compileQuestion(fields) {
 /** question 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
 const QUESTION_FIELDS = new Set(['id', 'question', 'header', 'option', 'multiSelect', 'allowText', 'conceptId']);
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
 
 /**
  * 稳定键（第六十五轮，学 Intelligent UI 的 "native, streamable components" 那一手）：

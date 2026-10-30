@@ -991,6 +991,56 @@ html, body {
 .ui-walk-prev:disabled:hover,
 .ui-walk-next:disabled:hover { color: var(--ink-3); border-color: var(--border); }
 
+/* arrange（第六十六轮，学 IUI 的 "interactive experiences / direct manipulation" 那一面，
+   不学"界面替学习者判定"）：亲手排顺序 / 分栏。两道形状共用一套笔画——底色只借量过的
+   --surface-2，强调只借 --accent / --accent-ink；拿起只换描边与字色、不引新背景，
+   disabled 只降一级墨色，零新十六进制。 */
+.ui-arrange { margin: 0 0 1em; }
+.ui-arrange-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ui-arrange-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 9px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.ui-arrange-text { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
+.ui-arrange-move { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+.ui-arrange-btn,
+.ui-arrange-place {
+  padding: 3px 9px; background: var(--surface-2); color: var(--ink-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.ui-arrange-btn:hover,
+.ui-arrange-place:hover { color: var(--ink); border-color: var(--ink-2); }
+.ui-arrange-btn:focus-visible,
+.ui-arrange-place:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-arrange-btn:disabled { color: var(--ink-3); border-color: var(--border); cursor: default; }
+.ui-arrange-tray {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  min-height: 38px; padding: 8px; margin: 0 0 8px;
+  background: var(--surface-2); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
+}
+.ui-chip {
+  padding: 5px 11px; background: var(--surface-2); color: var(--ink-2);
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.ui-chip:hover { color: var(--ink); border-color: var(--ink-2); }
+.ui-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-chip.ui-chip-active { color: var(--accent-ink); border-color: var(--accent); }
+.ui-arrange-bins { display: flex; flex-wrap: wrap; gap: 8px; }
+.ui-bin {
+  flex: 1 1 150px; min-width: 0; display: flex; flex-direction: column;
+  background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+}
+.ui-bin-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 6px 8px; border-bottom: 1px solid var(--border);
+}
+.ui-bin-name { font-size: 12.5px; font-weight: 620; color: var(--ink); overflow-wrap: anywhere; }
+.ui-bin-items { display: flex; flex-wrap: wrap; gap: 5px; min-height: 40px; padding: 8px; align-content: flex-start; }
+.ui-arrange-hint { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-3); }
+
 /* deck（第三十七轮，学 IUI 的 "the model room to decide how the pieces fit together"）：
    一个界面由几块拼成。容器只做纵向堆叠与块间分隔（子块各自的样式照旧走自己那一档），
    分隔线只借量过的 --border、间距沿用块内那尺，零新十六进制。
@@ -1171,6 +1221,8 @@ html, body {
   /* deck 的并排（layout: columns）在窄屏退回堆叠：两块左右并排谁也看不清（第三十八轮） */
   .ui-deck-columns { flex-direction: column; }
   .ui-deck-columns > .ui-deck-part + .ui-deck-part { border-top: 1px dashed var(--border); border-left: 0; padding-top: 12px; padding-left: 0; }
+  /* arrange 的栏在窄屏也退回堆叠：并排的窄栏放不下一条稍长的 item（第六十六轮） */
+  .ui-arrange-bins { flex-direction: column; }
 }
 
 /* 组合器 */

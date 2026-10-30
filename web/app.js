@@ -18,6 +18,7 @@ import {
   uiEval,
   uiWork,
   uiOutText,
+  mergeArrangeOrder,
 } from './ui-compile.js';
 
 // ─────────────────────────────────────────────── 基础工具
@@ -3098,12 +3099,17 @@ function takeUiTrace(id, state) {
  * 内联界面的状态回报。`prev` 是这次动作之前的那份 state（各档 handler 手里都有）。
  * 落定时多带一个 trace；拖动中的帧只带 state。两条用的是同一条 artifact-message 通道
  * （不新开一条：读回与注入只认这一处）。
+ *
+ * `traceOverride`（第六十六轮）：排顺序 / 分栏的一步不是"某个字段从 3 变成 2"，
+ * 而是"苹果从第 3 位挪到第 2 位 / 从待分放进水果"——由 handler 机械地写好这一步，
+ * 传进来；自动那本账照旧要清（不清的话下一次动作会拿旧起点记一步假账）。
  */
-function forwardUiState(id, state, prev) {
+function forwardUiState(id, state, prev, traceOverride) {
   const body = { type: 'state', state };
   noteUiRun(id, state, prev);
   if (uiSettling) {
-    const trace = takeUiTrace(id, state);
+    const auto = takeUiTrace(id, state);
+    const trace = traceOverride === undefined ? auto : traceOverride;
     if (trace) body.trace = trace;
   }
   forwardArtifactMessage(body, uiStateKey(id));
@@ -3266,6 +3272,23 @@ function handoffUiState(id) {
       : visited.length
         ? `我在「${name}」里走到过：${visited[visited.length - 1]}`
         : `我在「${name}」里还没有开始走`;
+  } else if (kind === 'arrange') {
+    // 只报"他摆成什么样"：顺序照抄，分栏按栏点名——不写"对不对"，也不猜他还没摆完的意图。
+    const fit = (v) => { const t = String(v ?? ''); return t.length > 20 ? `${t.slice(0, 19)}…` : t; };
+    const order = Array.isArray(rec.state?.order) ? rec.state.order : null;
+    const place = rec.state?.place && typeof rec.state.place === 'object' ? rec.state.place : null;
+    if (order && order.length) {
+      text = `我在「${name}」里把顺序排成了：${order.map(fit).join(' → ')}`;
+    } else if (place) {
+      const groups = {};
+      for (const [item, bin] of Object.entries(place)) (groups[bin] ||= []).push(item);
+      const bins = Object.keys(groups);
+      text = bins.length
+        ? `我在「${name}」里把这几条分了栏：${bins.map((b) => `${b}：${groups[b].slice(0, 5).map(fit).join('、')}${groups[b].length > 5 ? '…' : ''}`).join('；')}`
+        : `我在「${name}」里还没有分过`;
+    } else {
+      text = `我在「${name}」里还没有动过`;
+    }
   } else {
     return false;
   }
@@ -3495,6 +3518,89 @@ function handleUiDeskEvent(evt) {
   if (walkNextId) return advanceUiWalk(walkNextId, 1);
   const walkPrevId = node.dataset?.uiWalkPrev;
   if (walkPrevId) return advanceUiWalk(walkPrevId, -1);
+
+  // arrange（第六十六轮，学 IUI 的 "direct manipulation" 那一面，不学替学习者判定）：
+  // 亲手排顺序 / 分栏。order：↑ ↓ 交换相邻两条；bucket：点一条拿起，点一栏放下，
+  // 栏里的条目点一下收回待分。拿起只是这一次手势的高亮（住在 DOM 的 aria-pressed 上），
+  // 不写状态、不报回；放下 / 移动 / 收回才是一步，由宿主把这一步机械地写成 trace。
+  const arrMoveId = node.dataset?.uiArrangeMove;
+  if (arrMoveId) {
+    const item = node.dataset?.uiItem;
+    const dir = node.dataset?.uiDir;
+    if (!item || (dir !== 'up' && dir !== 'down')) return { handled: false };
+    const rec = readUiState(arrMoveId);
+    if (!rec?.spec || rec.spec.mode !== 'order') return { handled: false };
+    const order = mergeArrangeOrder(rec.state, rec.spec.items || []);
+    const i = order.indexOf(item);
+    const j = dir === 'up' ? i - 1 : i + 1;
+    if (i < 0 || j < 0 || j >= order.length) return { handled: false }; // disabled 的按钮正常走不到
+    const next = order.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    const state = { uiKind: 'arrange', order: next };
+    setUiValues(arrMoveId, 'arrange', state);
+    repaintUiArrange(arrMoveId);
+    forwardUiState(arrMoveId, state, rec.state, [{ k: item, from: `第 ${i + 1} 位`, to: `第 ${j + 1} 位` }]);
+    announce(`「${item}」移到第 ${j + 1} 位`);
+    return { handled: true, kind: 'arrange', id: arrMoveId };
+  }
+
+  const arrPickId = node.dataset?.uiArrangeItem;
+  if (arrPickId) {
+    const item = node.dataset?.uiItem;
+    const block = node.closest ? node.closest('.ui-arrange') : null;
+    if (!item || !block) return { handled: false };
+    const rec = readUiState(arrPickId);
+    if (!rec?.spec || rec.spec.mode !== 'bucket') return { handled: false };
+    if (!(rec.spec.items || []).includes(item)) return { handled: false };
+    const was = rec.state?.place?.[item] || null;
+    if (was) {
+      // 栏里的条目：收回待分，并顺手拿在手里——下一步点另一栏就是"改放那里"。
+      const place = { ...(rec.state?.place || {}) };
+      delete place[item];
+      const state = { uiKind: 'arrange', place };
+      setUiValues(arrPickId, 'arrange', state);
+      repaintUiArrange(arrPickId, item);
+      forwardUiState(arrPickId, state, rec.state, [{ k: item, from: was, to: '待分' }]);
+      announce(`「${item}」收回待分，再点一栏可以放进那里`);
+      return { handled: true, kind: 'arrange', id: arrPickId, picked: item };
+    }
+    const on = node.getAttribute?.('aria-pressed') === 'true';
+    for (const chip of [...(block.querySelectorAll?.('.ui-chip') || [])]) {
+      chip.classList?.toggle?.('ui-chip-active', false);
+      chip.setAttribute?.('aria-pressed', 'false');
+    }
+    if (!on) {
+      node.classList?.add?.('ui-chip-active');
+      node.setAttribute?.('aria-pressed', 'true');
+      announce(`已拿起「${item}」，再点一栏的「放这里」`);
+    }
+    return { handled: true, kind: 'arrange', id: arrPickId, picked: on ? null : item };
+  }
+
+  const arrBinId = node.dataset?.uiArrangeBin;
+  if (arrBinId) {
+    const bucket = node.dataset?.uiBucket;
+    if (!bucket) return { handled: false };
+    const rec = readUiState(arrBinId);
+    if (!rec?.spec || rec.spec.mode !== 'bucket') return { handled: false };
+    if (!(rec.spec.buckets || []).includes(bucket)) return { handled: false };
+    const block = node.closest ? node.closest('.ui-arrange') : null;
+    const picked = block
+      ? [...(block.querySelectorAll?.('.ui-chip') || [])].find((c) => c.getAttribute?.('aria-pressed') === 'true')
+      : null;
+    const item = picked?.dataset?.uiItem || null;
+    if (!item) {
+      toast('先点一条拿起，再点「放这里」');
+      return { handled: true, kind: 'arrange', id: arrBinId };
+    }
+    const prev = rec.state?.place?.[item] || null;
+    const state = { uiKind: 'arrange', place: { ...(rec.state?.place || {}), [item]: bucket } };
+    setUiValues(arrBinId, 'arrange', state);
+    repaintUiArrange(arrBinId, null);
+    forwardUiState(arrBinId, state, rec.state, [{ k: item, from: prev || '待分', to: bucket }]);
+    announce(`「${item}」放进「${bucket}」`);
+    return { handled: true, kind: 'arrange', id: arrBinId };
+  }
 
   // diagram 的节点是 <g> 不是 input：点击落在 rect/text 上，dataset 在 g 上，
   // 得靠 closest 找回节点与它所属的图。点击 = 切换高亮（再点同一节点取消），
@@ -3753,6 +3859,71 @@ function repaintUiWalk(id) {
     const next = block.querySelector?.('.ui-walk-next');
     if (prev) prev.disabled = idx <= 0;
     if (next) next.disabled = idx >= moves.length - 1;
+  }
+}
+
+/** 台面上现在的内联排列（按 class 找、再比对 dataset 值：id 是模型写的，不能拼进选择器）。 */
+function uiArrangeNodes(id) {
+  return [...(document.querySelectorAll?.('.ui-arrange') || [])].filter((n) => n.dataset?.uiArrange === id);
+}
+
+/**
+ * arrange（第六十六轮）：亲手摆的东西不整块重画——重画会把正在手里的那一条放下，
+ * 正文那一刷也会跳滚动（与 explore / game / walkthrough 同一把尺）。
+ * order：按 state.order 重排列表里的行，并按位置更新 ↑ ↓ 的 disabled；
+ * bucket：把每条 chip 挪进它该在的栏（或待分），并把"拿起了哪条"落到 aria-pressed 上。
+ * picked 只活在这一次重画里：拿起是手势，不是学情，不写 artifact_state、不进经过。
+ */
+function repaintUiArrange(id, picked = null) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return;
+  const items = rec.spec.items || [];
+  for (const block of uiArrangeNodes(id)) {
+    if (rec.spec.mode === 'order') {
+      const list = block.querySelector?.('.ui-arrange-list');
+      if (!list) continue;
+      const order = mergeArrangeOrder(rec.state, items);
+      const rowOf = new Map();
+      for (const row of [...(list.querySelectorAll?.('.ui-arrange-item') || [])]) {
+        const name = row.dataset?.uiItem;
+        if (name) rowOf.set(name, row);
+      }
+      for (const name of order) {
+        const row = rowOf.get(name);
+        if (row) list.append(row);
+      }
+      order.forEach((name, i) => {
+        const row = rowOf.get(name);
+        if (!row) return;
+        for (const btn of [...(row.querySelectorAll?.('.ui-arrange-btn') || [])]) {
+          if (btn.dataset?.uiDir === 'up') btn.disabled = i === 0;
+          else if (btn.dataset?.uiDir === 'down') btn.disabled = i === order.length - 1;
+        }
+      });
+      continue;
+    }
+    const tray = block.querySelector?.('.ui-arrange-tray');
+    const binOf = new Map();
+    for (const bin of [...(block.querySelectorAll?.('.ui-bin') || [])]) {
+      const name = bin.querySelector?.('.ui-bin-name')?.textContent;
+      const slot = bin.querySelector?.('.ui-bin-items');
+      if (name && slot) binOf.set(name, slot);
+    }
+    const place = rec.state?.place && typeof rec.state.place === 'object' ? rec.state.place : {};
+    const chipOf = new Map();
+    for (const chip of [...(block.querySelectorAll?.('.ui-chip') || [])]) {
+      const name = chip.dataset?.uiItem;
+      if (name) chipOf.set(name, chip);
+    }
+    for (const name of items) {
+      const chip = chipOf.get(name);
+      if (!chip) continue;
+      const target = place[name] ? binOf.get(place[name]) : tray;
+      if (target) target.append(chip);
+      const on = picked === name;
+      chip.classList?.toggle?.('ui-chip-active', on);
+      chip.setAttribute?.('aria-pressed', on ? 'true' : 'false');
+    }
   }
 }
 
@@ -4133,7 +4304,7 @@ function renderUiStatePanel(body) {
   );
   if (!entries.length) return;
   const fit = (s) => { const t = String(s); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
-  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍', map: '地图' };
+  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍', map: '地图', arrange: '排列' };
   const card = el('div', 'ui-state-card');
   card.append(el('div', 'panel-section-title', '这局动过的界面'));
   for (const [key, s] of entries) {
@@ -4181,6 +4352,21 @@ function renderUiStatePanel(body) {
       if (visited.length) card.append(el('div', 'state-note', `· 走到过：${visited.map(fit).join('、')}`));
       if (s.last) card.append(el('div', 'state-note', `· 现在停在：${fit(s.last)}`));
       if (!visited.length && !s.last) card.append(el('div', 'state-note', '· 还没开始走'));
+    } else if (s.uiKind === 'arrange') {
+      if (Array.isArray(s.order) && s.order.length) {
+        card.append(el('div', 'state-note', `· 现在顺序：${s.order.map(fit).join(' → ')}`));
+      } else if (s.place && typeof s.place === 'object') {
+        const groups = {};
+        for (const [item, bin] of Object.entries(s.place)) (groups[bin] ||= []).push(item);
+        const bins = Object.keys(groups);
+        if (bins.length) {
+          for (const b of bins) card.append(el('div', 'state-note', `· ${fit(b)}：${groups[b].map(fit).join('、')}`));
+        } else {
+          card.append(el('div', 'state-note', '· 还没有分过'));
+        }
+      } else {
+        card.append(el('div', 'state-note', '· 还没有动过'));
+      }
     }
     // 第六十一轮：经过（落定的那几步）。快照上面刚说完"现在停在哪"，这里说"怎么走到这"——
     // 学习者自己回看得到，老师下一轮也读得到（同一份 progress.ui_trace，不是一个新账本）。

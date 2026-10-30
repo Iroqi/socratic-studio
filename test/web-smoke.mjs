@@ -129,8 +129,10 @@ class Node {
       if (!child) continue;
       // 与真实 DOM 对齐：把已有父节点的节点 append 过来 = 先从旧父节点摘下再挂上，
       // 不是"两处同时存在"。归档题目（题目卡 → 往期题目）就是走这条路。
+      // 同一父节点上的 append 也是"挪到末尾"（第六十六轮 arrange 靠这一手重排列表），
+      // 不是再插一份——桩若在这里多留一份，重排与"复制了一行"在测试里分不出来。
       const old = child.parentNode;
-      if (old && old !== this) {
+      if (old) {
         const i = old._kids.indexOf(child);
         if (i >= 0) old._kids.splice(i, 1);
       }
@@ -4074,7 +4076,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const calcBare = compile(['calculator', 'id: feast2', 'unit: 公斤', 'param: 人数 | 8 | 2 | 20', 'formula: 肉 = 人数 * 0.4']).html;
   check('首行裸 calculator 同样能编（裸档名是通用行为，不只 question）',
     calcBare.includes('data-ui-param="人数"'), calcBare.slice(0, 120));
-  // 第五十九轮起：十六档 × 裸档名 / kind: 前缀 双写法全编（防"某档悄悄渲染不出来"回归）
+  // 第五十九轮起：十七档 × 裸档名 / kind: 前缀 双写法全编（防"某档悄悄渲染不出来"回归）
   const ALL_KINDS = {
     compare: ['row: 甲 | 乙', 'row: 丙 | 丁'],
     steps: ['step: 打开仓库', 'step: 提交一次'],
@@ -4089,6 +4091,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     suggest: ['pick: 再举个例子', 'pick: 换一个'],
     game: ['id: g1', 'try: 甲', 'try: 乙', 'outcome: 甲 = 你选了甲', 'outcome: 乙 = 你选了乙'],
     walkthrough: ['id: w1', 'move: 先这样 = 到 A', 'move: 再那样 = 到 B'],
+    arrange: ['id: a1', 'mode: order', 'item: 乙', 'item: 甲'],
     deck: ['part: compare', '  row: a | b', '  row: c | d', 'part: steps', '  step: 一', '  step: 二'],
     question: ['id: q1', 'question: 你要选哪条？', 'option: 甲 — 说明'],
     canvas: ['title: 一页纸', 'html: <p>正文</p>'],
@@ -7090,6 +7093,433 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   ui65.resetUiState();
   ui65.setSceneParams({});
   check('这一节无异常', errors.length === errsBefore65, errors.slice(errsBefore65).join(' | '));
+}
+
+// ─── 57. arrange：亲手排顺序 / 分栏（第六十六轮，学 IUI 的 "direct manipulation" 那一面，
+// 不学替学习者判定）。十七档里此前没有一档管"先后"与"归类"：compare 逐项对上、timeline 按
+// 时间排、checklist 勾选，但没有"把这些条排成你觉得的顺序 / 分进几栏"。arrange 是第十个
+// 交互档，也是唯一**语法上没有答案键**的交互档：order 的初始顺序就是围栏顺序（模型故意
+// 打乱写），bucket 只有栏名、每一条一律从「待分」起步，归属只能由学习者的手写出来。
+// 状态 {order} / {place} 落盘续回、动手就地重排/挪栏、经过由宿主机械写成"第 3 位 → 第 2 位"、
+// handoff 拼句、右栏回看卡可见；判分一个字都不在这儿发生。
+{
+  console.log('\n57. arrange（亲手排顺序 / 分栏：摆成什么样就记什么样，判分留在对话里）');
+  const errsBefore57 = errors.length;
+  const ui57 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { state: st57, handleUiDeskEvent: handle57, renderDeskState: renderPanel57 } = appModule.__hooks;
+  const compile57 = (lines, partial) => ui57.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const deg57 = (lines) => ui57.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  ui57.resetUiState();
+  const input57 = doc.getElementById('input');
+  const boxBefore57 = input57.value;
+  const seq = ['kind: arrange', 'id: s1', 'mode: order', 'title: 一天里的三段',
+    'item: 凌晨', 'item: 清晨', 'item: 正午', 'handoff: 把排好的顺序带回对话'];
+
+  // 1) order：一列可调的行，每行两条原生按钮（↑ 在第一行禁用、↓ 在最后一行禁用）
+  const c57 = compile57(seq).html;
+  check('order 编译成一列可调的行（每行两条原生按钮，各带方向与条目）',
+    c57.includes('<div class="ui-arrange ui-arrange-order" data-ui-arrange="s1">') &&
+    (c57.match(/class="ui-arrange-item"/g) || []).length === 3 &&
+    (c57.match(/data-ui-arrange-move="s1"/g) || []).length === 6 &&
+    c57.includes('data-ui-dir="up"') && c57.includes('data-ui-dir="down"'), c57.slice(0, 500));
+  check('首行的 ↑ 与末行的 ↓ 禁用（走到头就是走到头，不拿错误提示当反馈）',
+    c57.includes('aria-label="把「凌晨」往上移" disabled') &&
+    c57.includes('aria-label="把「正午」往下移" disabled') &&
+    !c57.includes('aria-label="把「正午」往上移" disabled'), c57.slice(0, 600));
+  check('每行有可读的名字（不是只有一排箭头）',
+    c57.includes('<span class="ui-arrange-text">凌晨</span>'), c57.slice(0, 400));
+  check('hint 说清"只记摆的样子，不判对错"',
+    c57.includes('用 ↑ ↓ 调顺序；这里只记你排的样子，不判对错'), c57.slice(-400));
+  check('可交回（handoff 按钮带 id）', c57.includes('class="ui-handoff" data-ui-handoff="s1"'), c57.slice(-300));
+  check('标题帽在列表上方', c57.includes('<p class="ui-cap">一天里的三段</p>') &&
+    c57.indexOf('ui-cap') < c57.indexOf('ui-arrange-list'), c57.slice(0, 200));
+  check('原生按钮、没有 draggable（拖拽要另造一条键盘路，↑ ↓ 让两条路合成一条）',
+    !c57.includes('draggable') && c57.includes('<button type="button" class="ui-arrange-btn"'), c57.slice(0, 300));
+  check('输出里没有答案键 / 判分词（Invariant 4：界面只记摆法）',
+    !/答案|score|percent|mastery|correct|incorrect/.test(c57), c57.slice(0, 300));
+  check('spec 存下了 mode 与三条（点击时按这份认条目）',
+    ui57.readUiState('s1')?.spec?.mode === 'order' && ui57.readUiState('s1')?.spec?.items?.length === 3,
+    JSON.stringify(ui57.readUiState('s1')?.spec));
+  check('order 两次编译一模一样（流式每帧重编，不许跳）', compile57(seq).html === c57, '');
+
+  // 2) 续回：上次排的顺序重画就还在；围栏改版后陈旧条目被滤掉、新条目接在后面
+  ui57.setUiValues('s1', 'arrange', { uiKind: 'arrange', order: ['正午', '凌晨', '清晨'] });
+  const c57b = compile57(seq).html;
+  check('重画续回上次排的顺序（第一行就是上次排第一的）',
+    c57b.indexOf('data-ui-item="正午"') < c57b.indexOf('data-ui-item="凌晨"') &&
+    c57b.indexOf('data-ui-item="凌晨"') < c57b.indexOf('data-ui-item="清晨"'), c57b.slice(0, 400));
+  check('续回后两端禁用跟着新位置重算（正午在上、清晨在下）',
+    c57b.includes('aria-label="把「正午」往上移" disabled') &&
+    c57b.includes('aria-label="把「清晨」往下移" disabled'), c57b.slice(0, 600));
+  ui57.setUiValues('s1', 'arrange', { uiKind: 'arrange', order: ['不存在', '清晨'] });
+  const c57c = compile57(seq).html;
+  check('围栏改版后陈旧条目被滤掉、新条目按围栏顺序接在后面',
+    !c57c.includes('不存在') &&
+    c57c.indexOf('data-ui-item="清晨"') < c57c.indexOf('data-ui-item="凌晨"') &&
+    c57c.indexOf('data-ui-item="凌晨"') < c57c.indexOf('data-ui-item="正午"'), c57c.slice(0, 500));
+  check('终态落盘的那份也同步滤掉（不把陈旧条目一直留在状态里）',
+    JSON.stringify(ui57.readUiState('s1').state.order) === JSON.stringify(['清晨', '凌晨', '正午']),
+    JSON.stringify(ui57.readUiState('s1').state.order));
+  ui57.resetUiState();
+
+  // 3) mergeArrangeOrder：旧顺序里还活着的按旧顺序，新条目按围栏顺序接在后面
+  check('mergeArrangeOrder 保旧顺序、滤陈旧、接新条目',
+    JSON.stringify(ui57.mergeArrangeOrder({ order: ['乙', '不存在', '甲'] }, ['甲', '乙', '丙'])) === JSON.stringify(['乙', '甲', '丙']), '');
+  check('状态里同一项写了两遍也只出现一次',
+    JSON.stringify(ui57.mergeArrangeOrder({ order: ['乙', '乙', '甲'] }, ['甲', '乙'])) === JSON.stringify(['乙', '甲']), '');
+  check('没有状态时就是围栏顺序',
+    JSON.stringify(ui57.mergeArrangeOrder(null, ['甲', '乙'])) === JSON.stringify(['甲', '乙']), '');
+
+  // 4) order 降级路径：不静默吞——每条都点名为什么不行
+  check('没有 id：终态掉回原文并点名（摆好的样子没地方续）',
+    deg57(['kind: arrange', 'mode: order', 'item: 甲', 'item: 乙']).includes('这个排列没有 id'), '');
+  check('没有 mode：掉回原文并点名（不知道是排还是分）',
+    deg57(['kind: arrange', 'id: a', 'item: 甲', 'item: 乙']).includes('要写 mode: order'), '');
+  check('mode 写错：掉回原文并点名（只认 order / bucket）',
+    deg57(['kind: arrange', 'id: a', 'mode: 拖拽', 'item: 甲', 'item: 乙']).includes('只认 order / bucket'), '');
+  check('id 写了两遍：掉回原文并点名',
+    deg57(['kind: arrange', 'id: a', 'id: b', 'mode: order', 'item: 甲', 'item: 乙']).includes('id 写了两遍'), '');
+  check('mode 写了两遍：掉回原文并点名',
+    deg57(['kind: arrange', 'id: a', 'mode: order', 'mode: bucket', 'item: 甲', 'item: 乙']).includes('mode 写了两遍'), '');
+  check('一行 item 都没有：掉回原文并点名',
+    deg57(['kind: arrange', 'id: a', 'mode: order']).includes('一行 item 都没有'), '');
+  check('只有一条：掉回原文并点名（一条没得排）',
+    deg57(['kind: arrange', 'id: a', 'mode: order', 'item: 甲']).includes('至少 2 条 item'), '');
+  check('超过 8 条：掉回原文并点名（再多是清单不是排列）',
+    deg57(['kind: arrange', 'id: a', 'mode: order', ...Array.from({ length: 9 }, (_, i) => `item: 第${i}条`)]).includes('条目太多了'), '');
+  check('两条一模一样：掉回原文并点名（摆的是哪一条说不清）',
+    deg57(['kind: arrange', 'id: a', 'mode: order', 'item: 甲', 'item: 甲']).includes('两条 item 一模一样'), '');
+  check('item 后面什么都没写：围栏解析这一层就掉回原文并点名（空值不成字段行）',
+    deg57(['kind: arrange', 'id: a', 'mode: order', 'item: 甲', 'item:']).includes('不是「字段: 值」'), '');
+  check('条目太长：掉回原文并点名',
+    deg57(['kind: arrange', 'id: a', 'mode: order', 'item: ' + '甲'.repeat(41), 'item: 乙']).includes('item 太长了'), '');
+  check('order 里写 bucket：掉回原文并点名（排序没有分栏）',
+    deg57(['kind: arrange', 'id: a', 'mode: order', 'item: 甲', 'item: 乙', 'bucket: 水果']).includes('bucket 只配 mode: bucket'), '');
+  check('arrange 里写 step：掉回原文并点名',
+    deg57(['kind: arrange', 'id: a', 'mode: order', 'item: 甲', 'item: 乙', 'step: 一步']).includes('不是 arrange 的字段'), '');
+  check('handoff 超 24 字：掉回原文并点名',
+    deg57(['kind: arrange', 'id: a', 'mode: order', 'item: 甲', 'item: 乙', 'handoff: ' + '发'.repeat(25)]).includes('24'), '');
+
+  // 5) bucket：一条待分带 + 几栏，每条一枚可点的 chip；语法上没有"哪条该进哪栏"
+  const jar = ['kind: arrange', 'id: b1', 'mode: bucket', 'title: 厨房里的东西',
+    'item: 苹果', 'item: 香蕉', 'item: 菜刀', 'item: 砧板',
+    'bucket: 水果', 'bucket: 厨具', 'handoff: 把分好的栏带回对话'];
+  const cb57 = compile57(jar).html;
+  check('bucket 编译成一条待分带 + 两栏（四条各一枚 chip）',
+    cb57.includes('<div class="ui-arrange ui-arrange-bucket" data-ui-arrange="b1">') &&
+    cb57.includes('<div class="ui-arrange-tray" role="group" aria-label="还没分的条目">') &&
+    (cb57.match(/class="ui-chip"/g) || []).length === 4 &&
+    (cb57.match(/data-ui-arrange-item="b1"/g) || []).length === 4, cb57.slice(0, 500));
+  check('每条开局都在待分、没被选中（归属只能由学习者的手写出来）',
+    !cb57.includes('ui-chip-active') && (cb57.match(/aria-pressed="false"/g) || []).length === 4, cb57.slice(0, 600));
+  check('两栏各有名字与「放这里」（真正的 button，键盘天然可达）',
+    (cb57.match(/<div class="ui-bin">/g) || []).length === 2 &&
+    cb57.includes('<span class="ui-bin-name">水果</span>') &&
+    cb57.includes('data-ui-arrange-bin="b1" data-ui-bucket="水果"') &&
+    cb57.includes('aria-label="把选中的那条放进「水果」"'), cb57.slice(0, 700));
+  check('分栏 hint 说清怎么用 + 不判对错',
+    cb57.includes('点一条拿起，再点一栏的「放这里」；栏里的条目点一下收回待分。只记你分的样子，不判对错'), '');
+  check('bucket 输出里没有答案键 / 判分词',
+    !/答案|score|percent|mastery|correct|incorrect/.test(cb57), cb57.slice(0, 300));
+  check('spec 存下了两条栏名与四条（点击时要认栏与条目）',
+    ui57.readUiState('b1')?.spec?.buckets?.length === 2 && ui57.readUiState('b1')?.spec?.items?.length === 4,
+    JSON.stringify(ui57.readUiState('b1')?.spec));
+  check('bucket 两次编译一模一样', compile57(jar).html === cb57, '');
+
+  // 6) bucket 续回：分过的条目重画就还在那一栏；改版后陈旧栏名/条目被滤掉
+  ui57.setUiValues('b1', 'arrange', { uiKind: 'arrange', place: { 苹果: '水果', 砧板: '厨具' } });
+  const cb57b = compile57(jar).html;
+  const trayPart57 = cb57b.split('<div class="ui-arrange-tray"')[1].split('<div class="ui-arrange-bins"')[0];
+  const binsPart57 = cb57b.split('<div class="ui-arrange-bins"')[1];
+  const fruitBin57 = binsPart57.split('<div class="ui-bin">')[1];
+  const toolBin57 = binsPart57.split('<div class="ui-bin">')[2];
+  check('重画续回上次的分栏：苹果不在待分里、在水果那栏的槽里',
+    !trayPart57.includes('data-ui-item="苹果"') &&
+    fruitBin57.includes('data-ui-item="苹果"') && !fruitBin57.includes('data-ui-item="香蕉"'), binsPart57.slice(0, 500));
+  check('另一条也续回（砧板在厨具）', toolBin57.includes('data-ui-item="砧板"'), toolBin57.slice(0, 300));
+  ui57.setUiValues('b1', 'arrange', { uiKind: 'arrange', place: { 苹果: '水果', 香蕉: '不存在', 菜刀: '不存在' } });
+  compile57(jar);
+  const place57 = ui57.readUiState('b1').state.place;
+  check('改版后陈旧栏名 / 条目被滤掉（状态里只留这版还认的）',
+    place57.苹果 === '水果' && !('香蕉' in place57) && !('菜刀' in place57), JSON.stringify(place57));
+  ui57.resetUiState();
+
+  // 7) bucket 降级路径
+  check('bucket 只有一栏：掉回原文并点名（一栏分不出东西）',
+    deg57(['kind: arrange', 'id: a', 'mode: bucket', 'item: 甲', 'item: 乙', 'bucket: 一']).includes('分栏至少要 2 栏'), '');
+  check('bucket 超过 4 栏：掉回原文并点名（多了是目录不是分栏）',
+    deg57(['kind: arrange', 'id: a', 'mode: bucket', 'item: 甲', 'item: 乙',
+      'bucket: 一', 'bucket: 二', 'bucket: 三', 'bucket: 四', 'bucket: 五']).includes('栏太多了'), '');
+  check('两栏同名：掉回原文并点名',
+    deg57(['kind: arrange', 'id: a', 'mode: bucket', 'item: 甲', 'item: 乙', 'bucket: 同', 'bucket: 同']).includes('两栏同名'), '');
+  check('bucket 后面什么都没写：围栏解析这一层就掉回原文并点名（空值不成字段行）',
+    deg57(['kind: arrange', 'id: a', 'mode: bucket', 'item: 甲', 'item: 乙', 'bucket: 一', 'bucket:']).includes('不是「字段: 值」'), '');
+  check('栏名太长：掉回原文并点名',
+    deg57(['kind: arrange', 'id: a', 'mode: bucket', 'item: 甲', 'item: 乙', 'bucket: ' + '栏'.repeat(13), 'bucket: 二']).includes('栏名太长了'), '');
+  check('bucket 只有一条 item：掉回原文并点名',
+    deg57(['kind: arrange', 'id: a', 'mode: bucket', 'item: 甲', 'bucket: 一', 'bucket: 二']).includes('至少 2 条 item'), '');
+  check('bucket 没有 item：掉回原文并点名',
+    deg57(['kind: arrange', 'id: a', 'mode: bucket', 'bucket: 一', 'bucket: 二']).includes('一行 item 都没有'), '');
+
+  // 8) 宿主接线 order：↑ ↓ 交换相邻两条，经过由宿主机械写出；边界与不认得的名字一律不响
+  st57.notebook = sampleNotebook();
+  st57.uiReported.clear();
+  const posts57 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const bodies57 = [];
+  const realFetch57 = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (/\/artifact-message$/.test(url)) {
+      try { bodies57.push(JSON.parse(opts.body)); } catch {}
+    }
+    return realFetch57(url, opts);
+  };
+  ui57.resetUiState();
+  compile57(seq);
+  const before57 = posts57();
+  const r57a = handle57({ target: { dataset: { uiArrangeMove: 's1', uiItem: '正午', uiDir: 'up' } } });
+  const orderA57 = ui57.readUiState('s1').state.order;
+  const bodyA57 = bodies57[bodies57.length - 1];
+  check('↑ 被接住（返回是哪一档、哪个排列）',
+    r57a.handled === true && r57a.kind === 'arrange' && r57a.id === 's1', JSON.stringify(r57a));
+  check('相邻两条换了位（正午从第 3 位到第 2 位）',
+    JSON.stringify(orderA57) === JSON.stringify(['凌晨', '正午', '清晨']), JSON.stringify(orderA57));
+  check('状态走 artifact-message 报回（与其它交互档同一条通道）', posts57() === before57 + 1, `posts ${before57} → ${posts57()}`);
+  check('经过由宿主写成"第 3 位 → 第 2 位"（不是字段自动对比）',
+    bodyA57?.trace?.[0]?.k === '正午' && bodyA57.trace[0].from === '第 3 位' && bodyA57.trace[0].to === '第 2 位',
+    JSON.stringify(bodyA57?.trace));
+  check('报回去的 state 里没有判分的位置（只有顺序，没有对错分数）',
+    !/score|percent|correct|incorrect/.test(JSON.stringify(bodyA57?.state)), JSON.stringify(bodyA57?.state));
+  const r57b = handle57({ target: { dataset: { uiArrangeMove: 's1', uiItem: '正午', uiDir: 'down' } } });
+  const bodyB57 = bodies57[bodies57.length - 1];
+  check('↓ 把刚上移的那条放回去，经过是这一步自己的（不背上一笔的起点）',
+    r57b.handled === true &&
+    JSON.stringify(ui57.readUiState('s1').state.order) === JSON.stringify(['凌晨', '清晨', '正午']) &&
+    bodyB57?.trace?.[0]?.from === '第 2 位' && bodyB57?.trace?.[0]?.to === '第 3 位',
+    JSON.stringify(bodyB57?.trace));
+  check('第一行再往上：不响（按钮本来就 disabled，宿主也不猜）',
+    handle57({ target: { dataset: { uiArrangeMove: 's1', uiItem: '凌晨', uiDir: 'up' } } }).handled === false, '');
+  check('最后一行再往下：不响',
+    handle57({ target: { dataset: { uiArrangeMove: 's1', uiItem: '正午', uiDir: 'down' } } }).handled === false, '');
+  check('方向写错：不响',
+    handle57({ target: { dataset: { uiArrangeMove: 's1', uiItem: '清晨', uiDir: 'sideways' } } }).handled === false, '');
+  check('没声明过的条目：不响（不拿没见过的名字去换位）',
+    handle57({ target: { dataset: { uiArrangeMove: 's1', uiItem: '深夜', uiDir: 'up' } } }).handled === false, '');
+  check('不认得的 id：不响（没 spec 就不知道顺序）',
+    handle57({ target: { dataset: { uiArrangeMove: 'nope', uiItem: '凌晨', uiDir: 'up' } } }).handled === false, '');
+
+  // 9) 就地重排：行按新顺序挪位置、两端禁用跟着重算，整块不重画
+  ui57.resetUiState();
+  compile57(seq);
+  const list57 = doc.createElement('ol'); list57.className = 'ui-arrange-list';
+  const mkRow57 = (name) => {
+    const li = doc.createElement('li'); li.className = 'ui-arrange-item'; li.dataset.uiItem = name;
+    const up = doc.createElement('button'); up.className = 'ui-arrange-btn'; up.dataset.uiDir = 'up';
+    const down = doc.createElement('button'); down.className = 'ui-arrange-btn'; down.dataset.uiDir = 'down';
+    li.append(up, down);
+    return { li, up, down };
+  };
+  const rowA57 = mkRow57('凌晨'); const rowB57 = mkRow57('清晨'); const rowC57 = mkRow57('正午');
+  list57.append(rowA57.li, rowB57.li, rowC57.li);
+  const blockO57 = doc.createElement('div');
+  blockO57.className = 'ui-arrange ui-arrange-order'; blockO57.dataset.uiArrange = 's1';
+  blockO57.append(list57);
+  domRoot.append(blockO57);
+  handle57({ target: { dataset: { uiArrangeMove: 's1', uiItem: '正午', uiDir: 'up' } } });
+  check('repaint 就地重排列表（正午挪到第二行，行没有被复制）',
+    list57._kids.map((k) => k.dataset.uiItem).join(',') === '凌晨,正午,清晨', list57._kids.map((k) => k.dataset.uiItem).join(','));
+  check('repaint 按新位置重算两端禁用（凌晨 ↑ 禁用、清晨 ↓ 禁用、正午 ↑ 放开）',
+    rowA57.up.disabled === true && rowB57.down.disabled === true && rowC57.up.disabled === false, '');
+  check('整块没被换掉（重排的是行，不是重画整个界面）',
+    domRoot._kids.includes(blockO57) && list57._kids.length === 3, '');
+  blockO57.remove();
+
+  // 10) 宿主接线 bucket：点一条拿起（只是手势）→ 点一栏放下（这一步才写状态 + 记经过）
+  ui57.resetUiState();
+  compile57(jar);
+  const blockB57 = doc.createElement('div');
+  blockB57.className = 'ui-arrange ui-arrange-bucket'; blockB57.dataset.uiArrange = 'b1';
+  const tray57 = doc.createElement('div'); tray57.className = 'ui-arrange-tray';
+  const binsWrap57 = doc.createElement('div'); binsWrap57.className = 'ui-arrange-bins';
+  const mkChip57 = (name) => {
+    const c = doc.createElement('button'); c.className = 'ui-chip';
+    c.dataset.uiArrangeItem = 'b1'; c.dataset.uiItem = name; c.setAttribute('aria-pressed', 'false');
+    return c;
+  };
+  const apple57 = mkChip57('苹果'); const banana57 = mkChip57('香蕉'); const knife57 = mkChip57('菜刀');
+  tray57.append(apple57, banana57, knife57);
+  const mkBin57 = (name) => {
+    const b = doc.createElement('div'); b.className = 'ui-bin';
+    const head = doc.createElement('div'); head.className = 'ui-bin-head';
+    const title = doc.createElement('span'); title.className = 'ui-bin-name'; title.textContent = name;
+    const place = doc.createElement('button'); place.className = 'ui-arrange-place';
+    place.dataset.uiArrangeBin = 'b1'; place.dataset.uiBucket = name;
+    head.append(title, place);
+    const slot = doc.createElement('div'); slot.className = 'ui-bin-items';
+    b.append(head, slot);
+    return { b, place, slot };
+  };
+  const fruit57 = mkBin57('水果'); const tools57 = mkBin57('厨具');
+  binsWrap57.append(fruit57.b, tools57.b);
+  blockB57.append(tray57, binsWrap57);
+  domRoot.append(blockB57);
+
+  const beforePick57 = posts57();
+  const r57p = handle57({ target: apple57 });
+  check('点一条拿起：接住并说拿的是哪条',
+    r57p.handled === true && r57p.kind === 'arrange' && r57p.picked === '苹果', JSON.stringify(r57p));
+  check('拿起只是手势：不写状态、不报回',
+    posts57() === beforePick57 && !ui57.readUiState('b1').state.place.苹果,
+    JSON.stringify(ui57.readUiState('b1').state));
+  check('拿起落在 DOM 的 aria-pressed 上（手势不是学情）',
+    apple57.getAttribute('aria-pressed') === 'true' && apple57.classList.contains('ui-chip-active'), '');
+  handle57({ target: banana57 });
+  check('再点另一条：手上换人（同一时刻只有一条举着）',
+    apple57.getAttribute('aria-pressed') === 'false' && banana57.getAttribute('aria-pressed') === 'true' &&
+    !apple57.classList.contains('ui-chip-active') && banana57.classList.contains('ui-chip-active'), '');
+  const beforePlace57 = posts57();
+  const r57bin = handle57({ target: fruit57.place });
+  const placeA57 = ui57.readUiState('b1').state.place;
+  const bodyC57 = bodies57[bodies57.length - 1];
+  check('点「放这里」放下：接住', r57bin.handled === true && r57bin.kind === 'arrange', JSON.stringify(r57bin));
+  check('香蕉落进水果栏（state.place）', placeA57.香蕉 === '水果', JSON.stringify(placeA57));
+  check('放下报回一次（拿起不报、放下才报）', posts57() === beforePlace57 + 1, `posts ${beforePlace57} → ${posts57()}`);
+  check('经过：香蕉 待分 → 水果',
+    bodyC57?.trace?.[0]?.k === '香蕉' && bodyC57.trace[0].from === '待分' && bodyC57.trace[0].to === '水果',
+    JSON.stringify(bodyC57?.trace));
+  check('repaint 把 chip 挪进水果栏的槽（待分带里不再有它）',
+    fruit57.slot._kids.includes(banana57) && !tray57._kids.includes(banana57), '');
+  check('放下后不再举着（aria-pressed 归 false）', banana57.getAttribute('aria-pressed') === 'false', '');
+
+  // 11) 栏里的条目点一下收回待分，并随手拿在手上（下一步点另一栏就是"改放那里"）
+  const r57back = handle57({ target: banana57 });
+  const bodyD57 = bodies57[bodies57.length - 1];
+  check('点栏里的条目：收回待分、仍拿在手上',
+    r57back.handled === true && r57back.picked === '香蕉' &&
+    !('香蕉' in ui57.readUiState('b1').state.place) && banana57.getAttribute('aria-pressed') === 'true',
+    JSON.stringify(ui57.readUiState('b1').state));
+  check('收回也记一步：香蕉 水果 → 待分',
+    bodyD57?.trace?.[0]?.from === '水果' && bodyD57.trace[0].to === '待分', JSON.stringify(bodyD57?.trace));
+  check('repaint 把 chip 挪回待分带', tray57._kids.includes(banana57) && !fruit57.slot._kids.includes(banana57), '');
+  handle57({ target: tools57.place });
+  check('拿着它点另一栏：直接改放进厨具',
+    ui57.readUiState('b1').state.place.香蕉 === '厨具' && tools57.slot._kids.includes(banana57), JSON.stringify(ui57.readUiState('b1').state.place));
+
+  // 12) 没拿东西 / 不认得的栏 / 不认得的条目：不猜、不落脏值
+  const boxToast57 = doc.getElementById('toasts');
+  const placeBeforeNoSel57 = JSON.stringify(ui57.readUiState('b1').state.place);
+  const r57ns = handle57({ target: fruit57.place });
+  check('没拿东西就点「放这里」：只提醒先拿一条，不落状态',
+    r57ns.handled === true && JSON.stringify(ui57.readUiState('b1').state.place) === placeBeforeNoSel57 &&
+    [...boxToast57._kids].some((t) => t.textContent === '先点一条拿起，再点「放这里」'),
+    [...boxToast57._kids].map((t) => t.textContent).join(' / '));
+  check('点了没声明的栏：不响（不拿没见过的栏名去拼状态）',
+    handle57({ target: { dataset: { uiArrangeBin: 'b1', uiBucket: '书房' } } }).handled === false, '');
+  check('点了没声明的条目：不响',
+    handle57({ target: { dataset: { uiArrangeItem: 'b1', uiItem: '西葫芦' }, closest: () => blockB57 } }).handled === false, '');
+  check('拿错档的条目（order 里的行当 chip 点）：不响',
+    handle57({ target: { dataset: { uiArrangeItem: 's1', uiItem: '凌晨' }, closest: () => blockB57 } }).handled === false, '');
+  check('bucket 的栏按钮配到 order 的 id：不响',
+    handle57({ target: { dataset: { uiArrangeBin: 's1', uiBucket: '水果' } } }).handled === false, '');
+  blockB57.remove();
+
+  // 13) handoff：把"摆成什么样"机械地拼回对话（不自动发、不判对错）
+  const specB57 = ui57.readUiState('b1')?.spec;
+  ui57.writeUiState('b1', 'arrange', { uiKind: 'arrange', place: { 苹果: '水果', 香蕉: '水果', 菜刀: '厨具' } }, specB57);
+  const r57h1 = handle57({ target: { dataset: { uiHandoff: 'b1' } } });
+  check('bucket 的 handoff 被接住（返回是哪个 id）',
+    r57h1.handled === true && r57h1.kind === 'handoff' && r57h1.id === 'b1', JSON.stringify(r57h1));
+  check('拼句：我在「厨房里的东西」里把这几条分了栏：水果：苹果、香蕉；厨具：菜刀',
+    input57.value === '我在「厨房里的东西」里把这几条分了栏：水果：苹果、香蕉；厨具：菜刀', input57.value);
+  ui57.writeUiState('b1', 'arrange', { uiKind: 'arrange', place: {} }, specB57);
+  handle57({ target: { dataset: { uiHandoff: 'b1' } } });
+  check('一条都没分：照实说还没有分过', input57.value === '我在「厨房里的东西」里还没有分过', input57.value);
+
+  ui57.resetUiState();
+  compile57(seq);
+  ui57.writeUiState('s1', 'arrange', { uiKind: 'arrange', order: ['正午', '凌晨', '清晨'] });
+  const r57h2 = handle57({ target: { dataset: { uiHandoff: 's1' } } });
+  check('order 的 handoff 被接住（返回是哪个 id）',
+    r57h2.handled === true && r57h2.id === 's1', JSON.stringify(r57h2));
+  check('拼句：我在「一天里的三段」里把顺序排成了：正午 → 凌晨 → 清晨',
+    input57.value === '我在「一天里的三段」里把顺序排成了：正午 → 凌晨 → 清晨', input57.value);
+  ui57.writeUiState('s1', 'arrange', { uiKind: 'arrange', order: [] });
+  handle57({ target: { dataset: { uiHandoff: 's1' } } });
+  check('还没动过：照实说还没有动过', input57.value === '我在「一天里的三段」里还没有动过', input57.value);
+  check('拼句里没有判分词（Invariant 4：话里不出对错/分数）',
+    !/score|percent|mastery|correct|incorrect/.test(input57.value), input57.value);
+  input57.value = boxBefore57;
+  globalThis.fetch = realFetch57;
+
+  // 14) 右栏回看卡：arrange 出现在「这局动过的界面」（只出现象：顺序 / 分栏）
+  st57.notebook.progress.artifact_state = {
+    'ui:s1': { uiKind: 'arrange', order: ['正午', '凌晨', '清晨'] },
+    'ui:b1': { uiKind: 'arrange', place: { 苹果: '水果', 菜刀: '厨具' } },
+  };
+  renderPanel57();
+  const notes57 = deepAll(deskBody(), 'ui-state-card').flatMap((c) => deepAll(c, 'state-note').map((n) => n.textContent));
+  check('右栏卡把 order 排进来（只出现象：现在顺序）',
+    notes57.includes('排列「s1」') && notes57.includes('· 现在顺序：正午 → 凌晨 → 清晨'), notes57.join(' / '));
+  check('右栏卡把 bucket 排进来（按栏列条目）',
+    notes57.includes('排列「b1」') && notes57.includes('· 水果：苹果') && notes57.includes('· 厨具：菜刀'), notes57.join(' / '));
+  st57.notebook.progress.artifact_state = {
+    'ui:s2': { uiKind: 'arrange' },
+    'ui:b2': { uiKind: 'arrange', place: {} },
+  };
+  renderPanel57();
+  const notes57b = deepAll(deskBody(), 'ui-state-card').flatMap((c) => deepAll(c, 'state-note').map((n) => n.textContent));
+  check('还没动过 / 还没分过：卡上照实说',
+    notes57b.includes('· 还没有动过') && notes57b.includes('· 还没有分过'), notes57b.join(' / '));
+
+  // 15) 渐进：mode / id 没落时先摆占位或禁用控件；终态缺 id 是硬错
+  const p57a = compile57(['kind: arrange', 'mode: order', 'item: 甲', 'item: 乙'], true);
+  check('流里缺 id：行先长出来、按钮禁用且不带 data-*（点了没处存）',
+    p57a.pending === true && p57a.html.includes('class="ui-arrange-item"') &&
+    p57a.html.includes('disabled') && !p57a.html.includes('data-ui-arrange-move'), p57a.html.slice(0, 300));
+  check('同样的内容闭合后（终态）缺 id 是硬错',
+    deg57(['kind: arrange', 'mode: order', 'item: 甲', 'item: 乙']).includes('没有 id'), '');
+  const p57b = compile57(['kind: arrange', 'id: a', 'item: 甲', 'item: 乙'], true);
+  check('流里还没写 mode：先摆占位（这一帧不知道是排还是分）',
+    p57b.pending === true && p57b.html.includes('ui-skeleton'), p57b.html.slice(0, 300));
+  const p57c = compile57(['kind: arrange', 'mode: bucket', 'item: 甲', 'item: 乙', 'bucket: 一'], true);
+  check('流里缺 id 的 bucket：待分与栏先长出来、控件禁用且不带 data-*',
+    p57c.pending === true && p57c.html.includes('class="ui-chip"') && p57c.html.includes('ui-arrange-place') &&
+    p57c.html.includes('disabled') && !p57c.html.includes('data-ui-arrange-item') && !p57c.html.includes('data-ui-arrange-bin'),
+    p57c.html.slice(0, 500));
+  check('同样的 bucket 闭合后（终态）缺 id 是硬错',
+    deg57(['kind: arrange', 'mode: bucket', 'item: 甲', 'item: 乙', 'bucket: 一', 'bucket: 二']).includes('这个排列没有 id'), '');
+  const p57d = compile57(['kind: arrange', 'id: a', 'mode: order'], true);
+  check('流里一行 item 都还没写：先摆占位', p57d.pending === true && p57d.html.includes('ui-skeleton'), '');
+  const p57e = compile57(['kind: arrange', 'id: a', 'mode: bucket', 'item: 甲', 'bucket: 一'], true);
+  check('流里只写出一栏：照常上台（至少两栏是终态的要求，不是流里的）',
+    p57e.html.includes('ui-bin-name') && !p57e.degraded, String(p57e.degraded || p57e.html).slice(0, 300));
+
+  // 16) XSS：id、条目、栏名照旧转义（引号不能长出脚本）
+  const xss57a = compile57(['kind: arrange', 'id: a" onfocus=alert(1) x="', 'mode: order', 'item: 甲', 'item: 乙'], false).html;
+  check('id 里的引号被转义', xss57a.includes('&quot;'), xss57a.slice(0, 200));
+  const xss57b = compile57(['kind: arrange', 'id: x1', 'mode: order', 'item: 甲"><img src=x onerror=1>', 'item: 乙'], false).html;
+  check('条目里的标签被转义（不能在行里长出脚本）',
+    !xss57b.includes('<img') && xss57b.includes('&lt;img'), xss57b.slice(0, 400));
+  const xss57c = compile57(['kind: arrange', 'id: b" x="', 'mode: bucket', 'item: 甲', 'item: 乙',
+    'bucket: 水" onmouseover="x', 'bucket: 火'], false).html;
+  check('栏名里的引号被转义（不能长进 data-ui-bucket）',
+    xss57c.includes('&quot;') && !xss57c.includes('onmouseover="x'), xss57c.slice(0, 500));
+
+  // 17) deck 组合：arrange 是可拼块（先排顺序 + 一份清单）
+  ui57.resetUiState();
+  const deck57 = ['kind: deck', 'title: 收拾厨房',
+    'part: arrange', '  id: s9', '  mode: order', '  item: 砧板', '  item: 菜刀',
+    'part: checklist', '  id: c9', '  item: 擦桌子'];
+  const dd57 = compile57(deck57).html;
+  check('deck 里能拼 arrange（子块照旧按自己的 id 走）',
+    dd57.includes('data-ui-arrange="s9"') && dd57.includes('data-ui-check="c9"'), dd57.slice(0, 500));
+  const dr57 = handle57({ target: { dataset: { uiArrangeMove: 's9', uiItem: '菜刀', uiDir: 'up' } } });
+  check('deck 内 arrange 子块照旧被接住（按子块自己的 id，走同一条通道）',
+    dr57.handled === true && dr57.kind === 'arrange' && ui57.readUiState('s9')?.state?.order?.[0] === '菜刀',
+    JSON.stringify(dr57));
+
+  ui57.resetUiState();
+  ui57.setSceneParams({});
+  check('这一节无异常', errors.length === errsBefore57, errors.slice(errsBefore57).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

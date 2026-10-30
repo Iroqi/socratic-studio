@@ -32,6 +32,7 @@ const KIND_WORDS = {
   chart: '图表',
   game: '游戏',
   walkthrough: '走一遍',
+  arrange: '排列',
 };
 
 // 模型自己写的键（active / viewed / done …）进 prompt 时换成人话；不认识的键原样摆出来，
@@ -44,6 +45,8 @@ const FIELD_WORDS = {
   active: '停在',
   last: '停在',
   snap: '快照',
+  order: '顺序',
+  place: '分栏',
 };
 
 function scalar(v) {
