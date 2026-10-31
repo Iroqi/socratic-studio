@@ -1331,13 +1331,12 @@ const server = http.createServer(async (req, res) => {
             const fresh = store.getNotebook(id);
             // turn_end 是权威收尾信号；done 保留为同义的终止标记（兼容既有客户端/测试）
             if (terminal === 'done' || terminal === null) {
-              emit({ type: 'done', notebook: fresh, learnerView: fresh.learnerView });
+              emit({ type: 'done', notebook: fresh });
             }
             emit({
               type: 'turn_end',
               outcome: terminal ?? 'done',
               notebook: fresh,
-              learnerView: fresh.learnerView,
             });
           } catch (err) {
             console.error(`[turn ${id}] 收尾失败: ${err?.message}`);

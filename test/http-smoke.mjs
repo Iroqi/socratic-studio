@@ -381,6 +381,10 @@ try {
 
   console.log('\n5. 落盘与恢复');
   const detail = (await jfetch(`${BASE}/api/notebooks/${id}`)).data.notebook;
+  const list = (await jfetch(`${BASE}/api/notebooks`)).data.notebooks;
+  check('列表接口不报学情计数（第七十轮：列表不是成绩单）',
+    !list.some((n) => 'learnerView' in n),
+    JSON.stringify(list.map((n) => Object.keys(n))));
   check('Graph 已落盘（2 个概念）', detail.graph.concepts.length === 2, JSON.stringify(detail.graph.concepts));
   check('依赖关系保留', detail.graph.concepts[1].depends_on[0] === 'variable-scope');
   check('状态推进为 understood', detail.progress.concepts.closures.state === 'understood', JSON.stringify(detail.progress.concepts));
@@ -389,7 +393,13 @@ try {
   const asked = detail.chat.messages.filter((m) => m.questions);
   check('出过的题随消息落盘', asked.length >= 1 && asked[0].questions.length >= 1, JSON.stringify(asked));
   check('题面与作答结果都在', asked[0].questions[0].questionId != null && asked[0].questions[0].answer.selected.length >= 1, JSON.stringify(asked[0].questions[0]));
-  check('学习者视图是文字不是数字', detail.learnerView.counts['已学懂'] === 1, JSON.stringify(detail.learnerView.counts));
+  // 第七十轮：列表不是成绩单。笔记本详情不再带掌握度计数（它只喂过首页那两行数字），
+  // 进度数据里也只有状态词与文字证据，没有数值化学习量字段。
+  check('笔记本里不带掌握度计数（不变量 4：学情只写字）',
+    !('learnerView' in detail), Object.keys(detail).join(','));
+  const progressText = JSON.stringify(detail.progress);
+  check('进度数据里没有数值化学习量字段',
+    !/(mastery_percent|progress_pct|pre_score|post_score|"score"|百分比|进度条|百分制)/.test(progressText), '');
   check('提问已记录到对话流（信号未丢）', events.filter((e) => e.type === 'ask').length === 2);
 
   console.log('\n6. 素材真的送进模型');

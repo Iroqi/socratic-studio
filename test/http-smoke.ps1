@@ -250,7 +250,10 @@ try {
   $asked = @($detail.chat.messages | Where-Object { $_.questions })
   Check '出过的题随消息落盘' (($asked.Count -ge 1) -and ($asked[0].questions.Count -ge 1)) ($asked | ConvertTo-Json -Compress -Depth 6)
   Check '题面与作答结果都在' (($asked[0].questions[0].questionId -ne $null) -and ($asked[0].questions[0].answer.selected.Count -ge 1)) ($asked[0].questions[0] | ConvertTo-Json -Compress -Depth 6)
-  Check '学习者视图是文字不是数字' ($detail.learnerView.counts.'已学懂' -eq 1) ($detail.learnerView.counts | ConvertTo-Json -Compress)
+  # 第七十轮：列表不是成绩单。笔记本详情不再带掌握度计数。
+  Check '笔记本里不带掌握度计数（不变量 4：学情只写字）' (-not $detail.PSObject.Properties.Name.Contains('learnerView')) (($detail.PSObject.Properties.Name) -join ',')
+  $progressText = $detail.progress | ConvertTo-Json -Compress -Depth 8
+  Check '进度数据里没有数值化学习量字段' ($progressText -notmatch 'mastery_percent|progress_pct|pre_score|post_score|"score"|百分比|进度条|百分制')
   Check '提问已记录到对话流（信号未丢）' (($events | Where-Object { $_.type -eq 'ask' }).Count -eq 2)
 
   Write-Host "`n6. 素材真的送进模型"

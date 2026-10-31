@@ -501,7 +501,7 @@ function buildTurnScript() {
     { type: 'patch', patch: { id: 'p1', operation: 'ADD', target: 'concepts.closures.misconceptions', reason: '反复出现', confidence: 'medium', applied: false } },
     { type: 'not_a_real_event' }, // 未知事件必须安静忽略，不能打断回合
     { type: 'progress', progress: sampleProgress() },
-    { type: 'done', notebook: sampleNotebook(), learnerView: { counts: { 待学: 0, 正在学习: 1, 正在练习: 0, 已掌握: 0 }, total: 2, items: [] } },
+    { type: 'done', notebook: sampleNotebook() },
     { type: 'closed' },
   ];
 }
@@ -598,7 +598,6 @@ function sampleNotebook() {
         createdAt: new Date().toISOString(),
       },
     ],
-    learnerView: { counts: { 待学: 0, 正在学习: 1, 正在练习: 0, 已掌握: 0 }, total: 2, items: [] },
   };
 }
 function sampleList() {
@@ -608,7 +607,6 @@ function sampleList() {
     topic: n.graph.meta.topic,
     conceptCount: 2,
     messageCount: 1,
-    learnerView: { counts: { 待学: 0, 正在学习: 1, 正在练习: 0, 已掌握: 0 } },
   }));
 }
 
@@ -1863,7 +1861,7 @@ input.value = '换个话题';
 turnQueue.push([
   { type: 'status', phase: 'thinking', step: 0 },
   { type: 'text_delta', delta: '好，那我们从头讲。' },
-  { type: 'done', notebook: nbZombie, learnerView: { counts: {}, total: 0, items: [] } },
+  { type: 'done', notebook: nbZombie },
   { type: 'closed' },
 ]);
 doc.getElementById('sendBtn').click();
@@ -1910,7 +1908,7 @@ turnQueue.push([
   { type: 'answer', questionId: 'q-order', selected: ['懂了'], text: '' },
   { type: 'tool_end', name: 'ask_user_question', ok: true, result: { ok: true } },
   { type: 'text_delta', delta: '答完了，接着讲第二段。' },
-  { type: 'done', notebook: nbZombie, learnerView: { counts: {}, total: 0, items: [] } },
+  { type: 'done', notebook: nbZombie },
   { type: 'closed' },
 ]);
 doc.getElementById('sendBtn').click();
@@ -1984,7 +1982,7 @@ input.value = '我咋调好睡眠';
 turnQueue.push([
   { type: 'status', phase: 'thinking', step: 0 },
   { type: 'text_delta', delta: '先看看你这一周的记录。' },
-  { type: 'done', notebook: nbDraft, learnerView: { counts: {}, total: 0, items: [] } },
+  { type: 'done', notebook: nbDraft },
   { type: 'closed' },
 ]);
 doc.getElementById('sendBtn').click();
@@ -2008,7 +2006,7 @@ input.value = '';
 turnQueue.push([
   { type: 'status', phase: 'thinking', step: 0 },
   { type: 'text_delta', delta: '看到你交回来的计划了，第二步改一下。' },
-  { type: 'done', notebook: nbDraft, learnerView: { counts: {}, total: 0, items: [] } },
+  { type: 'done', notebook: nbDraft },
   { type: 'closed' },
 ]);
 const learnersBefore = beatsBy('learner').length;
@@ -3561,8 +3559,8 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
 
   // 渲染接线：列表行里那颗 span 的文本来自 lastAt，不是 messageCount / updatedAt。
   state.notebooks = [
-    { id: 'nb-a', title: '聊过的', topic: '', conceptCount: 0, messageCount: 2, lastAt: dayAgo(2), learnerView: { counts: {} } },
-    { id: 'nb-b', title: '空本', topic: '', conceptCount: 0, messageCount: 0, lastAt: null, learnerView: { counts: {} } },
+    { id: 'nb-a', title: '聊过的', topic: '', conceptCount: 0, messageCount: 2, lastAt: dayAgo(2) },
+    { id: 'nb-b', title: '空本', topic: '', conceptCount: 0, messageCount: 0, lastAt: null },
   ];
   H34.renderNotebookList();
   const rows34 = deepAll(domRoot, 'nb-item').filter((r) => r.dataset.notebookId);
@@ -3578,6 +3576,27 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const lastCss = /^\.nb-item-last \{([^}]*)\}/m.exec(cssText)?.[1] || '';
   check('样式只许用继承色（沿用列表 meta 那套小字，不新造配色）',
     !/#[0-9a-f]{3,6}/i.test(lastCss) && !/color:/.test(lastCss), lastCss.replace(/\s+/g, ' ').trim());
+
+  // ── 第七十轮：列表只报内容与活动，不报学情数字。首页也是学习者可见面，
+  //    不变量 4 的尺同样量到这里——学情只写字，不写"几个已掌握"。
+  state.notebooks = [
+    { id: 'nb-c', title: '有内容的', topic: '', conceptCount: 3, messageCount: 5, lastAt: dayAgo(1) },
+    { id: 'nb-d', title: '没学过的', topic: '', conceptCount: 0, messageCount: 0, lastAt: null },
+  ];
+  H34.renderNotebookList();
+  const rows34b = deepAll(domRoot, 'nb-item').filter((r) => r.dataset.notebookId);
+  const metaOf = (id) => {
+    const row = rows34b.find((r) => r.dataset.notebookId === id);
+    return row ? (deepAll(row, 'nb-item-meta')[0]?.textContent || '') : '';
+  };
+  const metaText = metaOf('nb-c') + metaOf('nb-d');
+  check('列表行显示内容与活动：几个概念 / 几轮对话 / 上次聊到',
+    metaOf('nb-c').includes('3 个概念') && metaOf('nb-c').includes('5 轮对话') && metaOf('nb-c').includes('上次聊到'),
+    metaOf('nb-c'));
+  check('列表行不显示学情数字：没有「个在学 / 个已掌握」',
+    !/个在学|个已掌握/.test(metaText), metaText);
+  check('列表行不显示任何掌握度数字（Invariant 4：学情只写字）',
+    !/掌握|百分比|%|正确率|完成度/.test(metaText), metaText);
 
   state.notebooks = sampleList();
   H34.renderNotebookList();
@@ -3989,7 +4008,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     `${deepAll(desk(), 'artifact').length} 张制品卡`);
 
   // 刷新之后没有占位卡了（chat.json 回放才是那时的来源），迟到的交付照样不能画歪
-  cam.handleTurnEvent({ type: 'done', notebook: st37.notebook, learnerView: { counts: {}, total: 0, items: [] } });
+  cam.handleTurnEvent({ type: 'done', notebook: st37.notebook });
   st37.turn = null;
   es37.emit({
     type: 'task_artifact',

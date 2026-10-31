@@ -224,7 +224,6 @@ export function listNotebooks() {
       updatedAt: meta.updatedAt,
       lastAt,
       conceptCount: Array.isArray(graph?.concepts) ? graph.concepts.length : 0,
-      learnerView: summariseLearnerView(progress),
       messageCount,
     });
   }
@@ -289,7 +288,6 @@ export function getNotebook(id) {
     todos: readTodos(id),
     notes: readNotes(id),
     scene: readSceneState(id),
-    learnerView: summariseLearnerView(progress),
     // 续学锚点：上次判错、还没判对的题（同一份候选，prompt 快照与前端都从这里取）。
     retests: retestCandidates(progress?.artifact_evidence || []),
     // 判定账本的可读摘要（审计视图，只出词不出数字——见 readDecisions 注释）。
@@ -473,27 +471,6 @@ const STATE_WORDS = {
 
 export function stateWord(state) {
   return STATE_WORDS[String(state || 'unknown').toLowerCase()] || '待学';
-}
-
-export function summariseLearnerView(progress) {
-  const concepts = Object.values(progress?.concepts || {});
-  const counts = { 待学: 0, 正在学习: 0, 已学懂: 0, 正在练习: 0, 已掌握: 0 };
-  for (const c of concepts) {
-    const w = stateWord(c.state);
-    counts[w] = (counts[w] || 0) + 1;
-  }
-  return {
-    total: concepts.length,
-    counts,
-    // 注意：这里给的是"每个状态各几个概念"的计数，不是比率，也不是分数。
-    items: concepts.map((c) => ({
-      conceptId: c.concept_id,
-      state: c.state,
-      word: stateWord(c.state),
-      nextAction: c.next_action || null,
-      unverified: Boolean(c.unverified_self_report),
-    })),
-  };
 }
 
 /**

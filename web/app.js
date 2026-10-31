@@ -110,7 +110,6 @@ const STATE_WORDS = {
 function stateWord(s) {
   return STATE_WORDS[String(s || 'unknown').toLowerCase()] || '待学';
 }
-const stateWordClass = (s) => stateWord(s);
 
 // 分页改造后舞台里没有并排的两个区了，旧的拖拽分隔条一并移除。
 
@@ -376,12 +375,10 @@ function renderNotebookList() {
     const main = el('div', 'nb-item-main');
     main.append(el('div', 'nb-item-title', nb.title || '未命名'));
     const meta = el('div', 'nb-item-meta');
+    // 列表只报内容与活动：几个概念（课程规模）、几轮对话（活动量）、上次聊到（时间）。
+    // 不报掌握度计数（第七十轮）：首页也是学习者可见面，不变量 4 的尺同样量到这里——
+    // 学情只写字，不写"几个已掌握"。状态词留给笔记页与续学卡那类教学面。
     if (nb.conceptCount) meta.append(el('span', null, `${nb.conceptCount} 个概念`));
-    const words = nb.learnerView?.counts || {};
-    const done = words['已掌握'] || 0;
-    const learning = (words['正在学习'] || 0) + (words['已学懂'] || 0) + (words['正在练习'] || 0);
-    if (learning) meta.append(el('span', null, `${learning} 个在学`));
-    if (done) meta.append(el('span', null, `${done} 个已掌握`));
     if (nb.messageCount) meta.append(el('span', null, `${nb.messageCount} 轮对话`));
     // 「上次聊到」：学了多本以后，"上次聊到哪儿了"比"有几轮对话"更能指路。
     // 数据取 chat 最后一条消息的时间（store.listNotebooks 的 lastAt），不是 meta.updatedAt
@@ -2530,7 +2527,6 @@ function handleTurnEvent(evt) {
     case 'progress':
       if (state.notebook) {
         state.notebook.progress = evt.progress;
-        state.notebook.learnerView = summarise(evt.progress);
         if (evt.changes?.length) {
           const c = evt.changes[0];
           if (c.to && c.to !== 'unknown') setCamera(c.conceptId);
@@ -4414,20 +4410,6 @@ function pendingPatches() {
   return (state.notebook?.patches?.patches || []).filter((p) => !p.applied && !p.rejected);
 }
 
-
-function summarise(progress) {
-  const concepts = Object.values(progress?.concepts || {});
-  const counts = { 待学: 0, 正在学习: 0, 已学懂: 0, 正在练习: 0, 已掌握: 0 };
-  for (const c of concepts) {
-    const w = stateWord(c.state);
-    counts[w] = (counts[w] || 0) + 1;
-  }
-  return {
-    total: concepts.length,
-    counts,
-    items: concepts.map((c) => ({ conceptId: c.concept_id, state: c.state, word: stateWord(c.state), nextAction: c.next_action })),
-  };
-}
 
 /** 右栏唯一有副作用的入口：合并页里必须排在最上面。 */
 function renderPatchCard(p) {

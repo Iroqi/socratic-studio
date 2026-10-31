@@ -2902,19 +2902,20 @@ section('7n. 清单被塞成字符串也走得通');
 // ─────────────────────────────────────── 8. 不变量：可见面上没有数值化学习量
 
 section('8. 不变量（Invariant 4）');
-section('8. 不变量（Invariant 4）');
-const lv = store.summariseLearnerView(session.progress);
-const blob = JSON.stringify(lv);
-const forbidden = ['percent', 'score', 'pct', 'star', 'grade', 'level'];
+// 第七十轮起不再有"学习者视图"汇总：它唯一喂过首页那两行数字，已随列表裁剪删除。
+// 不变量改钉在源头——进度数据本身不含数值化学习量字段，列表/详情不带掌握度计数
+// （列表侧的「不带计数」在 10 节另行钉住，这里钉数据源）。
+const progressBlob = JSON.stringify(session.progress);
+const forbidden = ['percent', 'score', 'pct', 'star', 'grade', 'level', 'mastery'];
 check(
-  '学习者视图不含数值化字段',
-  !forbidden.some((f) => blob.toLowerCase().includes(f)),
-  blob.slice(0, 200),
+  '进度数据不含数值化学习量字段（不变量 4 钉在源头）',
+  !forbidden.some((f) => progressBlob.toLowerCase().includes(f)),
+  progressBlob.slice(0, 200),
 );
 check(
-  '学习者视图只给文字词',
-  Object.keys(lv.counts).every((k) => ['待学', '正在学习', '已学懂', '正在练习', '已掌握'].includes(k)),
-  JSON.stringify(lv.counts),
+  '概念状态只用五个状态词（学情以词呈现，不以数字呈现）',
+  Object.values(session.progress.concepts).every((c) => ['unknown', 'seen', 'understood', 'applied', 'mastered'].includes(c.state)),
+  JSON.stringify(Object.values(session.progress.concepts).map((c) => c.state)),
 );
 
 // 五个状态五个词。以前 Seen 和 Understood 共用「正在学习」，一局里四五个概念挂同一个词，
@@ -2972,7 +2973,14 @@ section('10. 列表摘要不泄漏数值');
 // 按 id 取，不拿 [0]：列表按 updatedAt 排序，上面「上次聊到」那节又新建了本子，
 // 谁排第一取决于建本时序——断言不该依赖这个。
 const summary = store.listNotebooks().find((n) => n.id === meta.id);
-check('摘要含文字视图', Boolean(summary.learnerView?.counts));
+// 第七十轮：列表不是成绩单。列表摘要只报内容与活动（几个概念 / 几轮对话 / 上次聊到），
+// 不带掌握度计数——首页也是学习者可见面，不变量 4 的尺同样量到这里。
+check('摘要带内容计数（概念数 / 轮对话 / 上次聊到）',
+  Number.isInteger(summary.conceptCount) && Number.isInteger(summary.messageCount) && 'lastAt' in summary,
+  JSON.stringify(summary));
+check('摘要不带掌握度计数', !('learnerView' in summary), Object.keys(summary).join(','));
+const detailSummary = store.getNotebook(meta.id);
+check('笔记本详情同样不带掌握度计数', !('learnerView' in detailSummary), Object.keys(detailSummary).join(','));
 
 section('11. 开局引导：现编的候选、缓存与兜底');
 const { parseStarters, readStarterCache, writeStarterCache, studiedFingerprint, generateStarters } =
