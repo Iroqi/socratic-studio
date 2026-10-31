@@ -1242,7 +1242,7 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
     rowOf25('arrange').includes('没有答案键') && rowOf25('arrange').includes('故意打乱') && rowOf25('arrange').includes('待分'),
     rowOf25('arrange').slice(0, 120));
   check('经过里 arrange 有人话名字（读回的不是 kind 原文）',
-    /arrange: '排列'/.test(fs.readFileSync(path.join(app, 'server', 'ui-trace.mjs'), 'utf8')), 'ui-trace.mjs 的 KIND_WORDS 缺 arrange');
+    /arrange: '排列'/.test(fs.readFileSync(path.join(app, 'server', 'ui-ledger.mjs'), 'utf8')), 'ui-ledger.mjs 的 KIND_WORDS 缺 arrange');
 
   // 4) 降级回报那条闭环：宿主报的事件名 ↔ 提示里承诺的那句话
   check('宿主报的是 ui_degraded 事件', /name: 'ui_degraded'/.test(hostSrc25));
@@ -1479,7 +1479,7 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
     /const fail = \(why\) => \(partial \? \{ html: skeleton\('正在把这个界面长出来…'\), pending: true, key \}/.test(uiSrc65) &&
       /degraded: why, key \}\)/.test(uiSrc65) &&
       /canvas: r\.canvas, key \}/.test(uiSrc65) &&
-      /pending: r\.pending \|\| undefined, key \}/.test(uiSrc65),
+      /pending: r\.pending \|\| undefined, key, definitions \}/.test(uiSrc65),
     '有一条出口掉出了槽位');
   check('④ 每段正文一个计数表，重复围栏加 ~n（键是身份，不是内容指纹的重复计数）',
     /const uiKeys = new Map\(\)/.test(mdSrc65) &&
@@ -1561,6 +1561,68 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
     readmeSrc69.includes('web/inline.js') && readmeSrc69.includes('组件内不渲染链接') &&
       readmeSrc69.includes('身份字段始终保持纯文本'),
     'README 缺边界说明');
+}
+
+// ────────────────────────────────────────── 第七十一轮：界面的原文按 id 读得回
+/*
+ * 这一轮把「对话当作台账」：定义从盘上的 assistant 消息里认，不新记一笔状态。
+ * 漂移的形状有三种，都要能当场变红：① 又长出第二份围栏扫描（两处认法会走散）；
+ * ② 只读编译其实还在写状态账（读一段历史把浏览器状态改了）；③ 提示里说了有原文、
+ * 工具却读不回，或者教了"读回再改"却没教"同一 id 不换档"。
+ */
+{
+  const ledgerSrc71 = fs.readFileSync(path.join(app, 'server', 'ui-ledger.mjs'), 'utf8');
+  const promptSrc71 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+  const agentSrc71 = fs.readFileSync(path.join(app, 'server', 'agent.mjs'), 'utf8');
+  const traceSrc71 = fs.readFileSync(path.join(app, 'server', 'ui-trace.mjs'), 'utf8');
+  const lifeSrc71 = fs.readFileSync(path.join(app, 'server', 'lifecycle.mjs'), 'utf8');
+  const uiSrc71 = fs.readFileSync(path.join(app, 'web', 'ui-compile.js'), 'utf8');
+  const readmeSrc71 = fs.readFileSync(path.join(app, 'README.md'), 'utf8');
+
+  check('① 台账只有一份扫描（ui-ledger 导出 extractUiFences / collectUiDefinitions / uiLabel）',
+    /export function extractUiFences\(/.test(ledgerSrc71) &&
+      /export function collectUiDefinitions\(/.test(ledgerSrc71) &&
+      /export function uiLabel\(/.test(ledgerSrc71),
+    'ui-ledger.mjs 的出口不全');
+  check('① agent 从台账拿扫描（不再自己养一份 extractUiFences）',
+    /import \{[^}]*extractUiFences[^}]*\} from '\.\/ui-ledger\.mjs'/.test(agentSrc71) &&
+      !/function extractUiFences\(/.test(agentSrc71),
+    'agent.mjs 还留着自己的围栏扫描');
+  check('① 提示侧从台账拿定义与名字（不另写一份档位词表）',
+    /import \{[^}]*collectUiDefinitions[^}]*uiLabel[^}]*\} from '\.\/ui-ledger\.mjs'/.test(promptSrc71),
+    'prompt.mjs 没从 ui-ledger 取定义 / 名字');
+  check('① 经过与快照共用同一份档位词表（ui-trace 不再自养 KIND_WORDS）',
+    /import \{ KIND_WORDS \} from '\.\/ui-ledger\.mjs'/.test(traceSrc71) &&
+      !/const KIND_WORDS = \{/.test(traceSrc71),
+    'ui-trace.mjs 还留着自己那份 KIND_WORDS');
+  check('② 只读编译有门：三个写入口都先看 stateWrites',
+    /let stateWrites = true/.test(uiSrc71) &&
+      (uiSrc71.match(/if \(!stateWrites\) return;?/g) || []).length >= 3,
+    `只看到 ${(uiSrc71.match(/if \(!stateWrites\) return;?/g) || []).length} 处门`);
+  check('② 只读出口包在 try/finally 里（中途抛了也要把账本还回去）',
+    /export function compileUiBlockRead\(lines\)[\s\S]{0,260}finally \{[\s\S]{0,40}stateWrites = prev;/.test(uiSrc71),
+    'compileUiBlockRead 没在 finally 里恢复');
+  check('③ 快照收 labels（折叠行与在场行都说得出「这件是什么」）',
+    /foldStateSnapshot\(progress, \{[\s\S]{0,160}labels = null/.test(lifeSrc71) &&
+      /const named = \(id\) => labels\?\.get\?\.\(id\) \|\| '';/.test(lifeSrc71),
+    'foldStateSnapshot 没有 labels');
+  check('③ 经过收 labels（「在哪件界面里动过」说成人话）',
+    /uiTraceLines\(progress, \{ maxIds = 6, maxSteps = 6, labels = null \} = \{\}\)/.test(traceSrc71),
+    'uiTraceLines 没有 labels');
+  check('③ 提示侧把 id 前缀与名字接到一起（ui: 前缀只在一处加）',
+    /for \(const \[id, def\] of uiDefs\) labels\.set\(`ui:\$\{id\}`, uiLabel\(def\)\);/.test(promptSrc71),
+    'prompt.mjs 没把台账翻成 labels');
+  check('④ 工具描述说清传 ui: id 会带回围栏原文（模型才知道先读回再改）',
+    agentSrc71.includes('还会带回它的围栏原文') && agentSrc71.includes('先读回再写'),
+    'READ_ARTIFACT 的描述没提定义');
+  check('④ APP_ADAPTER 教「先读回再写、同一 id 不换档」',
+    promptSrc71.includes('改版前先读回再写') && promptSrc71.includes('同一 id 不换档'),
+    'APP_ADAPTER 缺改版纪律');
+  check('⑤ README 写明定义是读出来的、不是新记的一笔状态',
+    readmeSrc71.includes('server/ui-ledger.mjs') && readmeSrc71.includes('定义不是新记的一笔状态'),
+    'README 没写台账那一段');
+  check('⑤ README 的折叠段承诺键、经过与围栏原文一条不少',
+    readmeSrc71.includes('围栏原文一条不少'), 'README 折叠段的承诺没跟上');
 }
 
 console.log(`\n${'─'.repeat(52)}`);

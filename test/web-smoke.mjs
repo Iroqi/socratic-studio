@@ -7726,6 +7726,79 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore59, errors.slice(errsBefore59).join(' | '));
 }
 
+// ─── 60. 界面台账（第七十一轮）：编译结果交出定义；只读编译不碰状态账
+{
+  console.log('\n60. 界面台账（每件界面交出档位/标题/原文，读历史不改变状态）');
+  const errsBefore60 = errors.length;
+  const ui60 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const compile60 = (lines, partial) => ui60.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const read60 = (lines) => ui60.compileUiBlockRead(lines.filter((l) => l.trim()));
+
+  // 1) 带 id 的状态档：编译结果带上「这件界面是什么」
+  const calc60 = compile60([
+    'kind: calculator', 'id: split71', 'title: 三人怎么分',
+    'param: 人数 | 8', 'param: 总额 | 240', 'formula: 每人 = 总额 / 人数',
+  ]);
+  const calcDef60 = (calc60.definitions || [])[0];
+  check('计算器交出定义（档位 / id / 标题 / 围栏原文四样齐）',
+    calcDef60 && calcDef60.id === 'split71' && calcDef60.kind === 'calculator' &&
+      calcDef60.title === '三人怎么分' &&
+      calcDef60.fence.includes('kind: calculator') && calcDef60.fence.includes('formula: 每人 = 总额 / 人数'),
+    JSON.stringify(calc60.definitions));
+
+  const static60 = compile60(['kind: compare', 'row: 甲 | 乙', 'row: 丙 | 丁']);
+  check('静态档没有身份，不交定义（没有 id 就没有「同一件」）',
+    Array.isArray(static60.definitions) && static60.definitions.length === 0,
+    JSON.stringify(static60.definitions));
+  const broken60 = compile60(['kind: calculator', 'id: broken71', 'title: 缺参数']);
+  check('降级的那一段不交定义（没上台的东西不起名字）',
+    !(broken60.definitions || []).length, JSON.stringify(broken60.definitions));
+
+  // 2) deck 的每一块各是一件：按块交定义，deck 壳本身不交（它没有 id）
+  const deck60 = compile60([
+    'kind: deck', 'title: 出门三件事',
+    'part: checklist', '  id: pack71', '  title: 打包', '  item: 钥匙', '  item: 手机',
+    'part: form', '  id: budget71', '  title: 路上花销', '  field: 预算 | number',
+  ]);
+  const deckDefs60 = deck60.definitions || [];
+  check('deck 的两块各交一份定义（各有 id 与状态）',
+    deckDefs60.length === 2 && deckDefs60[0].id === 'pack71' && deckDefs60[1].id === 'budget71',
+    JSON.stringify(deckDefs60));
+  check('块的定义是块自己的档位与原文（不带 deck 壳，缩进已去掉）',
+    deckDefs60[0].kind === 'checklist' && deckDefs60[0].fence ===
+      'kind: checklist\nid: pack71\ntitle: 打包\nitem: 钥匙\nitem: 手机',
+    deckDefs60[0].fence);
+
+  // 3) 只读编译：定义与正常编译一致，但不读也不写状态账
+  compile60(['kind: checklist', 'id: ledger60', 'title: 读账', 'item: 甲']);
+  check('前提：普通编译会写状态账（勾选态有地方续）',
+    ui60.uiStateIds().includes('ledger60') && ui60.readUiState('ledger60')?.kind === 'checklist');
+  ui60.setUiValues('ledger60', 'checklist', { uiKind: 'checklist', done: { 甲: true } });
+  const shown60 = compile60(['kind: checklist', 'id: ledger60', 'title: 读账', 'item: 甲']);
+  check('前提：普通编译读得回上次的勾选（重画回到原样）', shown60.html.includes('checked'), shown60.html);
+
+  const idsBefore60 = ui60.uiStateIds().length;
+  const readOnly60 = read60(['kind: checklist', 'id: ledger60', 'title: 读账', 'item: 甲']);
+  check('只读编译读的是空账（不把别处的值读进来）',
+    !readOnly60.html.includes('checked'), readOnly60.html);
+  check('只读编译定义照旧（档位 / 标题 / 原文与正常编译一致）',
+    readOnly60.definitions?.[0]?.kind === 'checklist' &&
+      readOnly60.definitions[0].title === '读账' &&
+      readOnly60.definitions[0].fence === shown60.definitions[0].fence,
+    JSON.stringify(readOnly60.definitions));
+  check('只读编译一个键都不写（读一段历史不改变状态）',
+    ui60.uiStateIds().length === idsBefore60 && ui60.uiStateIds().includes('ledger60'),
+    ui60.uiStateIds().join(','));
+
+  const freshRead60 = read60(['kind: form', 'id: probe71', 'field: 预算 | number']);
+  check('从未见过的 id 只读编译后也不留键（不产生"他填过"的假记录）',
+    !ui60.uiStateIds().includes('probe71') && ui60.readUiState('probe71') === null &&
+      freshRead60.definitions?.[0]?.id === 'probe71',
+    ui60.uiStateIds().join(','));
+
+  check('这一节无异常', errors.length === errsBefore60, errors.slice(errsBefore60).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

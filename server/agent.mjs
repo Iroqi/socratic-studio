@@ -26,6 +26,7 @@ import {
 } from './scene.mjs';
 import { injectArtifactRuntime, injectArtifactCsp, ARTIFACT_CONTRACT_NOTE } from './artifact.mjs';
 import { sanitiseTrace, MAX_TRACE_STEPS } from './ui-trace.mjs';
+import { collectUiDefinitions, extractUiFences } from './ui-ledger.mjs';
 import { activeStateIds } from './lifecycle.mjs';
 import { compileUiBlock } from '../web/ui-compile.js';
 
@@ -346,7 +347,7 @@ export function buildTools() {
     {
       name: TOOL_NAMES.READ_ARTIFACT,
       description:
-        '读回学习者在制品里做了什么。**这是页面型制品唯一的证据通道**——没有它就不能说学习者"在制品里试过了"。返回四类内容：① 答卷型交互的 evidence（作答次数/结果/作答内容/完成状态）；② 项目或游戏的 state 快照（关卡、尝试次数、当前参数这类客观事实）；③ 离散 events（level_cleared / bug_found 等）；④ 内联界面的 trace（他落定的那几步：从哪个值到哪个值，拖动中的中间帧不记——那是"怎么走到这"，不是学情）。**不传 artifact_id 时只展开这一轮的工作集**（台上的、这一场动过的、本回合刚碰过的），更早的给一份 id 清单——要用其中哪件就把它的 id 传进来，别因为没展开就当成不存在。这些只是机械记录不是结论：题目是否属于当前 concept、有没有过期重复、算不算概念错误、下一步怎么走，都由你判断。**反过来也成立——没有记录不等于学习者没做。**',
+        '读回学习者在制品里做了什么。**这是页面型制品唯一的证据通道**——没有它就不能说学习者"在制品里试过了"。返回四类内容：① 答卷型交互的 evidence（作答次数/结果/作答内容/完成状态）；② 项目或游戏的 state 快照（关卡、尝试次数、当前参数这类客观事实）；③ 离散 events（level_cleared / bug_found 等）；④ 内联界面的 trace（他落定的那几步：从哪个值到哪个值，拖动中的中间帧不记——那是"怎么走到这"，不是学情）。**传内联界面的 id（`ui:` 开头）时还会带回它的围栏原文**（档位 / 标题 / 字段）——要改版、要按原样解释台上的那件，先读回再写，别凭印象重写。**不传 artifact_id 时只展开这一轮的工作集**（台上的、这一场动过的、本回合刚碰过的），更早的给一份 id 清单——要用其中哪件就把它的 id 传进来，别因为没展开就当成不存在。这些只是机械记录不是结论：题目是否属于当前 concept、有没有过期重复、算不算概念错误、下一步怎么走，都由你判断。**反过来也成立——没有记录不等于学习者没做。**',
       parameters: Type.Object({
         artifact_id: Type.Optional(
           Type.String({ description: '只看某一份制品（id 来自状态快照或上一次回报的 folded.ids）；省略则展开这一轮的工作集' }),
@@ -1083,17 +1084,28 @@ export class TeachingSession {
    * prompt 里刚折起来的那些又从工具这条路全回来了。要哪件的细节就把它的 id 传进来。
    */
   artifactEvidenceView(artifactId) {
-    const view = (a) => ({
-      artifact_id: a.id,
-      title: a.title,
-      kind: a.kind,
-      questions_declared: a.questions,
-      evidence: a.evidence,
-      state: a.state,
-      events: a.events,
-      trace: a.trace || [],
-      observed_count: a.evidence.length + a.events.length,
-    });
+    // 第七十一轮：内联界面的"定义"从对话里认回来（档位 / 标题 / 上一次的围栏原文）。
+    // 值和经过早已按 id 读得回，定义以前只活在那条 assistant 消息里；对话一滑出 40 条窗口，
+    // 台上就只剩一串裸 id。这里把它补上——读的是盘上的对话，不是新记的一笔状态。
+    const uiDefs = collectUiDefinitions(this.notebook?.chat?.messages);
+    const defOf = (id) => {
+      const key = String(id || '');
+      return key.startsWith('ui:') ? uiDefs.get(key.slice(3)) || null : null;
+    };
+    const view = (a) => {
+      const def = defOf(a.id);
+      return {
+        artifact_id: a.id,
+        title: a.title || def?.title || null,
+        kind: a.kind || def?.kind || null,
+        questions_declared: a.questions,
+        evidence: a.evidence,
+        state: a.state,
+        events: a.events,
+        trace: a.trace || [],
+        observed_count: a.evidence.length + a.events.length,
+      };
+    };
     if (artifactId) {
       const one = this.liveArtifacts.get(artifactId);
       if (!one) {
@@ -1102,7 +1114,21 @@ export class TeachingSession {
           note: '这一轮还没有任何制品交互记录。没有记录 ≠ 学习者没做；只是没观测到可读回的内容。',
         };
       }
-      return { artifacts: [view(one)], note: evidenceNote([one]) };
+      const def = defOf(artifactId);
+      const out = { artifacts: [view(one)], note: evidenceNote([one]) };
+      if (def) {
+        out.definition = {
+          kind: def.kind,
+          title: def.title || null,
+          fence: def.fence,
+          truncated: def.fence_truncated || undefined,
+          note:
+            '这是他上一次看到的围栏原文（宿主从对话里认回来的，不是另抄的一份）。' +
+            '改版就沿用同一 id 照它的形状重写——他的值会续进去；同一 id 不换档，换档等于新界面。' +
+            '原文只读，不要把它当成新的围栏再发一遍（那是重画，不是改版）。',
+        };
+      }
+      return out;
     }
 
     const all = [...this.liveArtifacts.values()];
@@ -1874,30 +1900,9 @@ export function historyToModelMessages(history, model) {
 // 服务端只认两种围栏声明：question（阻塞收答）与 canvas（整页制品）。与前端用同一把尺
 // （compileUiBlock）：编译不出来就不收——前端降级了（卡/降级提示），服务端就不该阻塞或
 // 上台，否则会出现"卡在台上但没人收"或"收了但卡是坏的"。
-
-function extractUiFences(text) {
-  const out = [];
-  const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
-  let i = 0;
-  while (i < lines.length) {
-    const m = /^\s*(```|~~~)\s*ui\s*$/.exec(lines[i]);
-    if (!m) {
-      i += 1;
-      continue;
-    }
-    const marker = m[1];
-    const buf = [];
-    i += 1;
-    while (i < lines.length && !new RegExp(`^\\s*${marker}\\s*$`).test(lines[i])) {
-      buf.push(lines[i]);
-      i += 1;
-    }
-    const closed = i < lines.length;
-    i += 1;
-    if (closed) out.push({ lines: buf });
-  }
-  return out;
-}
+//
+// 扫描本身（extractUiFences）第七十一轮搬进 server/ui-ledger.mjs：它和"从对话里认出
+// 每件界面原文"是同一把扫描，两处各写一份就会在 `~~~` / 缩进 / 未闭合上慢慢漂开。
 
 function fenceKind(lines) {
   for (const raw of lines) {

@@ -13,27 +13,13 @@
 // 客户端在松手 / 勾选 / 点定的那一刻把 trace 交给宿主（web/app.js 的 forwardUiState）；
 // 宿主这边只做校验、落盘、裁剪与渲染，不解释、不判读。
 
+import { KIND_WORDS } from './ui-ledger.mjs';
+
 export const UI_TRACE_PREFIX = 'ui:';
 export const MAX_TRACE_STEPS = 40; // 每件界面最多留这么多步
 export const MAX_TRACE_IDS = 12; // 最多记这么多件界面
 export const MAX_STEP_ITEMS = 8; // 一步里最多几条字段变化
 export const MAX_LABEL_CHARS = 40;
-
-const KIND_WORDS = {
-  compare: '对照',
-  steps: '步骤',
-  timeline: '时间线',
-  map: '地图',
-  checklist: '清单',
-  form: '表单',
-  calculator: '计算器',
-  diagram: '图解',
-  explore: '探索',
-  chart: '图表',
-  game: '游戏',
-  walkthrough: '走一遍',
-  arrange: '排列',
-};
 
 // 模型自己写的键（active / viewed / done …）进 prompt 时换成人话；不认识的键原样摆出来，
 // 那是它自己起的名，它认得。
@@ -152,8 +138,11 @@ export function stepText(step) {
 /**
  * 渲染成 prompt 里的几行。没有经过就返回 []（不摆空标题——空标题是噪声）。
  * 只摆最近 maxSteps 步，并如实说清折叠了多少。
+ *
+ * `labels`（第七十一轮）：id → 短名字（`计算器「三人怎么分」`）。经过本身只记 id 与档位，
+ * 有了台账就能把"他在哪件界面里动过"说成人话，而不是一串裸键。
  */
-export function uiTraceLines(progress, { maxIds = 6, maxSteps = 6 } = {}) {
+export function uiTraceLines(progress, { maxIds = 6, maxSteps = 6, labels = null } = {}) {
   const book = progress?.ui_trace;
   const entries = book?.entries && typeof book.entries === 'object' ? book.entries : {};
   const ids = Object.keys(entries).filter((id) => entries[id]?.steps?.length);
@@ -167,7 +156,8 @@ export function uiTraceLines(progress, { maxIds = 6, maxSteps = 6 } = {}) {
     const entry = entries[id];
     const shown = entry.steps.slice(-maxSteps);
     const hidden = (entry.trimmed || 0) + (entry.steps.length - shown.length);
-    const kind = KIND_WORDS[entry.kind] ? `${KIND_WORDS[entry.kind]}：` : '';
+    const named = labels?.get?.(id) || (KIND_WORDS[entry.kind] || '');
+    const kind = named ? `${named}：` : '';
     const body = shown.map((s) => (s.d || []).map(stepText).filter(Boolean).join('；')).filter(Boolean).join(' ｜ ');
     lines.push(`- [${id}] ${kind}${body}${hidden > 0 ? `（更早的 ${hidden} 步已折叠）` : ''}`);
   }

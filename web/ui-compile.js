@@ -106,16 +106,28 @@ function handoffButton(id, label) {
  */
 const uiState = new Map();
 
+/**
+ * 第七十一轮：只读编译（服务端从对话里认界面原文时用）。
+ *
+ * 编译本来是一手「读旧状态 → 拼 DOM → 写回状态」，可服务端只想要那份**定义**
+ * （档位 / id / 标题 / 围栏原文），不需要也没资格动浏览器那本状态账。这个开关让
+ * 读写两侧都回到空账：不读上次的值、不写新的键，定义与正常编译逐字一致。
+ */
+let stateWrites = true;
+
 export function readUiState(id) {
+  if (!stateWrites) return null;
   return uiState.get(String(id)) || null;
 }
 
 export function writeUiState(id, kind, state, spec) {
+  if (!stateWrites) return;
   uiState.set(String(id), { kind, state, spec: spec ?? uiState.get(String(id))?.spec ?? null });
 }
 
 /** 只改 state，不动 spec（学习者交互走这条）。 */
 export function setUiValues(id, kind, state) {
+  if (!stateWrites) return;
   const prev = uiState.get(String(id));
   uiState.set(String(id), { kind, state, spec: prev?.spec ?? null });
 }
@@ -2483,6 +2495,9 @@ function compileDeck(fields, lines) {
   const cap = deckTitle ? `<p class="ui-cap">${cell(deckTitle)}</p>` : '';
   const seenIds = new Set();
   const blocks = [];
+  // 第七十一轮：deck 的每一块各自是一件界面（各有自己的 id 与状态）。定义也按块记，
+  // 否则「同一件界面」在台上只剩一个 deck 壳，按 id 读回去读不到它的档位与字段。
+  const definitions = [];
   for (let i = 0; i < parts.length; i += 1) {
     const part = parts[i];
     if (!DECK_PARTS.includes(part.kind)) {
@@ -2508,6 +2523,14 @@ function compileDeck(fields, lines) {
     }
     const r = COMPILERS[part.kind](child.fields, part.body);
     if (r.error) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${r.error}` };
+    if (cid && UI_STATEFUL.includes(part.kind)) {
+      definitions.push({
+        id: cid,
+        kind: part.kind,
+        title: pick(child.fields, 'title')[0] || '',
+        fence: ['kind: ' + part.kind, ...part.body].join('\n'),
+      });
+    }
     blocks.push(`<div class="ui-deck-part">${r.html}</div>`);
   }
   // 并排 vs 堆叠是编译器层的事，宿主不需要知道"这一块在不在并排里"（与 deck 本身同一手）。
@@ -2516,7 +2539,7 @@ function compileDeck(fields, lines) {
   const container = deckLayout === 'columns'
     ? '<div class="ui-deck-columns">'
     : '<div class="ui-deck">';
-  return { html: `${cap}${container}${blocks.join('')}</div>`, shape: 'deck' };
+  return { html: `${cap}${container}${blocks.join('')}</div>`, shape: 'deck', definitions };
 }
 
 /**
@@ -3167,7 +3190,7 @@ function uiKey(lines, partial) {
  * 下一帧就成了一个正常的对照表。要是这时候就报降级，模型会收到一条自己没犯过的错。
  * 只有闭合了（或回合收尾了）才有权判定"这一段写坏了"——那是唯一的、也是最后的机会。
  */
-export function compileUiBlock(lines, partial) {
+function compileUiBlockInner(lines, partial) {
   // 首行裸档名（第五十九轮）：词表按「id: / question: 字段」教，模型很自然把首行写成
   // 裸档名（question / calculator / …）而不是 kind: 前缀。编译器两种写法都认——
   // 裸档名归一成 kind: 行再走下面的特例与 parseFence。
@@ -3213,8 +3236,36 @@ export function compileUiBlock(lines, partial) {
     // 而不是整块摆"正在长"的占位——这正是 IUI 编译器"界面随生成渐进出现"的那一路。
     const r = COMPILERS[kind](parsed.fields, lines, partial);
     if (r.error) return fail(r.error);
-    return { html: r.html, shape: r.shape, pending: r.pending || undefined, key };
+    // 第七十一轮：把「这件界面是什么」随编译结果交出来（档位 / id / 标题 / 围栏原文）。
+    // 只有带 id 的状态档才是一件能跨回合续下去的界面；静态形状没有身份，不进这份账。
+    // deck 的每一块在 compileDeck 里各自记（它们才是带 id 的那几件）。
+    const id = pick(parsed.fields, 'id')[0];
+    const definitions = kind === 'deck'
+      ? (r.definitions || [])
+      : id && UI_STATEFUL.includes(kind)
+        ? [{ id, kind, title: pick(parsed.fields, 'title')[0] || '', fence: lines.join('\n') }]
+        : [];
+    return { html: r.html, shape: r.shape, pending: r.pending || undefined, key, definitions };
   } catch {
     return fail('编译时没兜住，原文照旧');
+  }
+}
+
+/**
+ * 编译的一对出口：正常编译会读 / 写那本浏览器状态账；只读编译不碰账，只交出
+ * 编译结果（定义随结果一起出来）。服务端认「这件界面是什么」时走后者——
+ * 阅读一段历史不该改变任何状态，也不该把别的本子的值读进来。
+ */
+export function compileUiBlock(lines, partial) {
+  return compileUiBlockInner(lines, partial);
+}
+
+export function compileUiBlockRead(lines) {
+  const prev = stateWrites;
+  stateWrites = false;
+  try {
+    return compileUiBlockInner(lines, false);
+  } finally {
+    stateWrites = prev;
   }
 }

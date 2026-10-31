@@ -4505,6 +4505,210 @@ section('12m. 配置备份要过同一道闸：坏的时候不许出货');
     rPrompt.includes('除数不能是 0'), '没教除零');
   check('12r 公式规则不再说「没有减法、除法」', !rPrompt.includes('没有减法、除法'), '旧禁令还在');
 }
+// ─────────────────────────────────────── 12s. 界面的原文按 id 读得回（第七十一轮）
+{
+  // 状态快照记的是「值」，经过记的是「怎么变的」，可界面**本身**只剩在 assistant 消息里的一行
+  // 围栏。对话窗口一折（40 条）或跨 session 续学，[ui:split] 人数=12 就成了没有定义的裸键。
+  // 这一轮不加一份新状态：对话本身就是台账——从盘上的 assistant 消息里重新编一遍，
+  // 认出每件界面的档位 / 标题 / 上一次的围栏原文。三条边界：只认编译得过的、只认带 id 的
+  // 状态档、只读不写（不碰浏览器那本状态账）。
+  const {
+    collectUiDefinitions,
+    uiLabel,
+    uiLabels,
+    KIND_WORDS,
+    MAX_LEDGER_FENCES,
+    MAX_LABEL_TITLE,
+    MAX_DEFINITION_CHARS,
+  } = await import('../server/ui-ledger.mjs');
+  const ledgerFence = (lines) => ['```ui', ...lines, '```'].join('\n');
+  const ledgerCalc = (id, title) =>
+    ledgerFence([
+      'kind: calculator',
+      `id: ${id}`,
+      `title: ${title}`,
+      'param: 人数 | 8',
+      'param: 总额 | 240',
+      'formula: 每人 = 总额 / 人数',
+    ]);
+
+  const ledgerMessages = [
+    { role: 'user', content: '顺手贴一段：\n' + ledgerCalc('split', '用户手抄'), timestamp: 100 },
+    { role: 'assistant', content: '先这样算：\n' + ledgerCalc('split', '旧版'), timestamp: 200 },
+    { role: 'assistant', content: '照这个改一版：\n' + ledgerCalc('split', '新版'), timestamp: 300 },
+    {
+      role: 'assistant',
+      content:
+        '拼一块：\n' +
+        ledgerFence([
+          'kind: deck',
+          'title: 出门三件事',
+          'part: checklist',
+          '  id: pack',
+          '  title: 打包',
+          '  item: 钥匙',
+          '  item: 手机',
+          'part: form',
+          '  id: budget',
+          '  title: 路上花销',
+          '  field: 预算 | number',
+        ]),
+      timestamp: 400,
+    },
+    { role: 'assistant', content: '问一句：\n' + ledgerFence(['kind: question', 'id: q-ledger', 'question: 先算哪一步？']), timestamp: 500 },
+    { role: 'assistant', content: '画个对照：\n' + ledgerFence(['kind: compare', 'row: 甲 | 乙']), timestamp: 600 },
+    { role: 'assistant', content: '写坏了：\n' + ledgerFence(['kind: calculator', 'id: broken-ledger', 'title: 编不过']), timestamp: 700 },
+    { role: 'assistant', content: '不存在的档：\n' + ledgerFence(['kind: pie', 'id: pie-ledger', 'title: 饼图']), timestamp: 800 },
+    { role: 'assistant', content: [{ type: 'text', text: ledgerCalc('array-ledger', '结构化内容') }], timestamp: 900 },
+    { role: 'assistant', content: '长标题：\n' + ledgerCalc('long-ledger', '很'.repeat(40)), timestamp: 1000 },
+  ];
+  const ledgerDefs = collectUiDefinitions(ledgerMessages);
+  const splitDef = ledgerDefs.get('split');
+
+  check('assistant 写的计算器认出来了（带 id 的状态档才是「同一件」）',
+    splitDef?.kind === 'calculator' && splitDef.title === '新版', JSON.stringify(splitDef));
+  check('同 id 后来的覆盖先前的（改版 = 最新那一版）',
+    splitDef.fence.includes('title: 新版') && !splitDef.fence.includes('title: 旧版'), splitDef.fence);
+  check('用户转贴的围栏不算（那是他抄来的，不是老师摆上台的）',
+    !collectUiDefinitions([{ role: 'user', content: ledgerCalc('split', '用户手抄') }]).size);
+  check('deck 的每一块各是一件（各有 id 与状态，按块记）',
+    ledgerDefs.get('pack')?.kind === 'checklist' && ledgerDefs.get('budget')?.kind === 'form',
+    [...ledgerDefs.keys()].join(','));
+  check('deck 本身没有 id，不进台账',
+    ![...ledgerDefs.values()].some((d) => d.kind === 'deck'), [...ledgerDefs.keys()].join(','));
+  check('块的围栏原文是块自己的（缩进已去掉，能照原样再写一遍）',
+    ledgerDefs.get('pack').fence === 'kind: checklist\nid: pack\ntitle: 打包\nitem: 钥匙\nitem: 手机',
+    ledgerDefs.get('pack').fence);
+  check('题卡不算跨回合延续的界面（question 不收进台账）', !ledgerDefs.has('q-ledger'));
+  check('静态档没有身份（compare 不收）',
+    ![...ledgerDefs.values()].some((d) => d.kind === 'compare'));
+  check('编不过的围栏不认（没上过台的东西不给它起名字）',
+    !ledgerDefs.has('broken-ledger') && !ledgerDefs.has('pie-ledger'));
+  check('非字符串 content 不炸也不认（结构化消息不是围栏的出处）', !ledgerDefs.has('array-ledger'));
+  check(`标题封顶 ${MAX_LABEL_TITLE} 字（长标题只截断显示）`,
+    ledgerDefs.get('long-ledger').title.length === MAX_LABEL_TITLE, String(ledgerDefs.get('long-ledger').title.length));
+  check('落盘时间跟着定义走（按 id 读回时说得清是哪一版）', splitDef.at === 300, String(splitDef.at));
+
+  // 上限：超出时挤掉最久没更新的（Map 的插入顺序就是最近一次被写下的先后）
+  const limitMessages = [1, 2, 3].map((i) => ({
+    role: 'assistant',
+    content: ledgerCalc(`limit-${i}`, `第${i}版`),
+    timestamp: i,
+  }));
+  const limited = collectUiDefinitions(limitMessages, { limit: 2 });
+  check('台账封顶（超出挤掉最久没更新的，不无限长）',
+    limited.size === 2 && !limited.has('limit-1') && limited.has('limit-3'), [...limited.keys()].join(','));
+  check(`默认上限 ${MAX_LEDGER_FENCES}（实数，不是 0 或 Infinity）`,
+    Number.isInteger(MAX_LEDGER_FENCES) && MAX_LEDGER_FENCES > 0 && Number.isInteger(MAX_DEFINITION_CHARS));
+
+  check('短名字：档位 + 标题（快照里每行说得清「这件是什么」）',
+    uiLabel({ kind: 'calculator', title: '三人怎么分' }) === '计算器「三人怎么分」');
+  check('没标题就只报档位（不编一个）', uiLabel({ kind: 'form', title: '' }) === '表单');
+  check('不认识的档位原样报（那是模型自己写的，它认得）', uiLabel({ kind: 'mystery', title: '' }) === 'mystery');
+  check('uiLabels 翻的是 id → 名字（带 ui: 前缀由调用方加）',
+    uiLabels(ledgerDefs).get('split') === '计算器「新版」' && KIND_WORDS.checklist === '清单');
+
+  // 只读编译：认一段历史，不许改变任何状态（也不许把别的本子的值读进来）
+  const uiCompile = await import('../web/ui-compile.js');
+  const idsBeforeLedger = uiCompile.uiStateIds().length;
+  collectUiDefinitions([{ role: 'assistant', content: ledgerCalc('ledger-probe', '探针'), timestamp: 1 }]);
+  check('认定义不往状态账里写键（读历史不该改变状态）',
+    !uiCompile.uiStateIds().includes('ledger-probe') && uiCompile.uiStateIds().length === idsBeforeLedger,
+    uiCompile.uiStateIds().join(','));
+  check('只读编译读回的是空账（不借别处的值续进来）', uiCompile.readUiState('ledger-probe') === null);
+
+  // 快照与经过里的名字：从对话认，不从新记的一笔状态读
+  const ledgerChat = {
+    messages: [
+      { role: 'assistant', content: ledgerCalc('split', '三人怎么分'), timestamp: 500 },
+      {
+        role: 'assistant',
+        content: ledgerFence(['kind: form', 'id: budget', 'title: 本月预算', 'field: 预算 | number']),
+        timestamp: 600,
+      },
+    ],
+  };
+  const ledgerState = {
+    'ui:split': { uiKind: 'calculator', 人数: 12, 总额: 360 },
+    'ui:budget': { uiKind: 'form', 预算: 300 },
+    'ui:old-a': { uiKind: 'chart', snap: '样本量=5' },
+    'ui:old-b': { uiKind: 'explore', active: '齿轮' },
+    'ui:old-c': { uiKind: 'checklist', done: { 钥匙: true } },
+    'art-page': { level: 3 },
+  };
+  const ledgerTrace = {
+    version: 1,
+    entries: {
+      'ui:split': { kind: 'calculator', steps: [{ at: '2026-10-30T09:00:00.000Z', d: [{ k: '人数', from: 8, to: 12 }] }] },
+    },
+  };
+  const ledgerSnapshot = renderStateSnapshot({
+    id: meta.id,
+    graph: result.graph,
+    chat: ledgerChat,
+    artifacts: [{ id: 'art-page', title: '那一页' }],
+    progress: {
+      ...result.progress,
+      artifact_state: ledgerState,
+      ui_trace: ledgerTrace,
+      artifact_evidence: [],
+      notes: [],
+      artifact_events: [],
+    },
+    patches: { patches: [] },
+  });
+  check('折进工作集的那件也点得出名字（不再是 [ui:split] 这样的裸键）',
+    ledgerSnapshot.includes('计算器「三人怎么分」'), ledgerSnapshot.split('\n').find((l) => l.includes('ui:split')));
+  check('在场的那件也带名字（快照每一行都说得出是什么）',
+    ledgerSnapshot.includes('[ui:split] 计算器「三人怎么分」'),
+    ledgerSnapshot.split('\n').find((l) => l.includes('ui:split')));
+  check('真制品的名字从制品清单取（不靠围栏）',
+    ledgerSnapshot.includes('[art-page] 「那一页」'),
+    ledgerSnapshot.split('\n').find((l) => l.includes('art-page')));
+  check('折进去的值仍然不进上下文（名字只解释 id，不放值）',
+    ledgerSnapshot.includes('表单「本月预算」') && !ledgerSnapshot.includes('预算=300'),
+    '折进去的值漏进来了');
+  check('经过里也说得出是在哪件界面里动的',
+    ledgerSnapshot.includes('计算器「三人怎么分」：人数 8 → 12'),
+    ledgerSnapshot.split('\n').find((l) => l.includes('ui:split')));
+  check('认不出名字就只报 id（宁缺不编）',
+    ledgerSnapshot.includes('[ui:old-a]') && !ledgerSnapshot.includes('图表「'),
+    ledgerSnapshot.split('\n').find((l) => l.includes('ui:old-a')));
+  check('名字这一族不产出数值化学情（Invariant 4 照旧）',
+    !/(百分比|进度条|[0-9]+\s*%|score|百分制)/i.test(ledgerSnapshot));
+
+  // 工具那条路：传 ui: id 时把上一次的围栏原文一起带回来
+  const ledgerBucket = (id, extra = {}) => ({
+    id, title: null, kind: null, questions: [], evidence: [], state: {}, events: [], trace: [], ...extra,
+  });
+  const ledgerSession = {
+    liveArtifacts: new Map([
+      ['ui:split', ledgerBucket('ui:split', { state: { 人数: 12 } })],
+      ['art-page', ledgerBucket('art-page', { title: '那一页', kind: 'page', state: { level: 3 } })],
+    ]),
+    notebook: { chat: { messages: ledgerMessages } },
+    progress: { artifact_state: {} },
+    scene: null,
+  };
+  const ledgerOne = session.artifactEvidenceView.call(ledgerSession, 'ui:split');
+  check('按 id 读得回定义（档位 / 标题 / 围栏原文三样齐）',
+    ledgerOne.definition?.kind === 'calculator' && ledgerOne.definition.title === '新版' &&
+      ledgerOne.definition.fence.includes('id: split') && ledgerOne.definition.fence.includes('formula: 每人 = 总额 / 人数'),
+    JSON.stringify(ledgerOne.definition));
+  check('带回来的是上一次那一版（最新覆盖，不是第一版）',
+    ledgerOne.definition.fence.includes('title: 新版') && !ledgerOne.definition.fence.includes('title: 旧版'));
+  check('定义里说清怎么用：照同一 id 改版、同一 id 不换档、原文只读',
+    /同一 id 不换档/.test(ledgerOne.definition.note) && /原文只读/.test(ledgerOne.definition.note),
+    ledgerOne.definition.note);
+  check('制品视图的标题 / 档位从定义补上（跨窗口后仍知道这是计算器）',
+    ledgerOne.artifacts[0].title === '新版' && ledgerOne.artifacts[0].kind === 'calculator');
+  const ledgerPage = session.artifactEvidenceView.call(ledgerSession, 'art-page');
+  check('整页制品不硬塞定义（它没有围栏，定义是 null 而不是编的）', !('definition' in ledgerPage));
+  const ledgerMissing = session.artifactEvidenceView.call(ledgerSession, 'ui:missing');
+  check('没有记录也不编定义（空手回来，说清没有记录≠没做过）',
+    !('definition' in ledgerMissing) && /没有记录/.test(ledgerMissing.note));
+}
+
 // ─────────────────────────────────────── 收尾
 
 console.log(`\n${'─'.repeat(52)}`);

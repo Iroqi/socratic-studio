@@ -100,9 +100,13 @@ export function stateBrief(state, { maxChars = MAX_BRIEF_CHARS } = {}) {
  * 快照那一段：在场的逐件摆，其余折成一行。
  * 没有 artifact_state 就返回空数组——不摆空标题（空标题是噪声，同 ui-trace 那条）。
  *
+ * `labels`（第七十一轮）：id → 短名字（`计算器「三人怎么分」` / 制品标题）。快照从此不再
+ * 只报一串裸键：折叠行、在场行都说得出"这件是什么"。名字是**认出来的**（从对话与制品清单），
+ * 不是新记的一笔状态；认不出来就退回只报 id，不编。
+ *
  * 返回值里带上 active / folded 两份 id（调用方拿去做面板或读回视图，不必再算一遍）。
  */
-export function foldStateSnapshot(progress, { active = null, maxChars = MAX_BRIEF_CHARS } = {}) {
+export function foldStateSnapshot(progress, { active = null, maxChars = MAX_BRIEF_CHARS, labels = null } = {}) {
   const book = stateBook(progress);
   const ids = Object.keys(book);
   if (!ids.length) return { lines: [], active: [], folded: [] };
@@ -110,18 +114,20 @@ export function foldStateSnapshot(progress, { active = null, maxChars = MAX_BRIE
   const keep = active instanceof Set ? active : new Set(Array.isArray(active) ? active : ids);
   const activeIds = ids.filter((id) => keep.has(id));
   const folded = ids.filter((id) => !keep.has(id));
+  const named = (id) => labels?.get?.(id) || '';
 
   const lines = ['\n制品 / 项目 / 游戏的状态快照（客观事实，不是结论）：'];
   for (const id of activeIds) {
     const brief = stateBrief(book[id], { maxChars });
-    lines.push(`- [${id}] ${brief}`);
+    const label = named(id);
+    lines.push(`- [${id}]${label ? ` ${label}` : ''}${brief ? ` ${brief}` : ''}`);
   }
   if (folded.length) {
     const shown = folded.slice(0, MAX_FOLDED_NAMES);
     const rest = folded.length - shown.length;
     lines.push(
       `- 另有 ${folded.length} 件更早的界面 / 制品不在这一轮的工作集里（台面、这一场动过的、最近几件才算在场）：` +
-        shown.map((id) => `[${id}]`).join('、') +
+        shown.map((id) => `[${id}]${named(id) ? ` ${named(id)}` : ''}`).join('、') +
         (rest > 0 ? ` 等（其余 ${rest} 件没点名）` : ''),
     );
     lines.push(

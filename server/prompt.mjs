@@ -11,6 +11,7 @@ import { topoSortConcepts } from './graph.mjs';
 import { stateWord, retestCandidates } from './store.mjs';
 import { renderSceneSnapshot } from './scene.mjs';
 import { uiTraceLines } from './ui-trace.mjs';
+import { collectUiDefinitions, uiLabel } from './ui-ledger.mjs';
 import { activeStateIds, foldStateSnapshot } from './lifecycle.mjs';
 
 const RULE_FILES = [
@@ -148,6 +149,8 @@ session 长度上限按 meta.learner_profile.pace 执行（runtime.md 的 pace �
    学习者的勾选、滑到的值、点过哪个节点、**填进表单的值**、**点开看过哪一面**、**试过哪个选择**、**走到哪一步**、**滑到哪张快照**、**点开看过哪个点**与**排成的顺序 / 分进的栏**由宿主按 id 存着，重画、刷新、下一回合都续得回来；没有 id 就编不出来。
    **同一个 id 就是同一件界面**：下一轮要改它（换参数、加一条、改公式）就沿用同一个 id 重写围栏——
    他的勾选 / 参数 / 填过的值会原样续进去；改了 id 就是新的一件，等于让他白填一遍。
+   宿主认得它**上一次写下的围栏原文**：快照里每件都带档位与标题，按 id 用 \`read_artifact_evidence\`
+   还能读回原文——改版前先读回再写，别凭印象重写；**同一 id 不换档**（换档等于新界面，他的值接不上）。
    宿主另外记一本「经过」：他在界面里**落定**的每一步（松手 / 勾选 / 点定的那一刻，从哪个值到哪个值），
    拖动中的中间帧不记。下一回合状态快照里会摆出来——那是"他怎么走到这"，比"他现在停在哪"多一层；
    两者都只是机械记录，不是学情。
@@ -515,11 +518,27 @@ export function renderStateSnapshot(notebook) {
   // 工作集跟着台面走（第六十二轮）：台上的、这一场动过的逐件摆，其余折成一行带 id 的说明。
   // 判据全是被动事实（台面 / 本场落定的时间戳 / 最近几件），宿主不判断"这件还有没有用"——
   // 那是对学习者的去留下结论，越界了。折叠不是删除：键还在盘上，按 id 读得回。
+  //
+  // 第七十一轮：id 不再是一串裸键。界面的档位与标题从对话里认（围栏原文本来就随消息落盘），
+  // 真制品的标题从制品清单取——快照里的每一行都说得清"这件是什么"。这不是新记一笔状态：
+  // 名字是读出来的，读不到就退回只报 id（不编）。跨过 40 条对话窗口、跨 session 续学时，
+  // 模型仍然叫得出台上的那件。
+  const uiDefs = collectUiDefinitions(notebook.chat?.messages);
+  const labels = new Map();
+  for (const [id, def] of uiDefs) labels.set(`ui:${id}`, uiLabel(def));
+  for (const a of notebook.artifacts || []) {
+    if (!a?.id || labels.has(a.id)) continue;
+    const title = String(a.title || '').replace(/\s+/g, ' ').trim().slice(0, 24);
+    if (title) labels.set(a.id, `「${title}」`);
+  }
   const stateIds = Object.keys(progress?.artifact_state || {});
-  const stateView = foldStateSnapshot(progress, { active: activeStateIds(progress, notebook.scene) });
+  const stateView = foldStateSnapshot(progress, {
+    active: activeStateIds(progress, notebook.scene),
+    labels,
+  });
   if (stateView.lines.length) lines.push(...stateView.lines);
 
-  const traceLines = uiTraceLines(progress);
+  const traceLines = uiTraceLines(progress, { labels });
   if (traceLines.length) lines.push(...traceLines);
 
   const artEvents = progress?.artifact_events || [];
