@@ -1,6 +1,9 @@
 // 极简 Markdown 渲染器。刻意不引外部依赖——教学文本里最主要的形态是
 // 段落、列表、代码块、表格、引用和公式，这些足够覆盖。
 //
+// 行内语法（粗斜体 / 代码 / 公式 / 链接）住在 inline.js：正文与内联界面里的叙事文字
+// 共用同一份，不在这里另写一套（第六十九轮）。
+//
 // 安全：所有输入先做 HTML 转义，只有我们自己生成的标签会进入 DOM。
 //
 // 内联界面的编译入口也挂在这里（```ui 围栏 → ui-compile.js）。之所以由渲染器调用、
@@ -8,42 +11,8 @@
 // 词汇表与渲染只该有一个入口，多一个入口就多一条"这条路上没人校验"。
 
 import { escapeHtml } from './escape.js';
+import { renderInline } from './inline.js';
 import { compileUiBlock } from './ui-compile.js';
-
-/** 行内语法。输入已转义。 */
-function inline(text) {
-  let out = text;
-
-  // 行内数学 $...$ / \(...\)
-  out = out.replace(/\\\((.+?)\\\)/g, (_, m) => `\u0000M${m}\u0000`);
-  out = out.replace(/(?<!\$)\$(?!\s)([^$\n]+?)(?<!\s)\$(?!\$)/g, (_, m) => `\u0000M${m}\u0000`);
-
-  // 行内代码
-  const codes = [];
-  out = out.replace(/`([^`]+)`/g, (_, c) => {
-    codes.push(c);
-    return `\u0000C${codes.length - 1}\u0000`;
-  });
-
-  // 链接与裸链接
-  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, href) => {
-    return `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-  });
-  out = out.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_, pre, href) => {
-    return `${pre}<a href="${href}" target="_blank" rel="noopener noreferrer">${href}</a>`;
-  });
-
-  // 强调
-  out = out.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-  out = out.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  out = out.replace(/(^|[^*\w])\*([^*\n]+?)\*(?![*\w])/g, '$1<em>$2</em>');
-  out = out.replace(/~~(.+?)~~/g, '<del>$1</del>');
-
-  // 还原占位符
-  out = out.replace(/\u0000C(\d+)\u0000/g, (_, i) => `<code>${codes[Number(i)]}</code>`);
-  out = out.replace(/\u0000M([\s\S]+?)\u0000/g, (_, m) => `<span class="math-inline">${m.trim()}</span>`);
-  return out;
-}
 
 function splitRow(line) {
   return line
@@ -82,8 +51,8 @@ function renderScene(lines) {
     // 左右只给前两位——"这一句是谁说的"在两人对手戏里才带得出信息，三角以后分左右就是随机分配
     const slotAttr = slot < 2 ? ` data-slot="${slot}"` : '';
     return `<div class="scene-line" data-who="${escapeHtml(t.who)}"${slotAttr}>`
-      + `<span class="scene-who">${inline(escapeHtml(t.who))}</span>`
-      + `<div class="scene-said">${inline(escapeHtml(t.said.join('\n')))}</div></div>`;
+      + `<span class="scene-who">${renderInline(t.who)}</span>`
+      + `<div class="scene-said">${renderInline(t.said.join('\n'))}</div></div>`;
   });
   return `<div class="scene">${parts.join('')}</div>`;
 }
@@ -180,7 +149,7 @@ export function renderMarkdown(src, { partial = false, _inner = false } = {}) {
     const h = /^(#{1,6})\s+(.*)$/.exec(line);
     if (h) {
       const level = Math.min(h[1].length, 6);
-      out.push(`<h${level}>${inline(escapeHtml(h[2]))}</h${level}>`);
+      out.push(`<h${level}>${renderInline(h[2])}</h${level}>`);
       i += 1;
       continue;
     }
@@ -203,10 +172,10 @@ export function renderMarkdown(src, { partial = false, _inner = false } = {}) {
       }
       out.push(
         '<table><thead><tr>' +
-          head.map((c) => `<th>${inline(escapeHtml(c))}</th>`).join('') +
+          head.map((c) => `<th>${renderInline(c)}</th>`).join('') +
           '</tr></thead><tbody>' +
           rows
-            .map((r) => `<tr>${r.map((c) => `<td>${inline(escapeHtml(c))}</td>`).join('')}</tr>`)
+            .map((r) => `<tr>${r.map((c) => `<td>${renderInline(c)}</td>`).join('')}</tr>`)
             .join('') +
           '</tbody></table>',
       );
@@ -236,7 +205,7 @@ export function renderMarkdown(src, { partial = false, _inner = false } = {}) {
           i += 1;
         }
       }
-      out.push(`<ul>${items.map((t) => `<li>${inline(escapeHtml(t))}</li>`).join('')}</ul>`);
+      out.push(`<ul>${items.map((t) => `<li>${renderInline(t)}</li>`).join('')}</ul>`);
       continue;
     }
 
@@ -251,7 +220,7 @@ export function renderMarkdown(src, { partial = false, _inner = false } = {}) {
           i += 1;
         }
       }
-      out.push(`<ol>${items.map((t) => `<li>${inline(escapeHtml(t))}</li>`).join('')}</ol>`);
+      out.push(`<ol>${items.map((t) => `<li>${renderInline(t)}</li>`).join('')}</ol>`);
       continue;
     }
 
@@ -272,7 +241,7 @@ export function renderMarkdown(src, { partial = false, _inner = false } = {}) {
       buf.push(lines[i]);
       i += 1;
     }
-    out.push(`<p>${inline(escapeHtml(buf.join('\n'))).replace(/\n/g, '<br />')}</p>`);
+    out.push(`<p>${renderInline(buf.join('\n')).replace(/\n/g, '<br />')}</p>`);
   }
 
   const html = out.join('\n');

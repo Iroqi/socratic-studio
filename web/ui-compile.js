@@ -20,6 +20,7 @@
 // 不学自动替学习者发言）。静态档没有状态可递，写 handoff 会掉回原文。
 
 import { escapeHtml } from './escape.js';
+import { renderInline } from './inline.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
 export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'figure', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
@@ -267,21 +268,14 @@ function num(text) {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * 组件里给人看的文字（标题、说明、条目、标签）走与正文同一套行内语法（第六十九轮）：
+ * 粗体 / 斜体 / 删除线 / 行内代码 / $公式$ 在卡片里和在正文里长得一样。
+ * 链接不认：这里的文字许多落在 <button> 里，<a> 嵌按钮是无效的交互嵌套——
+ * 想给链接就写在正文里。id、名字、坐标这类身份字段仍走 escapeHtml，显示可以变，身份不能变。
+ */
 function cell(text) {
-  return inlineSafe(String(text ?? '').slice(0, MAX_TEXT));
-}
-
-/** 组件内允许加粗与行内代码，其余照旧是转义后的纯文本——不给它长出一条脚本的可能。 */
-function inlineSafe(text) {
-  let out = escapeHtml(text);
-  const codes = [];
-  out = out.replace(/`([^`]+)`/g, (_, c) => {
-    codes.push(`<code>${escapeHtml(c)}</code>`);
-    return `\u0001${codes.length - 1}\u0001`;
-  });
-  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  out = out.replace(/\u0001(\d+)\u0001/g, (_, i) => codes[Number(i)]);
-  return out;
+  return renderInline(String(text ?? '').slice(0, MAX_TEXT), { links: false });
 }
 
 // ── 四档编译 ───────────────────────────────────────────────────────────

@@ -1529,6 +1529,40 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
       /noteUiPointerUp,/.test(hostSrc65));
 }
 
+// ────────────────────────────────────────── 第六十九轮：一种行内语法（正文与组件共用）
+/*
+ * 这一轮的风险不是渲染错，而是"又长出第二套"：正文的 inline() 还在、组件的 inlineSafe()
+ * 也还在，两套各改各的——同一句话在两处长成两样，模型要记两遍语法，学习者看到两种强调。
+ * 钉四件事：① 语法只在 web/inline.js 定义一次；② 两个渲染入口都 import 它；
+ * ③ 组件明确关掉链接（文字落在按钮里，<a> 不能嵌进去）；④ 提示与 README 把边界说清。
+ */
+{
+  const inlineSrc69 = fs.readFileSync(path.join(app, 'web', 'inline.js'), 'utf8');
+  const mdSrc69 = fs.readFileSync(path.join(app, 'web', 'markdown.js'), 'utf8');
+  const uiSrc69 = fs.readFileSync(path.join(app, 'web', 'ui-compile.js'), 'utf8');
+  const promptSrc69 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+  const readmeSrc69 = fs.readFileSync(path.join(app, 'README.md'), 'utf8');
+
+  check('① 行内语法只有一处定义（inline.js 导出 renderInline）',
+    /export function renderInline\(/.test(inlineSrc69), 'inline.js 没有导出 renderInline');
+  check('② 正文从 inline.js 拿语法，不再自己养 inline()',
+    /import \{ renderInline \} from '\.\/inline\.js'/.test(mdSrc69) && !/function inline\(/.test(mdSrc69),
+    'markdown.js 还留着自己的 inline()');
+  check('② 组件从 inline.js 拿同一份语法，不再自己养 inlineSafe()',
+    /import \{ renderInline \} from '\.\/inline\.js'/.test(uiSrc69) && !/function inlineSafe\(/.test(uiSrc69),
+    'ui-compile.js 还留着自己的 inlineSafe()');
+  check('③ 组件里的行内渲染关掉链接（文字落在按钮里，<a> 不能嵌进去）',
+    /renderInline\(String\(text \?\? ''\)\.slice\(0, MAX_TEXT\), \{ links: false \}\)/.test(uiSrc69),
+    'cell() 没关掉链接');
+  check('④ 提示里说了共用语法与链接边界（不说模型不会这么写）',
+    promptSrc69.includes('行内语法正文与组件共用') && promptSrc69.includes('链接只在正文里认'),
+    'prompt.mjs 缺这段');
+  check('④ README 写清了边界（inline.js / 组件不渲染链接 / 身份字段纯文本）',
+    readmeSrc69.includes('web/inline.js') && readmeSrc69.includes('组件内不渲染链接') &&
+      readmeSrc69.includes('身份字段始终保持纯文本'),
+    'README 缺边界说明');
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;

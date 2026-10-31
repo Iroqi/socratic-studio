@@ -7649,6 +7649,64 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore58, errors.slice(errsBefore58).join(' | '));
 }
 
+// ─── 59. 一种行内语法：正文与组件说同一种话（第六十九轮，学 IUI 把 Markdown 与组件
+// 编进同一棵树那一手）。此前正文认粗斜体 / 删除线 / 公式 / 链接，组件只认粗体与代码：
+// 同一句话在段落里和在卡片里长得不一样，模型得记两套，学习者看到两种强调方式。
+// 这一轮把语法收进 web/inline.js，两边共用；组件关掉链接（文字常落在按钮里）。
+{
+  console.log('\n59. 一种行内语法（正文与组件共用 inline.js）');
+  const errsBefore59 = errors.length;
+  const ui59 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const md59 = await import('file:///' + path.join(webDir, 'markdown.js').replace(/\\/g, '/'));
+  const inline59 = await import('file:///' + path.join(webDir, 'inline.js').replace(/\\/g, '/'));
+  const compile59 = (lines, partial) => ui59.compileUiBlock(lines.filter((l) => l.trim()), partial);
+
+  // 1) 同一句话，两条路渲染出同一份
+  const phrase59 = '**粗**、*斜*、~~删~~、`代码`、$x^2$';
+  const prose59 = inline59.renderInline(phrase59);
+  const steps59 = compile59(['kind: steps', `step: ${phrase59} | 说明`]).html;
+  check('同一句行内语法在正文与组件里渲染成同一份', steps59.includes(prose59), steps59.slice(0, 400));
+  check('粗 / 斜 / 删 / 代码 / 公式五样都出来了',
+    ['<strong>粗</strong>', '<em>斜</em>', '<del>删</del>', '<code>代码</code>', 'class="math-inline"']
+      .every((s) => prose59.includes(s)), prose59);
+  check('标题也走同一套（卡片抬头的斜体与公式跟正文一致）',
+    compile59(['kind: checklist', 'id: c69', 'title: 一次 *小* 实验：$E=mc^2$', 'item: 甲']).html
+      .includes('<p class="ui-cap">一次 <em>小</em> 实验：<span class="math-inline">E=mc^2</span></p>'));
+
+  // 2) 链接：正文认，组件不认（组件文字可能落在 <button> 里，<a> 不能嵌进去）
+  const url59 = 'https://example.com/a?b=1';
+  const proseLink59 = md59.renderMarkdown(`看 [这个](${url59}) 和 ${url59}`);
+  check('正文里的链接照旧可点（显式链接 + 裸链接都认）',
+    (proseLink59.match(/<a href=/g) || []).length === 2, proseLink59);
+  const cardLink59 = compile59(['kind: steps', `step: 参考 ${url59}`]).html;
+  check('组件里的链接留作纯文本（不在按钮里长出 <a>）',
+    !cardLink59.includes('<a href=') && cardLink59.includes('https://example.com/a?b=1'), cardLink59.slice(0, 400));
+
+  // 3) 身份字段仍走原样：显示可以变，名字不能变（回读与状态键都拿原文）
+  const diag59 = compile59(['kind: diagram', 'id: d69', 'node: **甲**', 'node: 乙', 'edge: **甲** -> 乙']).html;
+  check('diagram 的节点名不当强调解析（身份是原文）',
+    diag59.includes('**甲**') && !diag59.includes('<strong>甲</strong>'), diag59.slice(0, 500));
+  const fig59 = compile59(['kind: figure', 'alt: x', 'shape: 底 | rect | 0,0,100,60', 'label: **甲** | 10,10']).html;
+  check('SVG 标签保持纯文本（图形标签不是富文本容器）',
+    fig59.includes('>**甲**<') && !fig59.includes('<strong>'), fig59.slice(0, 400));
+
+  // 4) 安全：共用语法不等于放宽转义
+  const xss59 = inline59.renderInline('**<img src=x onerror=alert(1)>** 和 $<script>alert(1)</script>$');
+  check('强调与公式里的标签照旧被转义',
+    !xss59.includes('<img') && !xss59.includes('<script') && xss59.includes('&lt;img') && xss59.includes('&lt;script'), xss59);
+  const js59 = inline59.renderInline('[点我](javascript:alert(1))');
+  check('非 http(s) 的链接不变成 <a>', !js59.includes('<a href='), js59);
+  const nul59 = inline59.renderInline('\u0000C0\u0000 与 \u0000M9\u0000');
+  check('原文里的占位控制符劫持不了还原', !nul59.includes('undefined') && nul59.trim() === 'C0 与 M9', JSON.stringify(nul59));
+
+  // 5) 流里没写完的强调不炸：照原文挂着，收尾长齐了再变
+  const half59 = compile59(['kind: steps', 'step: **粗'], true).html;
+  check('流里的半截强调不炸（未闭合就照原文挂着）',
+    half59.includes('**粗') && !half59.includes('<strong>'), half59.slice(0, 300));
+
+  check('这一节无异常', errors.length === errsBefore59, errors.slice(errsBefore59).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);
