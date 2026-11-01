@@ -23,7 +23,7 @@ import { escapeHtml } from './escape.js';
 import { renderInline } from './inline.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'figure', 'sketch', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
+export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'figure', 'sketch', 'callout', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -44,8 +44,10 @@ export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'met
  * form 第四十四轮："填进去的值"就是状态（学习者的数/话放进界面，按 id 续着）。
  * map 第四十七轮："点开看了哪个点"就是状态（点位落在示意框里，点一个看它的那句话）。
  * arrange 第六十六轮："他排成什么顺序 / 分进哪一栏"就是状态（亲手摆，按 id 续着）。
+ * sketch 第七十二轮："每个点拖到哪"就是状态（几何能亲手改，按 id 续着）。
+ * callout 第七十三轮："点开过图上的哪几块"就是状态（编号落在部件上，点一个看那一块）。
  */
-export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map', 'arrange', 'sketch'];
+export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map', 'arrange', 'sketch', 'callout'];
 
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
@@ -1677,6 +1679,21 @@ function figureLabelEl(text, x, y, anchor, W) {
   );
 }
 
+/** figure / sketch / callout 共用的箭头层：三档的几何词汇一样，画法也只该有一份。 */
+function figureArrowEls(arrows, markerId) {
+  return arrows
+    .map((a) => {
+      const midX = (a.from.x + a.to.x) / 2;
+      const midY = (a.from.y + a.to.y) / 2;
+      return (
+        `<line class="ui-fig-arrow" x1="${figNum(a.from.x)}" y1="${figNum(a.from.y)}" ` +
+        `x2="${figNum(a.to.x)}" y2="${figNum(a.to.y)}" marker-end="url(#${markerId})"/>` +
+        (a.label ? `<text class="ui-fig-arrow-label" x="${figNum(midX)}" y="${figNum(midY - 6)}" text-anchor="middle">${escapeHtml(a.label)}</text>` : '')
+      );
+    })
+    .join('');
+}
+
 /**
  * figure / sketch 共用的场景解析：frame、alt、shape、label、arrow。
  * 两档的几何词汇完全一样，只有"画完就完了"与"画上的点还能拖"这一层不同——
@@ -1875,17 +1892,7 @@ function compileFigure(fields, lines, partial) {
   const { W, H, title, alt, shapes, labels, arrows, rawFrame } = scene;
   // 箭头 marker 的 id 由内容决定：同一张图重画仍是同一个 marker，两张图不会撞 id。
   const markerId = `ui-fig-arrow-${hashText(`${alt}\n${rawFrame.join()}\n${pick(fields, 'shape').join('\n')}`)}`;
-  const arrowEls = arrows
-    .map((a) => {
-      const midX = (a.from.x + a.to.x) / 2;
-      const midY = (a.from.y + a.to.y) / 2;
-      return (
-        `<line class="ui-fig-arrow" x1="${figNum(a.from.x)}" y1="${figNum(a.from.y)}" ` +
-        `x2="${figNum(a.to.x)}" y2="${figNum(a.to.y)}" marker-end="url(#${markerId})"/>` +
-        (a.label ? `<text class="ui-fig-arrow-label" x="${figNum(midX)}" y="${figNum(midY - 6)}" text-anchor="middle">${escapeHtml(a.label)}</text>` : '')
-      );
-    })
-    .join('');
+  const arrowEls = figureArrowEls(arrows, markerId);
   const labelEls = labels.map((l) => figureLabelEl(l.text, l.x, l.y, l.align, W)).join('');
 
   const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
@@ -2054,17 +2061,7 @@ function compileSketch(fields, lines, partial) {
   writeUiState(id, 'sketch', partial ? { ...stored, uiKind: 'sketch' } : state, spec);
 
   const markerId = `ui-sketch-arrow-${hashText(`${id}\n${alt}\n${handles.map((h) => h.name).join(',')}`)}`;
-  const arrowEls = arrows
-    .map((a) => {
-      const midX = (a.from.x + a.to.x) / 2;
-      const midY = (a.from.y + a.to.y) / 2;
-      return (
-        `<line class="ui-fig-arrow" x1="${figNum(a.from.x)}" y1="${figNum(a.from.y)}" ` +
-        `x2="${figNum(a.to.x)}" y2="${figNum(a.to.y)}" marker-end="url(#${markerId})"/>` +
-        (a.label ? `<text class="ui-fig-arrow-label" x="${figNum(midX)}" y="${figNum(midY - 6)}" text-anchor="middle">${escapeHtml(a.label)}</text>` : '')
-      );
-    })
-    .join('');
+  const arrowEls = figureArrowEls(arrows, markerId);
   const labelEls = labels.map((l) => figureLabelEl(l.text, l.x, l.y, l.align, W)).join('');
   const linkEls = links
     .map((l) => {
@@ -2120,6 +2117,165 @@ function sketchWords(fields) {
   return pick(fields, 'handle').length > 0 || pick(fields, 'connect').length > 0;
 }
 const SKETCH_ONLY = 'handle / connect 只配 sketch（图上能拖的点与线，别的档没有"可改的几何"这回事）';
+
+// ── 图上点名（第七十三轮，学 Intelligent UI 的 numbered callouts 那一面） ──
+const CALLOUT_FIELDS = new Set([...FIGURE_FIELDS, 'id', 'handoff', 'callout']);
+const CALLOUT_MAX_PARTS = 8;
+const CALLOUT_NAME_MAX = 16;
+const CALLOUT_HINT_MAX = 40;
+const CALLOUT_R = 11;
+
+/**
+ * callout：figure 的几何 + 1–8 个**能点开的编号标注**。
+ *
+ * 学的形状：Intelligent UI 官方旗舰演示里"点自行车上的部件，它告诉你自己是什么"——
+ * 一张图不是插画，而是**可以逐块问的结构**。词表里 figure 是静态的（它的静态是契约）；
+ * explore 是"一个整体的几面"，但不落在图上；map 的位置是示意地理；diagram 是节点与连线。
+ * 缺的正是"**空间里的部件**"这一格：编号落在形状上，点一个，那一块的一句话换上来。
+ *
+ * `callout: 名字 | x,y | 一句话` 声明一处标注；编号由宿主按声明顺序生成（1、2、3……），
+ * 不是学习者看的"第几个"——它只是这一块的标签，不是进度、不是分数、不是完成度。
+ *
+ * 三条边界，和 Invariant 4 同一条尺：
+ *   ① **没有答案键**：界面只记"他点开过哪几块"（active / viewed），不判"点得对不对"——
+ *      判分是对话里老师的事；
+ *   ② 编号点只落在图上，点开只是换一句话；界面绝不显示"看过 2 / 5"这类完成度；
+ *   ③ 名字是身份，坐标是内容；名字由模型写在围栏里，坐标与编号永远从宿主这边重新生成。
+ *
+ * 为什么单开一档而不是把 figure 改成可点：figure 的静态是契约（没有 id、不进 UI_STATEFUL、
+ * 不写 artifact_state）——同一档不能既"图里没有他做过什么"又"图里全是他做过什么"。
+ * 要逐块点开，就明确换一档；这样"同一 id 不换档"那条规则也还说得清。
+ */
+function compileCallout(fields, lines, partial) {
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（数值逐项查是 chart 的形状）' };
+  if (pick(fields, 'node').length || pick(fields, 'edge').length) {
+    return { error: 'node / edge 是 diagram 的字段：谁连着谁用 diagram，图上的部件要点开看用 callout' };
+  }
+  if (pick(fields, 'stop').length || pick(fields, 'route').length) {
+    return { error: 'stop / route 是 map 的字段：谁在哪儿用 map，图上的部件要点开看用 callout' };
+  }
+  // handle / connect 由外层的 sketchWords 那道先拦（顶层与 deck 子块都拦过），这里不重复。
+  const stray = fields.filter(([k]) => !CALLOUT_FIELDS.has(k)).map(([k]) => k);
+  if (stray.length) {
+    return { error: `「${stray[0]}」不是 callout 的字段（callout 只认 id / alt / frame / shape / label / arrow / callout / title / handoff）` };
+  }
+  const ids = pick(fields, 'id');
+  if (ids.length > 1) return { error: 'id 写了两遍' };
+  const id = (ids[0] || '').trim();
+  if (!id) {
+    if (!partial) return { error: '这张标注图没有 id：点开看过哪一块没地方续' };
+    return { html: skeleton('正在把这张标注图长出来…'), pending: true };
+  }
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
+
+  const soft = (why) => (partial ? null : { error: why });
+  const scene = parseFigureScene(fields, partial, 'callout');
+  if (scene.error) return { error: scene.error };
+  if (scene.pending) return { html: skeleton('正在把这张标注图长出来…'), pending: true };
+  const { W, H, title, alt, shapes, labels, arrows } = scene;
+
+  const parts = [];
+  const names = new Set();
+  const spots = new Set();
+  for (const raw of pick(fields, 'callout')) {
+    const seg = String(raw).split('|').map((s) => s.trim());
+    if (seg.length !== 3 || !seg[2]) {
+      const e = soft(`callout「${String(raw).slice(0, 32)}」要写成「名字 | x,y | 一句话」（三样都要写全）`);
+      if (e) return e;
+      continue;
+    }
+    const [name, pos, hint] = seg;
+    if (!name) { const e = soft('有一处标注的名字是空的'); if (e) return e; continue; }
+    if (name.length > CALLOUT_NAME_MAX) { const e = soft(`标注的名字「${name}」太长了（≤${CALLOUT_NAME_MAX} 字）`); if (e) return e; continue; }
+    if (!UI_IDENT.test(name)) { const e = soft(`标注的名字「${name}」不合法（字母 / 汉字起头，中间不许空格与标点）`); if (e) return e; continue; }
+    if (names.has(name)) { const e = soft(`「${name}」写了两遍：标注的身份是名字`); if (e) return e; continue; }
+    const p = figPoint(pos);
+    if (!p || !figInFrame(p.x - CALLOUT_R, p.y - CALLOUT_R, W, H) || !figInFrame(p.x + CALLOUT_R, p.y + CALLOUT_R, W, H)) {
+      const e = soft(`callout「${name}」的位置「${pos}」不是图框里的「x,y」（frame 是 ${W}x${H}，圆点也要留得下）`);
+      if (e) return e;
+      continue;
+    }
+    if (hint.length > CALLOUT_HINT_MAX) { const e = soft(`callout「${name}」的一句话太长了（≤${CALLOUT_HINT_MAX} 字）`); if (e) return e; continue; }
+    const spot = `${figNum(p.x)},${figNum(p.y)}`;
+    if (spots.has(spot)) { const e = soft(`「${name}」和别的标注落在同一个位置上：两个编号叠在一起就分不出谁是谁`); if (e) return e; continue; }
+    if (parts.length >= CALLOUT_MAX_PARTS) {
+      const e = soft(`标注太多了（最多 ${CALLOUT_MAX_PARTS} 处：一张图讲清楚一件事）`);
+      if (e) return e;
+      continue;
+    }
+    names.add(name);
+    spots.add(spot);
+    parts.push({ name, x: p.x, y: p.y, hint });
+  }
+  if (!parts.length) {
+    const e = soft('一处 callout 都没有：callout 至少要有一个能点开的编号');
+    if (e) return e;
+    return { html: skeleton('正在把这张标注图长出来…'), pending: true };
+  }
+
+  // 状态从宿主侧续：上次点开谁、看过哪些，重画就带回来。围栏改版删掉的部件不再续——
+  // 屏幕上已经没有那一块，留着一个看不见的名字只会让下半句对不上。
+  const stored = readUiState(id)?.state || {};
+  const keptViewed = {};
+  for (const p of parts) if (stored.viewed?.[p.name]) keptViewed[p.name] = true;
+  const active = parts.some((p) => p.name === stored.active) ? stored.active : null;
+  const state = { ...stored, active, viewed: keptViewed, uiKind: 'callout' };
+  const spec = { W, H, title, parts: parts.map((p) => ({ name: p.name, x: p.x, y: p.y, hint: p.hint })) };
+  writeUiState(id, 'callout', state, spec);
+
+  const markerId = `ui-callout-arrow-${hashText(`${id}\n${alt}\n${parts.map((p) => p.name).join(',')}`)}`;
+  const arrowEls = figureArrowEls(arrows, markerId);
+  const labelEls = labels.map((l) => figureLabelEl(l.text, l.x, l.y, l.align, W)).join('');
+  const markEls = parts
+    .map((p, i) => {
+      const on = p.name === active;
+      return (
+        `<g class="ui-callout-mark${on ? ' ui-callout-mark-active' : ''}" ` +
+        `data-ui-callout-mark="${escapeHtml(id)}" data-ui-name="${escapeHtml(p.name)}" tabindex="0" role="button" ` +
+        `aria-pressed="${on ? 'true' : 'false'}" ` +
+        `aria-label="第 ${i + 1} 处「${escapeHtml(p.name)}」：${escapeHtml(p.hint)}（点开看）">` +
+        `<title>${escapeHtml(p.name)}：${escapeHtml(p.hint)}</title>` +
+        `<circle class="ui-callout-dot" cx="${figNum(p.x)}" cy="${figNum(p.y)}" r="${CALLOUT_R}"/>` +
+        `<text class="ui-callout-num" x="${figNum(p.x)}" y="${figNum(p.y)}" text-anchor="middle" dominant-baseline="middle">${i + 1}</text>` +
+        `</g>`
+      );
+    })
+    .join('');
+
+  const hit = active ? parts.find((p) => p.name === active) : null;
+  const pane = hit
+    ? `<p class="ui-callout-pane-name">${cell(hit.name)}</p>` +
+      `<p class="ui-callout-pane-note">${cell(hit.hint)}</p>`
+    : `<p class="ui-callout-pane-hint">点图上的编号，看那一块是什么</p>`;
+  const list = parts.map((p, i) => `第 ${i + 1} 处 ${p.name}（${p.hint}）`).join('；');
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const aria = alt || '这张标注图还在长';
+  const svg =
+    `<svg class="ui-callout-canvas" role="group" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">` +
+    `<title>${escapeHtml(aria)}</title>` +
+    `<defs><marker id="${markerId}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+    `<path class="ui-fig-arrow-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>` +
+    shapes.join('') + arrowEls + labelEls + markEls +
+    `</svg>`;
+  const body =
+    `<div class="ui-callout" data-ui-callout="${escapeHtml(id)}">` +
+    `<p class="sr-only">图上的标注：${escapeHtml(list)}。点编号可以逐条看。</p>` +
+    svg +
+    `<div class="ui-callout-pane" aria-live="polite">${pane}</div>` +
+    `</div>`;
+  return {
+    html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`,
+    shape: 'callout',
+    pending: partial || undefined,
+  };
+}
+
+/** callout 的专属词写在别的档 = 语义词写错档：不许静默吞（与 handle / stop / node 同一把尺）。 */
+function calloutWords(fields) {
+  return pick(fields, 'callout').length > 0;
+}
+const CALLOUT_ONLY = 'callout 只配带 id 的 callout（图上的部件要点开看说明，别的档没有"编号标注"这回事）';
 
 // ── 分段探索 ─────────────────────────────────────────────────────────────
 /**
@@ -2740,6 +2896,9 @@ function compileDeck(fields, lines, partial) {
     if (metaErr) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${metaErr}` };
     if (part.kind !== 'sketch' && sketchWords(child.fields)) {
       return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${SKETCH_ONLY}` };
+    }
+    if (part.kind !== 'callout' && calloutWords(child.fields)) {
+      return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${CALLOUT_ONLY}` };
     }
     if (part.kind !== 'calculator' && part.kind !== 'form') {
       const usesErr = usesGuard(child.fields, part.kind);
@@ -3379,7 +3538,7 @@ function compileQuestion(fields) {
 /** question 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
 const QUESTION_FIELDS = new Set(['id', 'question', 'header', 'option', 'multiSelect', 'allowText', 'conceptId']);
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, figure: compileFigure, sketch: compileSketch, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, figure: compileFigure, sketch: compileSketch, callout: compileCallout, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
 
 /**
  * 稳定键（第六十五轮，学 Intelligent UI 的 "native, streamable components" 那一手）：
@@ -3448,6 +3607,7 @@ function compileUiBlockInner(lines, partial) {
     const metaErr = metaWordsError(parsed.fields, kind);
     if (metaErr) return fail(metaErr);
     if (kind !== 'sketch' && sketchWords(parsed.fields)) return fail(SKETCH_ONLY);
+    if (kind !== 'callout' && calloutWords(parsed.fields)) return fail(CALLOUT_ONLY);
     // uses 只配 calculator / form（第六十三轮）：只有这两档有能被场上参数填上的默认值 / 空格子。
     if (kind !== 'calculator' && kind !== 'form') {
       const usesErr = usesGuard(parsed.fields, kind);

@@ -875,6 +875,26 @@ html, body {
 .ui-sketch-readout { margin: -0.35em 0 0.5em; color: var(--ink-2); font-family: var(--mono); font-size: 12px; }
 .ui-sketch-hint { margin: 0 0 1em; color: var(--ink-3); font-size: 12px; }
 
+/* callout（第七十三轮）：figure 的几何 + 能点开的编号标注——学 IUI 旗舰演示里
+   "点自行车上的部件，它告诉你自己是什么"那一手。编号点是一枚描边圆 + 数字；
+   普通态用 --ink-2，点开的那一枚借 --accent 一族（与 map 的激活点同一把尺）。
+   没有"看过 / 没看过"的两种颜色——那会把界面变成完成度；看过只记在状态里。 */
+.ui-callout { margin: 0 0 1em; }
+.ui-callout-canvas { display: block; max-width: 100%; height: auto; }
+.ui-callout-mark { cursor: pointer; outline: none; }
+.ui-callout-mark:focus-visible .ui-callout-dot { stroke-width: 3; }
+.ui-callout-dot { fill: var(--surface-2); stroke: var(--ink-2); stroke-width: 1.6; }
+.ui-callout-num { fill: var(--ink-2); font-size: 11px; font-weight: 650; pointer-events: none; }
+.ui-callout-mark-active .ui-callout-dot { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2.4; }
+.ui-callout-mark-active .ui-callout-num { fill: var(--accent-ink); }
+.ui-callout-pane {
+  margin: 6px 0 0; padding: 10px 12px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.ui-callout-pane-name { margin: 0 0 2px; font-size: 13.5px; font-weight: 620; color: var(--ink); }
+.ui-callout-pane-note { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+.ui-callout-pane-hint { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+
 /* handoff（第二十九轮）：交互档把状态递回对话的按钮。底色仍只借 --surface-2
    （那条"底色全用量过的 surface-2"的账不许破），hover 只换文字与描边，不引新背景。 */
 .ui-handoff {

@@ -1574,7 +1574,7 @@ for (const ghost of ['命令执行工具', 'str_replace', 'pdf 技能', '语音�
   check('规则本体仍原样保留 ask_user_question（源语言不因适配层改名而改写）',
     rulesBlob.includes('ask_user_question'), '规则被改写了');
 
-  // 只取「## 工具映射」这一张表：后面那张十九档词表里也满是反引号，
+  // 只取「## 工具映射」这一张表：后面那张二十档词表里也满是反引号，
   // 混在一起扫会把 kind / 字段名当成工具名。
   const mapSection = APP_ADAPTER.split('## 工具映射')[1]?.split('\n## ')[0] || '';
   const mapRows = mapSection.split('\n').filter((l) => /^\|/.test(l) && !/^\|\s*-{2,}/.test(l));

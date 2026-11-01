@@ -4095,7 +4095,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const calcBare = compile(['calculator', 'id: feast2', 'unit: 公斤', 'param: 人数 | 8 | 2 | 20', 'formula: 肉 = 人数 * 0.4']).html;
   check('首行裸 calculator 同样能编（裸档名是通用行为，不只 question）',
     calcBare.includes('data-ui-param="人数"'), calcBare.slice(0, 120));
-  // 第五十九轮起：十九档 × 裸档名 / kind: 前缀 双写法全编（防"某档悄悄渲染不出来"回归）
+  // 第五十九轮起：二十档 × 裸档名 / kind: 前缀 双写法全编（防"某档悄悄渲染不出来"回归）
   const ALL_KINDS = {
     compare: ['row: 甲 | 乙', 'row: 丙 | 丁'],
     steps: ['step: 打开仓库', 'step: 提交一次'],
@@ -4107,6 +4107,8 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     diagram: ['id: d1', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙'],
     figure: ['alt: 甲乙两块并排', 'shape: 甲 | rect | 10,10,60,40', 'shape: 乙 | circle | 200,60,20'],
     sketch: ['id: s1', 'alt: 甲乙两点可以拖', 'handle: 甲 | 20,20', 'handle: 乙 | 80,80', 'connect: 甲 > 乙'],
+    callout: ['id: co1', 'alt: 甲乙两块，编号可以点开', 'shape: 甲 | rect | 10,10,60,40', 'shape: 乙 | circle | 200,60,20',
+      'callout: 甲 | 40,30 | 左边那一块', 'callout: 乙 | 200,60 | 右边那一块'],
     explore: ['id: e1', 'tab: 基础', 'tab: 进阶'],
     chart: ['type: line', 'series: 一月 = 1,2', 'series: 二月 = 3,4'],
     suggest: ['pick: 再举个例子', 'pick: 换一个'],
@@ -8123,6 +8125,285 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     !notes61.some((n) => n.includes('f72')), notes61.join(' / '));
 
   check('这一节无异常', errors.length === errsBefore61, errors.slice(errsBefore61).join(' | '));
+}
+
+// ─── 62. callout：图上点名（第七十三轮，学 Intelligent UI 的 numbered callouts 那一手）。
+// figure 的静态是契约，sketch 让点能拖，但"一张图里有几块各有名字的部件、想逐块点开看"
+// 还没有形状：explore 不落在图上、map 是示意地理、diagram 是节点与连线。这一档留下 figure
+// 的几何词汇，外加 1–8 处 `callout: 名字 | x,y | 一句话`：编号由宿主按声明顺序生成，
+// 点一个就换上那一块的一句话；状态 {active, viewed} 按 id 落盘续回，再点收回说明。
+// 没有答案键、没有"看过几个 / 共几个"——"他点开了哪"是现象，判分留在对话里（Invariant 4）。
+{
+  console.log('\n62. callout（图上点名：点一个编号看那一块，点开过哪几块记进状态）');
+  const errsBefore62 = errors.length;
+  const ui62 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { state: st62, handleUiDeskEvent: handle62, handleUiDeskKey: key62, renderDeskState: renderPanel62 } = appModule.__hooks;
+  const compile62 = (lines, partial) => ui62.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const deg62 = (lines) => ui62.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  const input62 = doc.getElementById('input');
+  const boxBefore62 = input62.value;
+  ui62.resetUiState();
+
+  const bike = ['kind: callout', 'id: c73', 'title: 七速自行车', 'alt: 一辆自行车的三个部件，编号可以点开',
+    'frame: 320x180',
+    'shape: 车架 | rect | 40,60,180,30',
+    'shape: 车轮 | circle | 80,130,30',
+    'shape: 车把 | line | 210,50,240,40',
+    'callout: 车架 | 130,75 | 承受骑手的重量',
+    'callout: 车轮 | 80,130 | 与地面接触',
+    'handoff: 把看过的部件带回对话'];
+  const c62 = compile62(bike).html;
+
+  // 1) 编译形状：figure 的几何 + 两枚可聚焦的编号点 + 一块说明面板
+  check('callout 编译成一张 SVG（归属 id 落在容器上，形状照 figure 的词法长出来）',
+    c62.includes('<div class="ui-callout" data-ui-callout="c73">') &&
+    c62.includes('<svg class="ui-callout-canvas" role="group" aria-label="一辆自行车的三个部件，编号可以点开"') &&
+    (c62.match(/class="ui-fig-shape/g) || []).length === 3, c62.slice(0, 600));
+  check('编号点是可点的（role=button + tabindex，键盘走同一条路）',
+    (c62.match(/<g class="ui-callout-mark/g) || []).length === 2 &&
+    (c62.match(/role="button"/g) || []).length === 2 && (c62.match(/tabindex="0"/g) || []).length === 2,
+    c62.slice(400, 1100));
+  check('编号由宿主按声明顺序生成（1、2 落在部件坐标上，不是模型写的数字）',
+    c62.includes('<circle class="ui-callout-dot" cx="130" cy="75" r="11"/>') &&
+    c62.includes('x="130" y="75" text-anchor="middle" dominant-baseline="middle">1</text>') &&
+    c62.includes('x="80" y="130" text-anchor="middle" dominant-baseline="middle">2</text>'), c62.slice(700, 1400));
+  check('名字与那句话进 <title> 与读屏名（点开前也能读到）',
+    c62.includes('<title>车架：承受骑手的重量</title>') &&
+    c62.includes('aria-label="第 1 处「车架」：承受骑手的重量（点开看）"'), c62.slice(700, 1500));
+  check('面板开局给一句中性引导（还没点过，不替他声称看过）',
+    c62.includes('<p class="ui-callout-pane-hint">点图上的编号，看那一块是什么</p>'), c62.slice(-500));
+  check('图外有一份读屏文字替代（第几处、名字、那句话都写成句子）',
+    c62.includes('<p class="sr-only">图上的标注：第 1 处 车架（承受骑手的重量）；第 2 处 车轮（与地面接触）。点编号可以逐条看。</p>'),
+    c62.slice(0, 600));
+  check('title 帽 + handoff 按钮（沿交互档的既有出口）',
+    c62.includes('<p class="ui-cap">七速自行车</p>') && c62.includes('class="ui-handoff" data-ui-handoff="c73"'), c62.slice(-400));
+  check('输出里没有答案键 / 判分词（Invariant 4：只记点开了哪，不判点对没）',
+    !/答案|score|percent|mastery|correct|incorrect/.test(c62), c62.slice(0, 400));
+  check('spec 里存下 frame 与两处标注（点击时取现成的那份，不重解析围栏）',
+    ui62.readUiState('c73')?.spec?.W === 320 && ui62.readUiState('c73')?.spec?.H === 180 &&
+    ui62.readUiState('c73')?.spec?.parts?.length === 2 &&
+    ui62.readUiState('c73')?.spec?.parts?.[0]?.hint === '承受骑手的重量',
+    JSON.stringify(ui62.readUiState('c73')?.spec));
+  check('state 开局是空的（没点过就是没点过）',
+    ui62.readUiState('c73')?.state?.active === null &&
+    Object.keys(ui62.readUiState('c73')?.state?.viewed || {}).length === 0,
+    JSON.stringify(ui62.readUiState('c73')?.state));
+  check('同一份围栏两次编译一模一样（流里每帧重编，编号不许跳）', compile62(bike).html === c62, '');
+
+  // 2) 续回：点开的那一块重画就还在；围栏里删掉的部件不再续
+  ui62.setUiValues('c73', 'callout', { uiKind: 'callout', active: '车轮', viewed: { 车架: true, 车轮: true } });
+  const c62b = compile62(bike).html;
+  check('重画续回上次点开的部件（class + aria-pressed）',
+    c62b.includes('class="ui-callout-mark ui-callout-mark-active" data-ui-callout-mark="c73" data-ui-name="车轮"') &&
+    c62b.includes('aria-pressed="true"'), c62b.slice(700, 1500));
+  check('面板换上那一块的名字与那句话（来自编译时存下的 spec）',
+    c62b.includes('<p class="ui-callout-pane-name">车轮</p>') && c62b.includes('<p class="ui-callout-pane-note">与地面接触</p>'),
+    c62b.slice(-400));
+  ui62.setUiValues('c73', 'callout', { uiKind: 'callout', active: '齿轮', viewed: { 齿轮: true, 车架: true } });
+  compile62(bike);
+  const st62b = ui62.readUiState('c73').state;
+  check('围栏里删掉的部件不再续（active 收回、viewed 只留这版还认的）',
+    st62b.active === null && !('齿轮' in st62b.viewed) && st62b.viewed['车架'] === true, JSON.stringify(st62b));
+  ui62.resetUiState();
+
+  // 3) 降级：每条都点名为什么不行，不静默吞
+  check('没有 id：掉回原文并点名（点开过哪一块没地方续）',
+    deg62(['kind: callout', 'alt: x', 'shape: a | rect | 10,10,60,40', 'callout: a | 40,30 | 一句话']).includes('这张标注图没有 id'), '');
+  check('没有 alt：掉回原文并点名（写不出"让人看到什么"就不画）',
+    deg62(['kind: callout', 'id: a', 'shape: a | rect | 10,10,60,40', 'callout: a | 40,30 | 一句话']).includes('没有 alt'), '');
+  check('一个 shape 都没有：掉回原文并点名',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'callout: a | 40,30 | 一句话']).includes('一个 shape 都没有'), '');
+  check('一处 callout 都没有：掉回原文并点名',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40']).includes('一处 callout 都没有'), '');
+  const nine62 = ['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,300,160',
+    ...Array.from({ length: 9 }, (_, i) => 'callout: 点' + i + ' | ' + (30 + i * 30) + ',90 | 第 ' + i + ' 块')];
+  check('超过 8 处标注：掉回原文并点名（一张图讲清楚一件事）',
+    deg62(nine62).includes('标注太多了'), '');
+  check('callout 行少一句话：掉回原文并点名（三样都要写全）',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40', 'callout: a | 40,30']).includes('三样都要写全'), '');
+  check('坐标不是「x,y」：掉回原文并点名',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40', 'callout: a | 40;30 | 一句话']).includes('不是图框里的'), '');
+  check('编号点落在图框外：掉回原文并点名（圆点也要留得下）',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40', 'callout: a | 9999,30 | 一句话']).includes('圆点也要留得下'), '');
+  check('名字写了两遍：掉回原文并点名（身份是名字）',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40',
+      'callout: a | 40,30 | 一', 'callout: a | 50,40 | 二']).includes('写了两遍'), '');
+  check('两处标注落在同一个位置：掉回原文并点名（编号叠在一起分不出谁是谁）',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40',
+      'callout: a | 40,30 | 一', 'callout: b | 40,30 | 二']).includes('同一个位置'), '');
+  check('名字不合法：掉回原文并点名',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40', 'callout: a b | 40,30 | 一']).includes('不合法'), '');
+  check('名字太长：掉回原文并点名',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40',
+      'callout: ' + '名'.repeat(17) + ' | 40,30 | 一']).includes('太长了'), '');
+  check('一句话太长：掉回原文并点名',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40',
+      'callout: a | 40,30 | ' + '一'.repeat(41)]).includes('一句话太长了'), '');
+  check('id 写了两遍：掉回原文并点名',
+    deg62(['kind: callout', 'id: a', 'id: b', 'alt: x', 'shape: a | rect | 10,10,60,40', 'callout: a | 40,30 | 一']).includes('id 写了两遍'), '');
+  check('别的档的字段写进 callout：掉回原文并点名',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40', 'callout: a | 40,30 | 一', 'step: 一步']).includes('不是 callout 的字段'), '');
+  check('node / edge 写进 callout：掉回原文并点名（谁连着谁用 diagram）',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40', 'callout: a | 40,30 | 一', 'node: 甲']).includes('diagram 的字段'), '');
+  check('stop / route 写进 callout：掉回原文并点名（谁在哪儿用 map）',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40', 'callout: a | 40,30 | 一', 'stop: 甲 | 1,2']).includes('map 的字段'), '');
+  check('handle / connect 写进 callout：掉回原文并点名（拖动用 sketch）',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40', 'callout: a | 40,30 | 一', 'handle: A | 1,2']).includes('只配 sketch'), '');
+  check('table 写进 callout：掉回原文并点名（逐项查数用 chart）',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40', 'callout: a | 40,30 | 一', 'table: 甲 | 1']).includes('table 只配 chart'), '');
+  check('handoff 超 24 字：掉回原文并点名',
+    deg62(['kind: callout', 'id: a', 'alt: x', 'shape: a | rect | 10,10,60,40', 'callout: a | 40,30 | 一',
+      'handoff: ' + '发'.repeat(25)]).includes('24'), '');
+  check('callout 写进 compare：被点名"只配带 id 的 callout"',
+    deg62(['kind: compare', 'row: 甲 | 乙', 'row: 丙 | 丁', 'callout: a | 1,2 | 一']).includes('只配带 id 的 callout'), '');
+  check('callout 写进 deck 的 steps 子块：整块被点名（不静默吞）',
+    deg62(['kind: deck', 'title: 图', 'part: steps', '  step: 一', '  callout: a | 1,2 | 一',
+      'part: checklist', '  item: 甲']).includes('只配带 id 的 callout'), '');
+
+  // 4) 渐进：长到一半先摆占位；终态缺 id / alt / 标注是硬错
+  const p62a = compile62(['kind: callout', 'alt: x', 'shape: a | rect | 10,10,60,40'], true);
+  check('流里还没有 id：先摆占位（点开过的记录没地方续）',
+    p62a.pending === true && p62a.html.includes('ui-skeleton'), p62a.html.slice(0, 300));
+  const p62b = compile62(['kind: callout', 'id: p1', 'alt: x', 'shape: a | rect | 10,10,60,40'], true);
+  check('流里还没有 callout：先摆占位（还没有可点的编号）',
+    p62b.pending === true && p62b.html.includes('ui-skeleton'), p62b.html.slice(0, 300));
+  const p62c = compile62(['kind: callout', 'id: p1', 'shape: a | rect | 10,10,60,40', 'callout: a | 40,30 | 一'], true);
+  check('流里还没有 alt：图先长出来，读屏名先用一句中性的话顶着',
+    p62c.pending === true && !p62c.degraded && p62c.html.includes('aria-label="这张标注图还在长"') &&
+    p62c.html.includes('data-ui-callout-mark="p1"'), String(p62c.degraded || p62c.html).slice(0, 400));
+  check('同样的内容闭合后（终态）缺 alt 是硬错',
+    deg62(['kind: callout', 'id: p1', 'shape: a | rect | 10,10,60,40', 'callout: a | 40,30 | 一']).includes('没有 alt'), '');
+
+  // 5) 宿主接线：点一个编号 → active/viewed 落对 + 报回（判分一个字都不发生）
+  st62.notebook = sampleNotebook();
+  st62.uiReported.clear();
+  const posts62 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  compile62(bike); // spec 进 Map（点击要靠 spec.parts 认名字）
+  const before62 = posts62();
+  const r62 = handle62({ target: { dataset: { uiCalloutMark: 'c73', uiName: '车架' } } });
+  check('点一个编号被接住（返回是哪一档、哪张图）',
+    r62.handled === true && r62.kind === 'callout' && r62.id === 'c73', JSON.stringify(r62));
+  const st62a = ui62.readUiState('c73');
+  check('active 落在点开的部件、viewed 记下看过它',
+    st62a.state.active === '车架' && st62a.state.viewed['车架'] === true, JSON.stringify(st62a.state));
+  check('状态走 artifact-message 报回（与其它交互档同一条通道）', posts62() === before62 + 1, 'posts ' + before62 + ' → ' + posts62());
+  check('报回去的 state 里没有判分的位置（只有点开了哪，没有对错分数）',
+    !/correct|incorrect|score|percent/.test(JSON.stringify(st62a.state)), JSON.stringify(st62a.state));
+  const r62b = handle62({ target: { dataset: { uiCalloutMark: 'c73', uiName: '车轮' } } });
+  check('再点另一块：active 换过去、viewed 追加',
+    r62b.handled === true && ui62.readUiState('c73').state.active === '车轮' &&
+    ui62.readUiState('c73').state.viewed['车轮'] === true, JSON.stringify(ui62.readUiState('c73').state));
+  const r62c = handle62({ target: { dataset: { uiCalloutMark: 'c73', uiName: '车轮' } } });
+  check('再点当前那一块：收回说明（看过的还在状态里）',
+    r62c.handled === true && ui62.readUiState('c73').state.active === null &&
+    ui62.readUiState('c73').state.viewed['车轮'] === true, JSON.stringify(ui62.readUiState('c73').state));
+  const r62d = handle62({ target: { dataset: { uiCalloutMark: 'nope', uiName: '车架' } } });
+  check('不认得的 id 点不响（没 spec 就不知道有哪些部件）', r62d.handled === false, JSON.stringify(r62d));
+  const r62e = handle62({ target: { dataset: { uiCalloutMark: 'c73', uiName: '齿轮' } } });
+  check('点了没声明过的名字：点不响（不拿没见过的名字拼状态）', r62e.handled === false, JSON.stringify(r62e));
+  const r62f = handle62({ target: { dataset: {}, closest: (sel) => (sel === '[data-ui-callout-mark]'
+    ? { dataset: { uiCalloutMark: 'c73', uiName: '车架' } } : null) } });
+  check('点在编号的圆 / 数字上：靠 closest 找回编号（真实 DOM 的点击落在子节点）',
+    r62f.handled === true && ui62.readUiState('c73').state.active === '车架', JSON.stringify(r62f));
+  let space62 = false;
+  const k62 = key62({ key: 'Enter', target: { dataset: { uiCalloutMark: 'c73', uiName: '车轮' } }, preventDefault: () => {} });
+  check('回车在编号上就是一次点击（SVG 的 g 不是原生按钮，宿主接键盘）',
+    k62.handled === true && ui62.readUiState('c73').state.active === '车轮', JSON.stringify(k62));
+  const ks62 = key62({ key: ' ', target: { dataset: { uiCalloutMark: 'c73', uiName: '车架' } }, preventDefault: () => { space62 = true; } });
+  check('空格同效、并且拦住页面滚动',
+    ks62.handled === true && space62 === true && ui62.readUiState('c73').state.active === '车架', JSON.stringify(ks62));
+
+  // 6) repaint：只换编号的激活态与说明面板（整块不重画；正文那一刷会跳滚动）
+  ui62.resetUiState();
+  compile62(bike);
+  const coBlock62 = doc.createElement('div'); coBlock62.className = 'ui-callout'; coBlock62.dataset.uiCallout = 'c73';
+  const markA62 = doc.createElement('g'); markA62.className = 'ui-callout-mark';
+  markA62.dataset.uiCalloutMark = 'c73'; markA62.dataset.uiName = '车架';
+  const markB62 = doc.createElement('g'); markB62.className = 'ui-callout-mark';
+  markB62.dataset.uiCalloutMark = 'c73'; markB62.dataset.uiName = '车轮';
+  const pane62 = doc.createElement('div'); pane62.className = 'ui-callout-pane';
+  const hint62 = doc.createElement('p'); hint62.className = 'ui-callout-pane-hint';
+  hint62.textContent = '点图上的编号，看那一块是什么';
+  pane62.append(hint62);
+  coBlock62.append(markA62, markB62, pane62);
+  domRoot.append(coBlock62);
+  handle62({ target: { dataset: { uiCalloutMark: 'c73', uiName: '车轮' } } });
+  check('repaint 把激活态换过去（class + aria-pressed）',
+    markB62.classList.contains('ui-callout-mark-active') && markB62.attributes.get('aria-pressed') === 'true' &&
+    !markA62.classList.contains('ui-callout-mark-active'), '');
+  check('repaint 只换面板内容（块还在原处、编号没被换掉）',
+    domRoot._kids.includes(coBlock62) && pane62._kids.length === 2 && pane62._kids[0]._text === '车轮', '');
+  check('面板那句话与编译器写的是同一句（回收时不重新组织语言）',
+    pane62._kids[0].className === 'ui-callout-pane-name' && pane62._kids[1]?.className === 'ui-callout-pane-note' &&
+    pane62._kids[1]?._text === '与地面接触', '');
+  handle62({ target: { dataset: { uiCalloutMark: 'c73', uiName: '车轮' } } });
+  check('收回去时面板换回引导语（同一句话，两边逐字一致）',
+    pane62._kids[0]._text === '点图上的编号，看那一块是什么', '');
+  coBlock62.remove();
+
+  // 7) handoff：把"点开过哪几块"机械地拼成话递回对话（不自动发、不判对错）
+  const spec62 = ui62.readUiState('c73')?.spec;
+  ui62.writeUiState('c73', 'callout', { active: '车架', viewed: { 车架: true, 车轮: true }, uiKind: 'callout' }, spec62);
+  const h62 = handle62({ target: { dataset: { uiHandoff: 'c73' } } });
+  check('callout 的 handoff 被接住（返回是哪个 id）',
+    h62.handled === true && h62.kind === 'handoff' && h62.id === 'c73', JSON.stringify(h62));
+  check('拼句：我在标注图「七速自行车」里点开看了：车架（说的是点开了哪，不是点对了）',
+    input62.value === '我在标注图「七速自行车」里点开看了：车架', input62.value);
+  ui62.writeUiState('c73', 'callout', { active: null, viewed: { 车轮: true }, uiKind: 'callout' }, spec62);
+  handle62({ target: { dataset: { uiHandoff: 'c73' } } });
+  check('收回去了但看过：照实说看过哪一块', input62.value === '我在标注图「七速自行车」里看过：车轮', input62.value);
+  ui62.writeUiState('c73', 'callout', { active: null, viewed: {}, uiKind: 'callout' }, spec62);
+  handle62({ target: { dataset: { uiHandoff: 'c73' } } });
+  check('一块都没点开：照实说还没有点开任何一块',
+    input62.value === '我在标注图「七速自行车」里还没有点开任何一块', input62.value);
+  check('拼句里没有判分词（Invariant 4：话里不出对错/分数）',
+    !/score|percent|mastery|correct|incorrect/.test(input62.value), input62.value);
+  input62.value = boxBefore62;
+
+  // 8) 右栏回看卡：callout 出现在「这局动过的界面」，与 hydrate 同一条筛子；figure 不进
+  st62.notebook.progress.artifact_state = {
+    'ui:c73': { uiKind: 'callout', active: '车轮', viewed: { 车架: true, 车轮: true } },
+    'ui:f73': { uiKind: 'figure' },
+  };
+  renderPanel62();
+  const card62 = deepAll(deskBody(), 'ui-state-card')[0] || null;
+  const notes62 = card62 ? deepAll(card62, 'state-note').map((n) => n.textContent) : [];
+  check('右栏卡把标注图排进来（只出现象：看过哪几块、现在停在哪一块）',
+    notes62.includes('标注图「c73」') && notes62.includes('· 看过：车架、车轮') && notes62.includes('· 现在停在：车轮'),
+    notes62.join(' / '));
+  check('静态 figure 不进回看卡（没有"他做过什么"这回事）',
+    !notes62.some((n) => n.includes('f73')), notes62.join(' / '));
+  st62.notebook.progress.artifact_state = { 'ui:c73': { uiKind: 'callout', active: null, viewed: {} } };
+  renderPanel62();
+  const card62b = deepAll(deskBody(), 'ui-state-card')[0] || null;
+  const notes62b = card62b ? deepAll(card62b, 'state-note').map((n) => n.textContent) : [];
+  check('一块都没点开：卡上照实说还没点过', notes62b.includes('· 还没点过'), notes62b.join(' / '));
+
+  // 9) XSS：id / title / alt / 名字 / 那句话照旧转义——图里长不出脚本
+  const x62 = compile62(['kind: callout', 'id: x1" onfocus=alert(1) x="', 'title: 图 <img src=x onerror=1>',
+    'alt: a" onload="alert(1)', 'shape: 甲 | rect | 10,10,60,40',
+    'callout: 甲 | 40,30 | "><img src=x onerror=1>']).html;
+  check('id / title / alt / 一句话里的标签与引号被转义（属性位也跑不掉）',
+    !x62.includes('<img') && x62.includes('&lt;img') && x62.includes('&quot;') && !x62.includes('onload="alert'),
+    x62.slice(0, 700));
+  const x62b = compile62(['kind: callout', 'id: x2', 'alt: a" onload="alert(1)', 'shape: 甲 | rect | 10,10,60,40',
+    'callout: 甲 | 40,30 | 一']).html;
+  check('alt 里的引号挤不出事件处理器', x62b.includes('&quot;') && !x62b.includes('onload="alert'), x62b.slice(0, 400));
+
+  // 10) deck：callout 是可拼块；子块按自己的 id 走同一条通道
+  ui62.resetUiState();
+  const d62 = compile62(['kind: deck', 'title: 一辆车',
+    'part: callout', '  id: c9', '  alt: 一辆自行车的车架', '  shape: 车架 | rect | 10,10,60,40',
+    '  callout: 车架 | 40,30 | 承受重量',
+    'part: steps', '  step: 先看车架']).html;
+  check('deck 里能拼 callout（编号按子块自己的 id 走）',
+    d62.includes('data-ui-callout="c9"') && d62.includes('data-ui-callout-mark="c9"'), d62.slice(0, 500));
+  const d62r = handle62({ target: { dataset: { uiCalloutMark: 'c9', uiName: '车架' } } });
+  check('deck 内 callout 子块照旧被接住（按子块自己的 id）',
+    d62r.handled === true && d62r.kind === 'callout' && ui62.readUiState('c9')?.state?.active === '车架', JSON.stringify(d62r));
+
+  ui62.resetUiState();
+  check('这一节无异常', errors.length === errsBefore62, errors.slice(errsBefore62).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

@@ -3489,6 +3489,15 @@ function handoffUiState(id) {
     text = parts.length
       ? `我在草图「${name}」里把点放到了：${parts.join('、')}`
       : `我在草图「${name}」里还没有可拖的点`;
+  } else if (kind === 'callout') {
+    // 只报"他点开过哪几块"：不说"点对没"、不说"看过几块 / 共几块"——那是完成度，不是学情。
+    const active = rec.state?.active;
+    const viewed = Object.keys(rec.state?.viewed || {}).filter((k) => rec.state.viewed[k]);
+    text = active
+      ? `我在标注图「${name}」里点开看了：${active}`
+      : viewed.length
+        ? `我在标注图「${name}」里看过：${viewed[viewed.length - 1]}`
+        : `我在标注图「${name}」里还没有点开任何一块`;
   } else {
     return false;
   }
@@ -3690,6 +3699,30 @@ function handleUiDeskEvent(evt) {
     return { handled: true, kind: 'map', id: mapId };
   }
 
+  // callout（第七十三轮，学 IUI 旗舰演示里"点开自行车上的部件"那一手）：点一个编号 =
+  // 学习者把视线落到那一块上。active 是"现在点开的是哪一块"、viewed 是"点开过哪些"——
+  // 与 map / explore / diagram 同一族学情态，下一轮模型读得到；判分一个字都不在这儿发生
+  // （部件是内容的结构，不是学情）。编号点是 <g>，点击可能落在 circle/text 上，靠 closest 找回。
+  // 再点当前这一块 = 收回说明（图仍然是全貌，面板回到中性引导），看过的仍留在 viewed。
+  const calloutMark = node.dataset?.uiCalloutMark ? node : (node.closest ? node.closest('[data-ui-callout-mark]') : null);
+  if (calloutMark) {
+    const calloutId = calloutMark.dataset?.uiCalloutMark;
+    const name = calloutMark.dataset?.uiName;
+    if (!calloutId || !name) return { handled: false };
+    const rec = readUiState(calloutId);
+    if (!rec?.spec) return { handled: false }; // 没 spec 就不知道有哪些部件，点不响
+    if (!(rec.spec.parts || []).some((p) => p.name === name)) return { handled: false };
+    const prev = rec.state?.active || null;
+    const active = prev === name ? null : name;
+    const viewed = { ...(rec.state?.viewed || {}) };
+    if (active) viewed[name] = true;
+    const state = { ...rec.state, active, viewed, uiKind: 'callout' };
+    setUiValues(calloutId, 'callout', state);
+    repaintUiCallout(calloutId);
+    forwardUiState(calloutId, state, rec.state);
+    return { handled: true, kind: 'callout', id: calloutId };
+  }
+
   // game（第三十五轮，学 IUI 的"对话里能玩的游戏"——蒙提霍尔那一手）：点一个选项 =
   // 学习者试这一步、看到那个选择的结果。last 是"现在停在哪个结果"，tried 是"试过哪些"——
   // 都是学情态，下一轮模型读得到；判分一个字都不在这儿发生（结果是对象的情形，不是学情）。
@@ -3829,8 +3862,9 @@ function handleUiDeskEvent(evt) {
 /**
  * 键盘也走得通：节点带 tabindex=0，聚焦后回车/空格就是一次点击。空格要 preventDefault，
  * 不然页面会跟着滚。非图节点、非 Enter/空格一律不拦（别的键盘路各走各的）。
- * 这一族有两个：diagram 的节点（data-ui-node）与 map 的点（data-ui-map-stop）——
- * 它们都是 SVG 里的 <g role="button">，不是原生按钮，键盘这条路得宿主接住。
+ * 这一族有三个：diagram 的节点（data-ui-node）、map 的点（data-ui-map-stop）与
+ * callout 的编号（data-ui-callout-mark）——它们都是 SVG 里的 <g role="button">，
+ * 不是原生按钮，键盘这条路得宿主接住。
  */
 function handleUiDeskKey(e) {
   const key = e?.key;
@@ -3867,8 +3901,8 @@ function handleUiDeskKey(e) {
     }
   }
   if (key !== 'Enter' && key !== ' ') return { handled: false };
-  const hit = node?.dataset?.uiNode || node?.dataset?.uiMapStop
-    || (node?.closest ? node.closest('[data-ui-node]') || node.closest('[data-ui-map-stop]') : null);
+  const hit = node?.dataset?.uiNode || node?.dataset?.uiMapStop || node?.dataset?.uiCalloutMark
+    || (node?.closest ? node.closest('[data-ui-node]') || node.closest('[data-ui-map-stop]') || node.closest('[data-ui-callout-mark]') : null);
   if (!hit) return { handled: false };
   e.preventDefault?.();
   return handleUiDeskEvent(e);
@@ -4000,6 +4034,39 @@ function repaintUiMap(id) {
         if (hit.note) pane.append(el('p', 'ui-map-pane-note', hit.note));
       } else {
         pane.append(el('p', 'ui-map-pane-hint', '点一个点，看它在哪儿；位置是示意的，不按比例'));
+      }
+    }
+  }
+}
+
+/**
+ * callout（第七十三轮）：点一个编号不整块重画（与 map / explore 同一把尺——正文那一刷会
+ * 跳滚动，也会把图里刚看过的那一帧换掉）。只换编号的激活态（class + aria-pressed）与说明面板：
+ * 面板内容从 spec.parts 里挑现成的那一份（编译时一次算好，宿主不重新解析围栏）。
+ * 面板那句引导语与编译器写的必须是同一句，这里逐字抄过去。
+ * id 是模型写的，不能拼进选择器（引号会注入）：按 class 找、再比对 dataset 值。
+ */
+function repaintUiCallout(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return;
+  const active = rec.state?.active || null;
+  const hit = (rec.spec.parts || []).find((p) => p.name === active) || null;
+  const blocks = [...(document.querySelectorAll?.('.ui-callout') || [])].filter((n) => n.dataset?.uiCallout === id);
+  for (const block of blocks) {
+    const marks = [...(block.querySelectorAll?.('.ui-callout-mark') || [])];
+    for (const g of marks) {
+      const on = g.dataset?.uiName === active;
+      g.classList?.toggle?.('ui-callout-mark-active', on);
+      g.setAttribute?.('aria-pressed', on ? 'true' : 'false');
+    }
+    const pane = block.querySelector?.('.ui-callout-pane');
+    if (pane) {
+      pane.innerHTML = '';
+      if (hit) {
+        pane.append(el('p', 'ui-callout-pane-name', hit.name));
+        if (hit.hint) pane.append(el('p', 'ui-callout-pane-note', hit.hint));
+      } else {
+        pane.append(el('p', 'ui-callout-pane-hint', '点图上的编号，看那一块是什么'));
       }
     }
   }
@@ -4535,7 +4602,7 @@ function renderUiStatePanel(body) {
   );
   if (!entries.length) return;
   const fit = (s) => { const t = String(s); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
-  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍', map: '地图', arrange: '排列', sketch: '草图' };
+  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍', map: '地图', arrange: '排列', sketch: '草图', callout: '标注图' };
   const card = el('div', 'ui-state-card');
   card.append(el('div', 'panel-section-title', '这局动过的界面'));
   for (const [key, s] of entries) {
@@ -4569,6 +4636,12 @@ function renderUiStatePanel(body) {
       if (s.active) card.append(el('div', 'state-note', `· 现在停在：${fit(s.active)}`));
       if (!viewed.length && !s.active) card.append(el('div', 'state-note', '· 还没点过'));
     } else if (s.uiKind === 'map') {
+      const viewed = Object.keys(s.viewed || {});
+      if (viewed.length) card.append(el('div', 'state-note', `· 看过：${viewed.map(fit).join('、')}`));
+      if (s.active) card.append(el('div', 'state-note', `· 现在停在：${fit(s.active)}`));
+      if (!viewed.length && !s.active) card.append(el('div', 'state-note', '· 还没点过'));
+    } else if (s.uiKind === 'callout') {
+      // 与 map 同一个形状：只报点开过哪几块、现在停在哪一块；不写"看过几个 / 共几个"。
       const viewed = Object.keys(s.viewed || {});
       if (viewed.length) card.append(el('div', 'state-note', `· 看过：${viewed.map(fit).join('、')}`));
       if (s.active) card.append(el('div', 'state-note', `· 现在停在：${fit(s.active)}`));
@@ -6103,6 +6176,7 @@ export const __hooks = {
   repaintUiExplore,
   repaintUiGame,
   repaintUiMap,
+  repaintUiCallout,
   repaintUiWalk,
   reportUiDegraded,
   hydrateUiState,
