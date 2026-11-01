@@ -23,7 +23,7 @@ import { escapeHtml } from './escape.js';
 import { renderInline } from './inline.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'figure', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
+export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'figure', 'sketch', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -45,7 +45,7 @@ export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'met
  * map 第四十七轮："点开看了哪个点"就是状态（点位落在示意框里，点一个看它的那句话）。
  * arrange 第六十六轮："他排成什么顺序 / 分进哪一栏"就是状态（亲手摆，按 id 续着）。
  */
-export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map', 'arrange'];
+export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map', 'arrange', 'sketch'];
 
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
@@ -1677,25 +1677,13 @@ function figureLabelEl(text, x, y, anchor, W) {
   );
 }
 
-function compileFigure(fields, lines, partial) {
-  if (pick(fields, 'handoff').length) {
-    return { error: 'figure 是静态图：图里没有可交回的状态，handoff 只配交互档' };
-  }
-  if (pick(fields, 'id').length) {
-    return { error: 'figure 是静态图：图里没有"学习者做过什么"可记，不写 id——要指着图问就在正文里说' };
-  }
-  if (pick(fields, 'table').length) return { error: 'table 只配 chart（数值逐项查是 chart 的形状）' };
-  if (pick(fields, 'node').length || pick(fields, 'edge').length) {
-    return { error: 'node / edge 是 diagram 的字段：谁连着谁用 diagram，形状与构造用 figure' };
-  }
-  if (pick(fields, 'stop').length || pick(fields, 'route').length) {
-    return { error: 'stop / route 是 map 的字段：谁在哪儿用 map，形状与构造用 figure' };
-  }
-  const stray = fields.filter(([k]) => !FIGURE_FIELDS.has(k)).map(([k]) => k);
-  if (stray.length) {
-    return { error: `「${stray[0]}」不是 figure 的字段（figure 只认 alt / frame / shape / label / arrow / title）` };
-  }
-
+/**
+ * figure / sketch 共用的场景解析：frame、alt、shape、label、arrow。
+ * 两档的几何词汇完全一样，只有"画完就完了"与"画上的点还能拖"这一层不同——
+ * 解析只做一次，免得两份坐标校验迟早漂开（同一张图在 figure 里画得出来、在 sketch
+ * 里却因为一条规则漏改而画不出来，是这一轮最不该出现的事）。
+ */
+function parseFigureScene(fields, partial, kindName, { requireShape = true } = {}) {
   const title = pick(fields, 'title')[0] || '';
   const alt = (pick(fields, 'alt')[0] || '').trim();
   if (alt.length > FIGURE_ALT_MAX) {
@@ -1851,15 +1839,40 @@ function compileFigure(fields, lines, partial) {
     const e = soft(`箭头太多了（最多 ${FIGURE_MAX_ARROWS} 条）`);
     if (e) return e;
   }
-  if (!shapes.length) {
-    const e = soft('一个 shape 都没有：figure 至少要画出一个形状');
+  if (requireShape && !shapes.length) {
+    const e = soft(`一个 shape 都没有：${kindName} 至少要画出一个形状`);
     if (e) return e;
-    return { html: skeleton('正在把这张图长出来…'), pending: true };
+    return { pending: true };
   }
   if (!alt && !partial) {
     return { error: '没有 alt：写一句"这张图让人看到什么"——写不出来，就说明这张图还不该画' };
   }
+  return { W, H, title, alt, shapes, labels, arrows, rawFrame };
+}
 
+function compileFigure(fields, lines, partial) {
+  if (pick(fields, 'handoff').length) {
+    return { error: 'figure 是静态图：图里没有可交回的状态，handoff 只配交互档' };
+  }
+  if (pick(fields, 'id').length) {
+    return { error: 'figure 是静态图：图里没有"学习者做过什么"可记，不写 id——要指着图问就在正文里说' };
+  }
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（数值逐项查是 chart 的形状）' };
+  if (pick(fields, 'node').length || pick(fields, 'edge').length) {
+    return { error: 'node / edge 是 diagram 的字段：谁连着谁用 diagram，形状与构造用 figure' };
+  }
+  if (pick(fields, 'stop').length || pick(fields, 'route').length) {
+    return { error: 'stop / route 是 map 的字段：谁在哪儿用 map，形状与构造用 figure' };
+  }
+  const stray = fields.filter(([k]) => !FIGURE_FIELDS.has(k)).map(([k]) => k);
+  if (stray.length) {
+    return { error: `「${stray[0]}」不是 figure 的字段（figure 只认 alt / frame / shape / label / arrow / title）` };
+  }
+
+  const scene = parseFigureScene(fields, partial, 'figure');
+  if (scene.error) return { error: scene.error };
+  if (scene.pending) return { html: skeleton('正在把这张图长出来…'), pending: true };
+  const { W, H, title, alt, shapes, labels, arrows, rawFrame } = scene;
   // 箭头 marker 的 id 由内容决定：同一张图重画仍是同一个 marker，两张图不会撞 id。
   const markerId = `ui-fig-arrow-${hashText(`${alt}\n${rawFrame.join()}\n${pick(fields, 'shape').join('\n')}`)}`;
   const arrowEls = arrows
@@ -1898,7 +1911,215 @@ function figureWords(fields) {
   return pick(fields, 'shape').length > 0 || pick(fields, 'label').length > 0 ||
     pick(fields, 'arrow').length > 0 || pick(fields, 'frame').length > 0 || pick(fields, 'alt').length > 0;
 }
-const FIGURE_ONLY = 'shape / label / arrow / frame / alt 只配 figure（把形状与构造画出来，别的档没有"几何"这回事）';
+const FIGURE_ONLY = 'shape / label / arrow / frame / alt 只配 figure / sketch（把形状与构造画出来，别的档没有"几何"这回事）';
+
+// ── 图上手（第七十二轮，学 Intelligent UI 的 "editable graphics" 那一面） ──
+const SKETCH_FIELDS = new Set([...FIGURE_FIELDS, 'id', 'handoff', 'handle', 'connect']);
+const SKETCH_MAX_HANDLES = 4;
+const SKETCH_MAX_CONNECTS = 6;
+const SKETCH_NAME_MAX = 12;
+const SKETCH_HINT_MAX = 40;
+const SKETCH_LINK_LABEL_MAX = 20;
+const SKETCH_DOT_R = 9;
+
+/**
+ * sketch：figure 的几何 + 1–4 个**能拖的点**。
+ *
+ * `handle: 名字 | x,y [| 一句话]` 声明一个点；`connect: 甲 > 乙 [| 标签]` 在两点之间拉一条线。
+ * 点拖到哪儿按 id 存着（`{ uiKind: 'sketch', A: '160,90' }`），重画 / 刷新 / 下一回合续得回来。
+ *
+ * 三条边界，和 Invariant 4 同一条尺：
+ *   ① **没有目标坐标 / 没有答案键**：界面只记"他把点放在哪"，不判"放得对不对"——
+ *      对错是对话里老师看着那张图说的；
+ *   ② 轨迹只在**松手 / 键盘落定**那一刻记一步，拖动中的每一帧只更新快照；
+ *   ③ 点的名字是身份，位置是证据；名字由模型写在围栏里，坐标永远从宿主这边重新生成。
+ *
+ * 为什么单开一档而不是把 figure 改成可拖：figure 的静态是契约（没有 id、不进 UI_STATEFUL、
+ * 不写 artifact_state）——同一档不能既"图里没有他做过什么"又"图里全是他做过什么"。
+ * 要动手，就明确换一档；这样"同一 id 不换档"那条规则也还说得清。
+ */
+function compileSketch(fields, lines, partial) {
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（数值逐项查是 chart 的形状）' };
+  if (pick(fields, 'node').length || pick(fields, 'edge').length) {
+    return { error: 'node / edge 是 diagram 的字段：谁连着谁用 diagram，可拖的几何用 sketch' };
+  }
+  if (pick(fields, 'stop').length || pick(fields, 'route').length) {
+    return { error: 'stop / route 是 map 的字段：谁在哪儿用 map，可拖的几何用 sketch' };
+  }
+  const stray = fields.filter(([k]) => !SKETCH_FIELDS.has(k)).map(([k]) => k);
+  if (stray.length) {
+    return { error: `「${stray[0]}」不是 sketch 的字段（sketch 只认 id / alt / frame / shape / label / arrow / handle / connect / title / handoff）` };
+  }
+  const ids = pick(fields, 'id');
+  if (ids.length > 1) return { error: 'id 写了两遍' };
+  const id = (ids[0] || '').trim();
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
+  if (!id) {
+    if (!partial) return { error: '这张草图没有 id：拖过的点没地方续' };
+    return { html: skeleton('正在把这张草图长出来…'), pending: true };
+  }
+
+  const soft = (why) => (partial ? null : { error: why });
+  const scene = parseFigureScene(fields, partial, 'sketch', { requireShape: false });
+  if (scene.error) return { error: scene.error };
+  if (scene.pending) return { html: skeleton('正在把这张草图长出来…'), pending: true };
+  const { W, H, title, alt, shapes, labels, arrows } = scene;
+
+  const handles = [];
+  const handleNames = new Set();
+  for (const raw of pick(fields, 'handle')) {
+    const parts = String(raw).split('|').map((s) => s.trim());
+    if (parts.length < 2 || parts.length > 3) {
+      const e = soft(`handle「${String(raw).slice(0, 32)}」要写成「名字 | x,y」或「名字 | x,y | 一句话」`);
+      if (e) return e;
+      continue;
+    }
+    const [name, pos, hint = ''] = parts;
+    if (!name) { const e = soft('有一个 handle 的名字是空的'); if (e) return e; continue; }
+    if (name.length > SKETCH_NAME_MAX) { const e = soft(`handle 的名字「${name}」太长了（≤${SKETCH_NAME_MAX} 字）`); if (e) return e; continue; }
+    if (!UI_IDENT.test(name)) { const e = soft(`handle 的名字「${name}」不合法（字母 / 汉字起头，中间不许空格与标点）`); if (e) return e; continue; }
+    if (handleNames.has(name)) { const e = soft(`「${name}」写了两遍：点的身份是名字`); if (e) return e; continue; }
+    const p = figPoint(pos);
+    if (!p || !figInFrame(p.x, p.y, W, H)) {
+      const e = soft(`handle「${name}」的位置「${pos}」不是图框里的「x,y」（frame 是 ${W}x${H}）`);
+      if (e) return e;
+      continue;
+    }
+    if (hint.length > SKETCH_HINT_MAX) { const e = soft(`handle「${name}」的说明太长了（≤${SKETCH_HINT_MAX} 字）`); if (e) return e; continue; }
+    if (handles.length >= SKETCH_MAX_HANDLES) {
+      const e = soft(`点太多了（最多 ${SKETCH_MAX_HANDLES} 个：一张草图讲一件事，删到删不动为止）`);
+      if (e) return e;
+      continue;
+    }
+    handleNames.add(name);
+    handles.push({ name, point: p, hint });
+  }
+  if (!handles.length) {
+    const e = soft('一个 handle 都没有：sketch 至少要有一个能拖的点');
+    if (e) return e;
+    return { html: skeleton('正在把这张草图长出来…'), pending: true };
+  }
+
+  const links = [];
+  const linkPairs = new Set();
+  for (const raw of pick(fields, 'connect')) {
+    const [geom, ...rest] = String(raw).split('|').map((s) => s.trim());
+    const label = rest.join(' ').trim();
+    const halves = geom.split('>').map((s) => s.trim());
+    const a = halves.length === 2 ? halves[0] : '';
+    const b = halves.length === 2 ? halves[1] : '';
+    if (!a || !b) {
+      const e = soft(`connect「${String(raw).slice(0, 32)}」要写成「甲 > 乙」（标签可省，写在 | 后面）`);
+      if (e) return e;
+      continue;
+    }
+    if (!handleNames.has(a) || !handleNames.has(b)) {
+      const e = soft(`connect「${geom}」的两端要先在 handle 里声明过（${a} / ${b}）`);
+      if (e) return e;
+      continue;
+    }
+    if (a === b) { const e = soft(`connect「${geom}」的两端不能是同一个点`); if (e) return e; continue; }
+    const pair = [a, b].sort().join('>');
+    if (linkPairs.has(pair)) { const e = soft(`connect「${geom}」写了两遍：同一对点只画一条线`); if (e) return e; continue; }
+    if (label.length > SKETCH_LINK_LABEL_MAX) { const e = soft(`连线标签太长了（≤${SKETCH_LINK_LABEL_MAX} 字）`); if (e) return e; continue; }
+    if (links.length >= SKETCH_MAX_CONNECTS) {
+      const e = soft(`连线太多了（最多 ${SKETCH_MAX_CONNECTS} 条）`);
+      if (e) return e;
+      continue;
+    }
+    linkPairs.add(pair);
+    links.push({ a, b, label });
+  }
+
+  // 盘上的位置按名字续回来；名字对不上或坐标坏了就退回围栏里写的声明值——
+  // 界面照常能拖，不因为一条旧账把自己卡死。
+  const stored = readUiState(id)?.state || {};
+  const pos = {};
+  for (const h of handles) {
+    const saved = figPoint(stored[h.name]);
+    pos[h.name] = saved && figInFrame(saved.x, saved.y, W, H) ? saved : h.point;
+  }
+  const pointText = (p) => `${figNum(p.x)},${figNum(p.y)}`;
+  const state = { uiKind: 'sketch' };
+  for (const h of handles) state[h.name] = pointText(pos[h.name]);
+  const spec = {
+    W,
+    H,
+    title,
+    handles: handles.map((h) => ({ name: h.name, point: pointText(h.point), hint: h.hint })),
+    links,
+  };
+  // partial 不落位置：流里这一行随时会重排，写下来会把刚拖好的点冲掉（与 arrange 同一把握）。
+  writeUiState(id, 'sketch', partial ? { ...stored, uiKind: 'sketch' } : state, spec);
+
+  const markerId = `ui-sketch-arrow-${hashText(`${id}\n${alt}\n${handles.map((h) => h.name).join(',')}`)}`;
+  const arrowEls = arrows
+    .map((a) => {
+      const midX = (a.from.x + a.to.x) / 2;
+      const midY = (a.from.y + a.to.y) / 2;
+      return (
+        `<line class="ui-fig-arrow" x1="${figNum(a.from.x)}" y1="${figNum(a.from.y)}" ` +
+        `x2="${figNum(a.to.x)}" y2="${figNum(a.to.y)}" marker-end="url(#${markerId})"/>` +
+        (a.label ? `<text class="ui-fig-arrow-label" x="${figNum(midX)}" y="${figNum(midY - 6)}" text-anchor="middle">${escapeHtml(a.label)}</text>` : '')
+      );
+    })
+    .join('');
+  const labelEls = labels.map((l) => figureLabelEl(l.text, l.x, l.y, l.align, W)).join('');
+  const linkEls = links
+    .map((l) => {
+      const a = pos[l.a];
+      const b = pos[l.b];
+      const midX = (a.x + b.x) / 2;
+      const midY = (a.y + b.y) / 2;
+      return (
+        `<g class="ui-sketch-link" data-ui-sketch-link="${escapeHtml(l.a)}>${escapeHtml(l.b)}">` +
+        `<line x1="${figNum(a.x)}" y1="${figNum(a.y)}" x2="${figNum(b.x)}" y2="${figNum(b.y)}"/>` +
+        (l.label ? `<text class="ui-sketch-link-label" x="${figNum(midX)}" y="${figNum(midY - 6)}" text-anchor="middle">${escapeHtml(l.label)}</text>` : '') +
+        `</g>`
+      );
+    })
+    .join('');
+  const handleEls = handles
+    .map((h) => {
+      const p = pos[h.name];
+      const label = h.hint ? `${h.name}：${h.hint}` : h.name;
+      return (
+        `<g class="ui-sketch-handle" data-ui-handle="${escapeHtml(h.name)}" tabindex="0" role="button" ` +
+        `aria-label="拖动「${escapeHtml(h.name)}」改位置，当前 ${pointText(p)}；方向键可微调" ` +
+        `transform="translate(${figNum(p.x)} ${figNum(p.y)})">` +
+        `<title>${escapeHtml(label)}</title>` +
+        `<circle class="ui-sketch-dot" r="${SKETCH_DOT_R}"></circle>` +
+        `<text class="ui-sketch-name" y="-${SKETCH_DOT_R + 5}" text-anchor="middle">${escapeHtml(h.name)}</text>` +
+        `</g>`
+      );
+    })
+    .join('');
+  const readout = handles.map((h) => `${h.name} ${pointText(pos[h.name])}`).join(' · ');
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const aria = alt || '这张草图还在长';
+  const svg =
+    `<svg class="ui-sketch ui-figure" role="group" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" data-ui-sketch="${escapeHtml(id)}">` +
+    `<title>${escapeHtml(aria)}</title>` +
+    `<defs><marker id="${markerId}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+    `<path class="ui-fig-arrow-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>` +
+    shapes.join('') + arrowEls + linkEls + labelEls + handleEls +
+    `</svg>`;
+  const out =
+    `<p class="ui-sketch-readout" data-ui-sketch-readout="${escapeHtml(id)}" aria-live="polite">${escapeHtml(readout)}</p>` +
+    `<p class="ui-sketch-hint">拖动圆点改位置；聚焦后方向键微调（Shift 走大步）。这里只记你摆的样子，不判对错</p>`;
+  return {
+    html: `${cap}${svg}${out}${handoff ? handoffButton(id, handoff) : ''}`,
+    shape: 'sketch',
+    pending: partial || undefined,
+  };
+}
+
+/** sketch 的专属词写在别的档 = 语义词写错档：不许静默吞（与 figure / stop / node 同一把尺）。 */
+function sketchWords(fields) {
+  return pick(fields, 'handle').length > 0 || pick(fields, 'connect').length > 0;
+}
+const SKETCH_ONLY = 'handle / connect 只配 sketch（图上能拖的点与线，别的档没有"可改的几何"这回事）';
 
 // ── 分段探索 ─────────────────────────────────────────────────────────────
 /**
@@ -2440,7 +2661,7 @@ const DECK_PARTS = UI_KINDS.filter((k) => k !== 'deck' && k !== 'suggest' && k !
 const DECK_PARTS_TEXT = DECK_PARTS.join(' / ');
 const DECK_TOP_ONLY = 'deck 顶层只认 kind / title / layout / part（它属于哪一块，就缩进到那一块的 part 下面）';
 
-function compileDeck(fields, lines) {
+function compileDeck(fields, lines, partial) {
   const parts = [];
   let current = null;
   let deckTitle = '';
@@ -2517,11 +2738,14 @@ function compileDeck(fields, lines) {
     }
     const metaErr = metaWordsError(child.fields, part.kind);
     if (metaErr) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${metaErr}` };
+    if (part.kind !== 'sketch' && sketchWords(child.fields)) {
+      return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${SKETCH_ONLY}` };
+    }
     if (part.kind !== 'calculator' && part.kind !== 'form') {
       const usesErr = usesGuard(child.fields, part.kind);
       if (usesErr) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${usesErr.error}` };
     }
-    const r = COMPILERS[part.kind](child.fields, part.body);
+    const r = COMPILERS[part.kind](child.fields, part.body, partial);
     if (r.error) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${r.error}` };
     if (cid && UI_STATEFUL.includes(part.kind)) {
       definitions.push({
@@ -3155,7 +3379,7 @@ function compileQuestion(fields) {
 /** question 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
 const QUESTION_FIELDS = new Set(['id', 'question', 'header', 'option', 'multiSelect', 'allowText', 'conceptId']);
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, figure: compileFigure, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, figure: compileFigure, sketch: compileSketch, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
 
 /**
  * 稳定键（第六十五轮，学 Intelligent UI 的 "native, streamable components" 那一手）：
@@ -3223,6 +3447,7 @@ function compileUiBlockInner(lines, partial) {
   if (kind !== 'deck') {
     const metaErr = metaWordsError(parsed.fields, kind);
     if (metaErr) return fail(metaErr);
+    if (kind !== 'sketch' && sketchWords(parsed.fields)) return fail(SKETCH_ONLY);
     // uses 只配 calculator / form（第六十三轮）：只有这两档有能被场上参数填上的默认值 / 空格子。
     if (kind !== 'calculator' && kind !== 'form') {
       const usesErr = usesGuard(parsed.fields, kind);

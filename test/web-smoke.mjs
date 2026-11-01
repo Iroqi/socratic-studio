@@ -4095,7 +4095,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const calcBare = compile(['calculator', 'id: feast2', 'unit: 公斤', 'param: 人数 | 8 | 2 | 20', 'formula: 肉 = 人数 * 0.4']).html;
   check('首行裸 calculator 同样能编（裸档名是通用行为，不只 question）',
     calcBare.includes('data-ui-param="人数"'), calcBare.slice(0, 120));
-  // 第五十九轮起：十七档 × 裸档名 / kind: 前缀 双写法全编（防"某档悄悄渲染不出来"回归）
+  // 第五十九轮起：十九档 × 裸档名 / kind: 前缀 双写法全编（防"某档悄悄渲染不出来"回归）
   const ALL_KINDS = {
     compare: ['row: 甲 | 乙', 'row: 丙 | 丁'],
     steps: ['step: 打开仓库', 'step: 提交一次'],
@@ -4106,6 +4106,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     calculator: ['id: k1', 'param: 人数 | 3 | 1 | 20', 'param: 金额 | 120 | 0 | 1000', 'formula: 每人 = 金额 / 人数'],
     diagram: ['id: d1', 'node: 甲', 'node: 乙', 'edge: 甲 -> 乙'],
     figure: ['alt: 甲乙两块并排', 'shape: 甲 | rect | 10,10,60,40', 'shape: 乙 | circle | 200,60,20'],
+    sketch: ['id: s1', 'alt: 甲乙两点可以拖', 'handle: 甲 | 20,20', 'handle: 乙 | 80,80', 'connect: 甲 > 乙'],
     explore: ['id: e1', 'tab: 基础', 'tab: 进阶'],
     chart: ['type: line', 'series: 一月 = 1,2', 'series: 二月 = 3,4'],
     suggest: ['pick: 再举个例子', 'pick: 换一个'],
@@ -7797,6 +7798,331 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     ui60.uiStateIds().join(','));
 
   check('这一节无异常', errors.length === errsBefore60, errors.slice(errsBefore60).join(' | '));
+}
+
+// ─── 61. sketch：图上手（第七十二轮，学 Intelligent UI 的「图能直接改」那一手）。
+// 此前 figure 是契约上的静态图（没有 id、不进 UI_STATEFUL）；"让学习者在图上动手"只能
+// 靠 diagram 的点选或 chart 的滑杆，几何本身不可改。这一档把 figure 的几何词汇留下，
+// 外加 1–4 个能拖的点与 0–6 条连线：位置按点名字存（`{ A: '120,100' }`），松手 / 键盘
+// 落定才记一步经过；围栏里没有目标坐标，界面不判"放得对不对"（Invariant 4）。
+{
+  console.log('\n61. sketch（图上手：点能拖、位置按 id 续、松手才记一步）');
+  const errsBefore61 = errors.length;
+  const ui61 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const {
+    state: st61, handleUiDeskEvent: handle61, handleUiDeskKey: key61, renderDeskState: renderPanel61,
+    moveSketchHandle: move61, beginSketchDrag: begin61, moveSketchDrag: dragMove61, endSketchDrag: end61,
+    sketchPointFromClient: fromClient61, uiPointOf: pointOf61,
+  } = appModule.__hooks;
+  const compile61 = (lines, partial) => ui61.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const deg61 = (lines) => ui61.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  const ann61 = () => doc.getElementById('announcer');
+  const input61 = doc.getElementById('input');
+  const boxBefore61 = input61.value;
+  ui61.resetUiState();
+
+  const tri = ['kind: sketch', 'id: s72', 'title: 拖一拖', 'alt: 一个三角形，顶点可以拖动', 'frame: 320x180',
+    'shape: 底边 | line | 40,140,280,140', 'handle: A | 40,140 | 左下顶点',
+    'handle: B | 280,140 | 右下顶点', 'connect: A > B | 底边'];
+  const c61 = compile61(tri).html;
+
+  // 1) 编译：figure 的几何 + 能拖的点 + 跟着动的线；读屏拿 alt，图注另说
+  check('编译成一张 SVG：class 带 ui-sketch、viewBox 照 frame、data-ui-sketch 带 id',
+    c61.includes('<svg class="ui-sketch ui-figure"') && c61.includes('viewBox="0 0 320 180"') &&
+    c61.includes('data-ui-sketch="s72"'), c61.slice(0, 400));
+  check('role=group、aria-label 就是 alt（一张能动手的图，不是一个按钮）',
+    c61.includes('role="group"') && c61.includes('aria-label="一个三角形，顶点可以拖动"') &&
+    c61.includes('<title>一个三角形，顶点可以拖动</title>'), c61.slice(0, 420));
+  check('title 是可见图注（与读屏那句各说各的）', c61.includes('<p class="ui-cap">拖一拖</p>'), c61.slice(0, 260));
+  check('静态形状照 figure 的词法长出来（底边是一段 line）',
+    c61.includes('<line class="ui-fig-shape ui-fig-open" x1="40" y1="140" x2="280" y2="140"><title>底边</title></line>'),
+    c61.slice(300, 800));
+  check('点是一枚可聚焦的 group：名字进 data、tabindex=0、role=button',
+    c61.includes('<g class="ui-sketch-handle" data-ui-handle="A" tabindex="0" role="button"') &&
+    c61.includes('aria-label="拖动「A」改位置，当前 40,140；方向键可微调"') &&
+    c61.includes('transform="translate(40 140)"'), c61.slice(500, 900));
+  check('圆点与名字各是一层（圆点在坐标上，名字在圆点上方）',
+    c61.includes('<circle class="ui-sketch-dot" r="9"></circle>') &&
+    c61.includes('<text class="ui-sketch-name" y="-14" text-anchor="middle">A</text>'), c61.slice(600, 1000));
+  check('handle 的说明进 <title>（悬停看得到，读屏仍拿整图的 alt）',
+    c61.includes('<title>A：左下顶点</title>'), c61.slice(600, 1000));
+  check('连线是两点之间的一条线，按 data-ui-sketch-link="A>B" 找回两端',
+    c61.includes('<g class="ui-sketch-link" data-ui-sketch-link="A>B">') &&
+    c61.includes('<line x1="40" y1="140" x2="280" y2="140"/>') &&
+    c61.includes('<text class="ui-sketch-link-label" x="160" y="134" text-anchor="middle">底边</text>'),
+    c61.slice(700, 1200));
+  check('读数条按 id 落一处、aria-live=polite（拖动时读屏不打断）',
+    c61.includes('<p class="ui-sketch-readout" data-ui-sketch-readout="s72" aria-live="polite">A 40,140 · B 280,140</p>'),
+    c61.slice(-500));
+  check('hint 说清怎么动、也说清"不判对错"',
+    c61.includes('拖动圆点改位置；聚焦后方向键微调（Shift 走大步）。这里只记你摆的样子，不判对错'), c61.slice(-400));
+  check('输出里没有答案键 / 判分词（Invariant 4：界面只记摆法）',
+    !/答案|score|percent|mastery|correct|incorrect/.test(c61), c61.slice(0, 300));
+  check('state 按点名字存位置（一份平表：A / B 各是 "x,y"）',
+    JSON.stringify(ui61.readUiState('s72')?.state) === JSON.stringify({ uiKind: 'sketch', A: '40,140', B: '280,140' }),
+    JSON.stringify(ui61.readUiState('s72')?.state));
+  check('spec 存下 frame、两个点（含说明）与一条连线',
+    ui61.readUiState('s72')?.spec?.W === 320 && ui61.readUiState('s72')?.spec?.H === 180 &&
+    ui61.readUiState('s72')?.spec?.handles?.length === 2 &&
+    ui61.readUiState('s72')?.spec?.handles[0]?.hint === '左下顶点' &&
+    ui61.readUiState('s72')?.spec?.links?.[0]?.label === '底边',
+    JSON.stringify(ui61.readUiState('s72')?.spec));
+  check('同一份围栏两次编译一模一样（流里每帧重编，图不许跳）', compile61(tri).html === c61, '');
+  check('handoff 是可选的：写了就长出一枚真按钮，带 id',
+    compile61([...tri, 'handoff: 把摆好的图带回对话']).html
+      .includes('<button type="button" class="ui-handoff" data-ui-handoff="s72">把摆好的图带回对话</button>'),
+    '');
+
+  // 2) 续回：拖过的位置重画就还在；坏坐标 / 已删的点退回声明值，不把界面卡死
+  ui61.setUiValues('s72', 'sketch', { uiKind: 'sketch', A: '120,60', B: '280,140' });
+  const c61b = compile61(tri).html;
+  check('重画续回拖过的点（A 的圆点与连线端点都在 120,60）',
+    c61b.includes('transform="translate(120 60)"') && c61b.includes('<line x1="120" y1="60" x2="280" y2="140"/>') &&
+    c61b.includes('A 120,60 · B 280,140'), c61b.slice(500, 1200));
+  ui61.setUiValues('s72', 'sketch', { uiKind: 'sketch', A: '120,60', Z: '1,1' });
+  compile61(tri);
+  const st61b = ui61.readUiState('s72').state;
+  check('围栏里删掉的点不再续（状态里只留这版还认的）', !('Z' in st61b) && st61b.A === '120,60', JSON.stringify(st61b));
+  ui61.setUiValues('s72', 'sketch', { uiKind: 'sketch', A: '9999,9999', B: '280,140' });
+  const c61c = compile61(tri).html;
+  check('存下的坐标落在图框外就退回声明的值（旧账坏了，图照常能拖）',
+    c61c.includes('transform="translate(40 140)"') &&
+    ui61.readUiState('s72').state.A === '40,140', JSON.stringify(ui61.readUiState('s72').state));
+  ui61.setUiValues('s72', 'sketch', { uiKind: 'sketch', A: '111,22', B: '280,140' });
+  const p61 = compile61(tri, true);
+  check('流里那一帧不落位置（不会把刚拖好的点冲回声明值）',
+    p61.pending === true && ui61.readUiState('s72').state.A === '111,22', JSON.stringify(ui61.readUiState('s72').state));
+  check('流里这一帧照常画出点与线（位置仍用盘上那份）',
+    p61.html.includes('transform="translate(111 22)"'), p61.html.slice(0, 400));
+  ui61.resetUiState();
+
+  // 3) 降级：每条都点名为什么不行，不静默吞
+  check('没有 id：掉回原文并点名（拖过的点没地方续）',
+    deg61(['kind: sketch', 'alt: x', 'handle: A | 10,10']).includes('这张草图没有 id'), '');
+  check('没有 alt：掉回原文并点名（写不出"让人看到什么"就不画）',
+    deg61(['kind: sketch', 'id: a', 'handle: A | 10,10']).includes('没有 alt'), '');
+  check('一个 handle 都没有：掉回原文并点名',
+    deg61(['kind: sketch', 'id: a', 'alt: x']).includes('一个 handle 都没有'), '');
+  check('点落在图框外：掉回原文并点名（不裁、不猜）',
+    deg61(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 9999,10']).includes('不是图框里的'), '');
+  check('点的名字写了两遍：掉回原文并点名（身份是名字）',
+    deg61(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'handle: A | 20,20']).includes('写了两遍'), '');
+  check('点的名字不合法：掉回原文并点名',
+    deg61(['kind: sketch', 'id: a', 'alt: x', 'handle: A B | 10,10']).includes('不合法'), '');
+  check('超过 4 个点：掉回原文并点名（一张草图讲一件事）',
+    deg61(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'handle: B | 20,20',
+      'handle: C | 30,30', 'handle: D | 40,40', 'handle: E | 50,50']).includes('点太多了'), '');
+  check('connect 的两端没声明过：掉回原文并点名',
+    deg61(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'handle: B | 20,20',
+      'connect: A > C']).includes('两端要先在 handle 里声明过'), '');
+  check('connect 两端是同一点：掉回原文并点名',
+    deg61(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'connect: A > A']).includes('不能是同一个点'), '');
+  check('同一对点连两遍（方向反过来也算）：掉回原文并点名',
+    deg61(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'handle: B | 20,20',
+      'connect: A > B', 'connect: B > A']).includes('同一对点只画一条线'), '');
+  check('id 写了两遍：掉回原文并点名',
+    deg61(['kind: sketch', 'id: a', 'id: b', 'alt: x', 'handle: A | 10,10']).includes('id 写了两遍'), '');
+  check('别的档的字段写进 sketch：掉回原文并点名',
+    deg61(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'step: 一步']).includes('不是 sketch 的字段'), '');
+  check('table 写进 sketch：掉回原文并点名（逐项查数用 chart）',
+    deg61(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'table: 甲 | 1']).includes('table 只配 chart'), '');
+  check('node / edge 写进 sketch：掉回原文并点名（谁连着谁用 diagram）',
+    deg61(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'node: 甲']).includes('diagram'), '');
+  check('handoff 超 24 字：掉回原文并点名',
+    deg61(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'handoff: ' + '发'.repeat(25)]).includes('24'), '');
+  check('handle / connect 写进 figure：被点名"只配 sketch"（静态图不是可改的几何）',
+    deg61(['kind: figure', 'alt: x', 'shape: a | rect | 0,0,10,10', 'handle: A | 1,1']).includes('只配 sketch'), '');
+  check('handle 写进 steps 也被点名',
+    deg61(['kind: steps', 'step: 一', 'handle: A | 1,2']).includes('只配 sketch'), '');
+
+  // 4) 渐进：长到一半先摆占位；终态缺 id / alt / 点是硬错
+  const p61a = compile61(['kind: sketch', 'alt: x', 'handle: A | 10,10'], true);
+  check('流里还没有 id：先摆占位（点的位置没地方续）',
+    p61a.pending === true && p61a.html.includes('ui-skeleton'), p61a.html.slice(0, 300));
+  const p61b = compile61(['kind: sketch', 'id: a', 'alt: x'], true);
+  check('流里还没有 handle：先摆占位（一个点都没有）',
+    p61b.pending === true && p61b.html.includes('ui-skeleton'), p61b.html.slice(0, 300));
+  const p61c = compile61(['kind: sketch', 'id: a', 'handle: A | 10,10'], true);
+  check('流里还没有 alt：图先长出来，读屏名先用一句中性的话顶着',
+    p61c.pending === true && !p61c.degraded && p61c.html.includes('aria-label="这张草图还在长"') &&
+    p61c.html.includes('data-ui-handle="A"'), String(p61c.degraded || p61c.html).slice(0, 400));
+  check('同样的内容闭合后（终态）缺 alt 是硬错',
+    deg61(['kind: sketch', 'id: a', 'handle: A | 10,10']).includes('没有 alt'), '');
+  check('没有 shape 的 sketch 照常上台（点本身就是几何，不逼模型画底图）',
+    (() => { const r = compile61(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10']); return !r.degraded && r.html.includes('data-ui-handle="A"'); })(), '');
+
+  // 5) XSS：几何是声明的、名字受限，文字照旧转义——图里长不出脚本
+  const x61 = compile61(['kind: sketch', 'id: x1" onload=alert(1) x="', 'title: 图上 <img src=x onerror=1>',
+    'alt: a" onload="alert(1)', 'handle: A | 10,10', 'connect: A > B | 底"边'].map((l) => l)).html;
+  check('id / title / alt 里的标签与引号被转义（属性位也跑不掉）',
+    !x61.includes('<img') && x61.includes('&lt;img') && x61.includes('&quot;') && !x61.includes('onload="alert'),
+    x61.slice(0, 500));
+  const x61b = compile61(['kind: sketch', 'id: x2', 'alt: a" onload="alert(1)', 'handle: A | 10,10']).html;
+  check('alt 里的引号挤不出事件处理器', x61b.includes('&quot;') && !x61b.includes('onload="alert'), x61b.slice(0, 300));
+
+  // 6) deck：sketch 是可拼块；子块里的 handle 也按子块自己的档查
+  ui61.resetUiState();
+  const d61 = compile61(['kind: deck', 'title: 三角形',
+    'part: sketch', '  id: s9', '  alt: 一个可以拖的三角形', '  handle: A | 20,20', '  handle: B | 100,20',
+    'part: steps', '  step: 先拖一个点']).html;
+  check('deck 里能拼 sketch（点按子块自己的 id 走）',
+    d61.includes('data-ui-sketch="s9"') && d61.includes('data-ui-handle="A"') && d61.includes('ui-steps'), d61.slice(0, 500));
+  check('deck 的 steps 子块里写 handle：整块被点名（不静默吞）',
+    deg61(['kind: deck', 'title: 摆法', 'part: steps', '  step: 一', '  handle: A | 1,2',
+      'part: checklist', '  item: 甲']).includes('只配 sketch'), '');
+  ui61.resetUiState();
+
+  // 7) 宿主接线：按下 → 拖动帧只更新快照 → 松手才交一步经过
+  st61.notebook = sampleNotebook();
+  st61.uiReported.clear();
+  const posts61 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const bodies61 = [];
+  const realFetch61 = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (/\/artifact-message$/.test(url)) {
+      try { bodies61.push(JSON.parse(opts.body)); } catch {}
+    }
+    return realFetch61(url, opts);
+  };
+  compile61(tri);
+
+  const svg61 = doc.createElement('svg');
+  svg61.className = 'ui-sketch ui-figure';
+  svg61.dataset.uiSketch = 's72';
+  svg61._rect = { left: 10, top: 20, width: 320, height: 180 };
+  const ga61 = doc.createElement('g');
+  ga61.className = 'ui-sketch-handle'; ga61.dataset.uiHandle = 'A';
+  ga61.setAttribute('transform', 'translate(40 140)');
+  const dot61 = doc.createElement('circle'); dot61.className = 'ui-sketch-dot'; ga61.append(dot61);
+  const link61 = doc.createElement('g');
+  link61.className = 'ui-sketch-link'; link61.dataset.uiSketchLink = 'A>B';
+  const line61 = doc.createElement('line'); link61.append(line61);
+  const label61 = doc.createElement('text'); label61.className = 'ui-sketch-link-label'; link61.append(label61);
+  svg61.append(ga61, link61);
+  domRoot.append(svg61);
+  const out61 = doc.createElement('p');
+  out61.className = 'ui-sketch-readout'; out61.dataset.uiSketchReadout = 's72';
+  out61.textContent = 'A 40,140 · B 280,140';
+  domRoot.append(out61);
+  const outOther61 = doc.createElement('p');
+  outOther61.className = 'ui-sketch-readout'; outOther61.dataset.uiSketchReadout = 's99';
+  outOther61.textContent = 'Z 1,1';
+  domRoot.append(outOther61);
+
+  check('指针位置按 viewBox 换算成图坐标（10,20 起、320x180 大）',
+    JSON.stringify(fromClient61(svg61, 90, 120, 320, 180)) === JSON.stringify({ x: 80, y: 100 }), '');
+  check('量不到尺寸就不换算（不拿 0 去当比例）',
+    fromClient61(doc.createElement('svg'), 10, 10, 320, 180) === null, '');
+  check('uiPointOf 只认 "x,y"（拖过的位置也只有这一种写法）',
+    pointOf61('80,100')?.x === 80 && pointOf61('80,100')?.y === 100 && pointOf61('oops') === null, '');
+
+  const beforeDrag61 = posts61();
+  const began61 = begin61({ target: ga61, preventDefault() {} });
+  check('按在点上接住（按下不报回：还什么都没变）',
+    began61 === true && posts61() === beforeDrag61, `posts ${beforeDrag61} → ${posts61()}`);
+  check('按在别的节点上不响', begin61({ target: doc.createElement('div') }) === false, '');
+  const f1 = dragMove61({ clientX: 90, clientY: 120 });
+  const mid1 = bodies61[bodies61.length - 1];
+  check('拖动帧更新快照（A 到 80,100）', f1 === true && ui61.readUiState('s72').state.A === '80,100',
+    JSON.stringify(ui61.readUiState('s72').state));
+  check('拖动帧只更新快照、不带经过（中间像素不是一步）',
+    posts61() === beforeDrag61 + 1 && mid1?.trace === undefined && mid1?.state?.A === '80,100',
+    JSON.stringify(mid1));
+  check('就地重画：圆点的 transform、连线两端、读数条都跟着走',
+    ga61.getAttribute('transform') === 'translate(80 100)' &&
+    ga61.getAttribute('aria-label') === '拖动「A」改位置，当前 80,100；方向键可微调' &&
+    line61.getAttribute('x1') === '80' && line61.getAttribute('y1') === '100' &&
+    line61.getAttribute('x2') === '280' && line61.getAttribute('y2') === '140' &&
+    label61.getAttribute('x') === '180' && label61.getAttribute('y') === '114' &&
+    out61.textContent === 'A 80,100 · B 280,140', out61.textContent);
+  check('别的草图的读数不被串改', outOther61.textContent === 'Z 1,1', outOther61.textContent);
+  dragMove61({ clientX: 170, clientY: 120 });
+  check('第二帧继续跟着手走（A 到 160,100）', ui61.readUiState('s72').state.A === '160,100',
+    JSON.stringify(ui61.readUiState('s72').state));
+  const beforeEnd61 = posts61();
+  const ended61 = end61();
+  const endBody61 = bodies61[bodies61.length - 1];
+  check('松手才交经过：一次拖动只记一步，起点还是按下前的那份',
+    ended61 === true && posts61() === beforeEnd61 + 1 &&
+    endBody61?.trace?.length === 1 && endBody61.trace[0].k === 'A' &&
+    endBody61.trace[0].from === '40,140' && endBody61.trace[0].to === '160,100',
+    JSON.stringify(endBody61?.trace));
+  check('松手播报落点（读屏用户听到的与屏幕一致）', ann61().textContent === '「A」放在 160,100', ann61().textContent);
+
+  const beforeTap61 = posts61();
+  begin61({ target: ga61, preventDefault() {} });
+  const tapped61 = end61();
+  check('按一下没动：不算一步，也不报回', tapped61 === false && posts61() === beforeTap61, `posts ${beforeTap61} → ${posts61()}`);
+  check('没有按下时移动不响', dragMove61({ clientX: 10, clientY: 10 }) === false, '');
+
+  begin61({ target: ga61, preventDefault() {} });
+  dragMove61({ clientX: 9999, clientY: 9999 });
+  check('拖出图框被夹在图框边上（不产生界外坐标）',
+    ui61.readUiState('s72').state.A === '320,180', JSON.stringify(ui61.readUiState('s72').state));
+  end61();
+  check('不认得的点：宿主不猜', move61('s72', 'C', 10, 10) === null, '');
+
+  // 8) 键盘也走得通：方向键微调 2 / Shift 10，回车报位置；两条路同一条落定通道
+  const prevCommit61 = ui61.readUiState('s72').state;
+  const beforeCommit61 = posts61();
+  const moved61 = move61('s72', 'A', 120, 100, { commit: true, prevState: prevCommit61 });
+  const commitBody61 = bodies61[bodies61.length - 1];
+  check('直接落定：状态到 120,100，报回一步（320,180 → 120,100）',
+    moved61?.x === 120 && moved61?.y === 100 && posts61() === beforeCommit61 + 1 &&
+    commitBody61?.trace?.[0]?.from === '320,180' && commitBody61.trace[0].to === '120,100',
+    JSON.stringify(commitBody61?.trace));
+  const beforeKey61 = posts61();
+  const kr61 = key61({ key: 'ArrowRight', target: ga61, shiftKey: false, preventDefault() {} });
+  check('方向键走一步（2 格）并落定', kr61.handled === true && kr61.kind === 'sketch' &&
+    ui61.readUiState('s72').state.A === '122,100' && posts61() === beforeKey61 + 1,
+    JSON.stringify(ui61.readUiState('s72').state));
+  const ku61 = key61({ key: 'ArrowUp', target: ga61, shiftKey: true, preventDefault() {} });
+  check('Shift + 方向键走大步（10 格）', ku61.handled === true && ui61.readUiState('s72').state.A === '122,90',
+    JSON.stringify(ui61.readUiState('s72').state));
+  const beforeEnter61 = posts61();
+  key61({ key: 'Enter', target: ga61, preventDefault() {} });
+  check('回车报当前位置（只看不改：不再写一步）',
+    posts61() === beforeEnter61 && ann61().textContent === '「A」现在在 122,90', ann61().textContent);
+  const gz61 = doc.createElement('g');
+  gz61.className = 'ui-sketch-handle'; gz61.dataset.uiHandle = 'Z';
+  svg61.append(gz61);
+  check('图上没有声明的点：方向键不响（不拿没见过的名字拼状态）',
+    key61({ key: 'ArrowRight', target: gz61, preventDefault() {} }).handled === false, '');
+  check('非点节点：方向键照旧归别的路', key61({ key: 'ArrowRight', target: doc.createElement('div') }).handled === false, '');
+
+  // 9) handoff：把"每个点现在在哪"机械地拼回对话（不自动发、不判对错）
+  const spec61 = ui61.readUiState('s72').spec;
+  ui61.writeUiState('s72', 'sketch', { uiKind: 'sketch', A: '120,100', B: '280,140' }, spec61);
+  const h61 = handle61({ target: { dataset: { uiHandoff: 's72' } } });
+  check('handoff 被接住（返回是哪个 id）',
+    h61.handled === true && h61.kind === 'handoff' && h61.id === 's72', JSON.stringify(h61));
+  check('拼句：我在草图「拖一拖」里把点放到了：A 120,100、B 280,140',
+    input61.value === '我在草图「拖一拖」里把点放到了：A 120,100、B 280,140', input61.value);
+  ui61.writeUiState('s72', 'sketch', { uiKind: 'sketch' }, spec61);
+  handle61({ target: { dataset: { uiHandoff: 's72' } } });
+  check('还没拖过：照屏幕上那组声明位置说（不撒谎说他动过）',
+    input61.value === '我在草图「拖一拖」里把点放到了：A 40,140、B 280,140', input61.value);
+  check('拼句里没有判分词（Invariant 4：话里不出对错/分数）',
+    !/score|percent|mastery|correct|incorrect/.test(input61.value), input61.value);
+  input61.value = boxBefore61;
+  globalThis.fetch = realFetch61;
+
+  // 10) 右栏回看卡：sketch 出现在「这局动过的界面」，只报每个点在哪；静态 figure 不进卡
+  st61.notebook.progress.artifact_state = {
+    'ui:s72': { uiKind: 'sketch', A: '120,100', B: '280,140' },
+    'ui:s73': { uiKind: 'sketch' },
+    'ui:f72': { uiKind: 'figure' },
+  };
+  renderPanel61();
+  const notes61 = deepAll(deskBody(), 'ui-state-card').flatMap((c) => deepAll(c, 'state-note').map((n) => n.textContent));
+  check('右栏卡把草图排进来（只出现象：每个点现在在哪）',
+    notes61.includes('草图「s72」') && notes61.includes('· A 在 120,100') && notes61.includes('· B 在 280,140'),
+    notes61.join(' / '));
+  check('还没动过：卡上照实说', notes61.includes('草图「s73」') && notes61.includes('· 还没有动过'), notes61.join(' / '));
+  check('静态 figure 不进回看卡（没有"他做过什么"这回事）',
+    !notes61.some((n) => n.includes('f72')), notes61.join(' / '));
+
+  check('这一节无异常', errors.length === errsBefore61, errors.slice(errsBefore61).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

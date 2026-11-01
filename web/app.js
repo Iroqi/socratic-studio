@@ -3186,6 +3186,201 @@ function repaintUiForm(id) {
 }
 
 /**
+ * 草图（第七十二轮，学 Intelligent UI 的 "editable graphics"：图上的点能亲手改）：
+ * 编译器把点画成可聚焦的圆点，宿主只做三件事——把指针位置换算成图坐标、就地重画、
+ * 松手那一刻把「从哪到哪」记成一步。判定一个字都不在这儿发生：界面没有目标坐标，
+ * 他摆成什么样，下一轮老师看着读回来（与 arrange / calculator 同一条尺）。
+ */
+function uiPointOf(raw) {
+  const m = /^\s*(-?(?:\d+\.?\d*|\.\d+))\s*,\s*(-?(?:\d+\.?\d*|\.\d+))\s*$/.exec(String(raw ?? ''));
+  if (!m) return null;
+  const x = Number(m[1]);
+  const y = Number(m[2]);
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+function uiPointText(x, y) {
+  const r = (n) => {
+    const v = Math.round(Number(n) * 100) / 100;
+    return Object.is(v, -0) ? '0' : String(v);
+  };
+  return `${r(x)},${r(y)}`;
+}
+
+/** 台面上此刻的草图（按 class 找、再比对 data：id 是模型写的，不拼进选择器）。 */
+function uiSketchNodes(id) {
+  return (document.querySelectorAll?.('.ui-sketch') || []).filter((n) => n.dataset?.uiSketch === id);
+}
+
+/**
+ * 只重画动的那些：点的 transform、连线的两端、读数。整块重画会在拖动中途把正在拖的
+ * 那个圆点换掉——手感当场没了，和计算器滑杆 / 图表快照同一条道理。
+ * 连线按 `data-ui-sketch-link="甲>乙"` 找回两端；点按 `data-ui-handle` 找回名字。
+ */
+function repaintUiSketch(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return;
+  const handles = rec.spec.handles || [];
+  const pos = {};
+  for (const h of handles) {
+    const p = uiPointOf(rec.state?.[h.name]) || uiPointOf(h.point);
+    if (p) pos[h.name] = p;
+  }
+  for (const svg of uiSketchNodes(id)) {
+    for (const g of [...(svg.querySelectorAll?.('.ui-sketch-handle') || [])]) {
+      const name = g.dataset?.uiHandle;
+      const p = name ? pos[name] : null;
+      if (!p) continue;
+      g.setAttribute?.('transform', `translate(${uiPointText(p.x, p.y).replace(',', ' ')})`);
+      g.setAttribute?.('aria-label', `拖动「${name}」改位置，当前 ${uiPointText(p.x, p.y)}；方向键可微调`);
+    }
+    for (const g of [...(svg.querySelectorAll?.('.ui-sketch-link') || [])]) {
+      const [a, b] = String(g.dataset?.uiSketchLink || '').split('>');
+      if (!pos[a] || !pos[b]) continue;
+      const line = g.querySelector?.('line');
+      if (line) {
+        line.setAttribute?.('x1', String(pos[a].x));
+        line.setAttribute?.('y1', String(pos[a].y));
+        line.setAttribute?.('x2', String(pos[b].x));
+        line.setAttribute?.('y2', String(pos[b].y));
+      }
+      const label = g.querySelector?.('.ui-sketch-link-label');
+      if (label) {
+        label.setAttribute?.('x', String((pos[a].x + pos[b].x) / 2));
+        label.setAttribute?.('y', String((pos[a].y + pos[b].y) / 2 - 6));
+      }
+    }
+  }
+  const readout = handles
+    .map((h) => {
+      const p = pos[h.name] || uiPointOf(h.point);
+      return p ? `${h.name} ${uiPointText(p.x, p.y)}` : h.name;
+    })
+    .join(' · ');
+  for (const out of [...(document.querySelectorAll?.('.ui-sketch-readout') || [])]) {
+    if (out.dataset?.uiSketchReadout === id) out.textContent = readout;
+  }
+}
+
+/**
+ * 把点挪到 (x,y)（图坐标，已夹在图框里）。`commit: true` = 键盘落定 / 松手：
+ * 交一步经过；拖动中的帧只更新快照（与滑杆的 input/change 同一把尺）。
+ */
+function moveSketchHandle(id, name, x, y, { commit = false, prevState = null } = {}) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return null;
+  const handle = (rec.spec.handles || []).find((h) => h.name === name);
+  if (!handle) return null;
+  const W = Number(rec.spec.W) || 320;
+  const H = Number(rec.spec.H) || 180;
+  const nx = Math.min(W, Math.max(0, Number(x)));
+  const ny = Math.min(H, Math.max(0, Number(y)));
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) return null;
+  const state = { ...(rec.state || {}), [name]: uiPointText(nx, ny), uiKind: 'sketch' };
+  setUiValues(id, 'sketch', state);
+  repaintUiSketch(id);
+  if (commit) {
+    uiSettling = true;
+    forwardUiState(id, state, prevState || rec.state || state);
+  } else {
+    uiSettling = false;
+    forwardUiState(id, state, rec.state || state);
+  }
+  return { x: nx, y: ny };
+}
+
+/** 键盘走一步：方向键 2 个单位，按住 Shift 10 个。与指针松手同一条落定路径。 */
+function nudgeSketchHandle(id, name, dx, dy) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return null;
+  const handle = (rec.spec.handles || []).find((h) => h.name === name);
+  if (!handle) return null;
+  const p = uiPointOf(rec.state?.[name]) || uiPointOf(handle.point);
+  if (!p) return null;
+  const moved = moveSketchHandle(id, name, p.x + dx, p.y + dy, { commit: true, prevState: rec.state });
+  if (moved) announce(`「${name}」移到 ${uiPointText(moved.x, moved.y)}`);
+  return moved;
+}
+
+/** 指针位置 → 图坐标（viewBox 比例由 CSS 设的宽高和 SVG 的 viewBox 一致）。 */
+function sketchPointFromClient(svg, clientX, clientY, W, H) {
+  const rect = svg?.getBoundingClientRect?.();
+  const width = Number(rect?.width);
+  const height = Number(rect?.height);
+  if (!(width > 0) || !(height > 0)) return null;
+  const x = ((Number(clientX) - Number(rect.left)) / width) * Number(W);
+  const y = ((Number(clientY) - Number(rect.top)) / height) * Number(H);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return {
+    x: Math.min(Number(W), Math.max(0, x)),
+    y: Math.min(Number(H), Math.max(0, y)),
+  };
+}
+
+// 一次拖动：起点在 pointerdown（记下"拖之前"的样子），中间帧只更新，松手才交经过。
+let uiSketchDrag = null;
+
+function beginSketchDrag(e) {
+  const node = e?.target;
+  const handle = node?.dataset?.uiHandle !== undefined && node?.classList?.contains?.('ui-sketch-handle')
+    ? node
+    : node?.closest?.('.ui-sketch-handle');
+  if (!handle) return false;
+  const svg = handle.closest?.('.ui-sketch');
+  const id = svg?.dataset?.uiSketch;
+  const name = handle.dataset?.uiHandle;
+  if (!id || !name) return false;
+  const rec = readUiState(id);
+  if (!(rec?.spec?.handles || []).some((h) => h.name === name)) return false;
+  const prevState = { ...(rec.state || {}) };
+  uiSketchDrag = { id, name, svg, prevState, moved: false };
+  uiSettling = false;
+  noteUiRun(id, prevState, prevState);
+  e.preventDefault?.();
+  handle.focus?.();
+  return true;
+}
+
+function moveSketchDrag(e) {
+  if (!uiSketchDrag) return false;
+  const { id, name, svg } = uiSketchDrag;
+  const rec = readUiState(id);
+  if (!rec?.spec) {
+    uiSketchDrag = null;
+    uiRuns.delete(id); // 这一趟没有落点：起点不能留给下一次动作
+    uiSettling = true;
+    return false;
+  }
+  const p = sketchPointFromClient(svg, e?.clientX, e?.clientY, rec.spec.W || 320, rec.spec.H || 180);
+  if (!p) return false;
+  const moved = moveSketchHandle(id, name, p.x, p.y, { commit: false });
+  if (moved) uiSketchDrag.moved = true;
+  return Boolean(moved);
+}
+
+function endSketchDrag() {
+  const drag = uiSketchDrag;
+  if (!drag) return false;
+  uiSketchDrag = null;
+  if (!drag.moved) {
+    uiRuns.delete(drag.id);
+    uiSettling = true;
+    return false;
+  }
+  const rec = readUiState(drag.id);
+  const state = rec?.state;
+  if (!state) {
+    uiRuns.delete(drag.id);
+    uiSettling = true;
+    return false;
+  }
+  uiSettling = true;
+  forwardUiState(drag.id, state, drag.prevState);
+  const p = uiPointOf(state[drag.name]);
+  if (p) announce(`「${drag.name}」放在 ${uiPointText(p.x, p.y)}`);
+  return true;
+}
+
+/**
  * handoff（第二十九轮，学 Intelligent UI 的 issueNewTurn 不学自动发言）：
  * 交互档把学习者当前的状态递回对话的唯一出口。点了把「勾了哪几项 / 参数滑到哪 /
  * 停在哪 / 滑到哪张快照」拼成一句人话放进输入框，由他自己看过、改过再发。
@@ -3285,6 +3480,15 @@ function handoffUiState(id) {
     } else {
       text = `我在「${name}」里还没有动过`;
     }
+  } else if (kind === 'sketch') {
+    // 只报"他把点放在哪"：没有目标坐标，也不写"摆得对不对"——那张图就是下一句话的原料。
+    const parts = (rec.spec?.handles || []).map((h) => {
+      const p = uiPointOf(rec.state?.[h.name]) || uiPointOf(h.point);
+      return p ? `${h.name} ${uiPointText(p.x, p.y)}` : h.name;
+    });
+    text = parts.length
+      ? `我在草图「${name}」里把点放到了：${parts.join('、')}`
+      : `我在草图「${name}」里还没有可拖的点`;
   } else {
     return false;
   }
@@ -3630,8 +3834,39 @@ function handleUiDeskEvent(evt) {
  */
 function handleUiDeskKey(e) {
   const key = e?.key;
-  if (key !== 'Enter' && key !== ' ') return { handled: false };
   const node = e?.target;
+  // sketch 的圆点是 <g role="button" tabindex="0">：方向键微调、Enter/空格报当前位置。
+  // 它必须排在下面的 Enter/空格分支之前，否则空格会被当成"点一下"而什么也不发生。
+  const handle = node?.dataset?.uiHandle !== undefined && node?.classList?.contains?.('ui-sketch-handle')
+    ? node
+    : node?.closest?.('.ui-sketch-handle');
+  if (handle) {
+    const svg = handle.closest?.('.ui-sketch');
+    const id = svg?.dataset?.uiSketch;
+    const name = handle.dataset?.uiHandle;
+    if (id && name) {
+      if (key === 'Enter' || key === ' ') {
+        e.preventDefault?.();
+        const rec = readUiState(id);
+        const p = uiPointOf(rec?.state?.[name]) ||
+          uiPointOf((rec?.spec?.handles || []).find((h) => h.name === name)?.point);
+        if (p) announce(`「${name}」现在在 ${uiPointText(p.x, p.y)}`);
+        return { handled: true, kind: 'sketch', id };
+      }
+      const step = e?.shiftKey ? 10 : 2;
+      const delta = key === 'ArrowLeft' ? [-step, 0]
+        : key === 'ArrowRight' ? [step, 0]
+          : key === 'ArrowUp' ? [0, -step]
+            : key === 'ArrowDown' ? [0, step]
+              : null;
+      if (delta) {
+        e.preventDefault?.();
+        const moved = nudgeSketchHandle(id, name, delta[0], delta[1]);
+        return { handled: Boolean(moved), kind: 'sketch', id };
+      }
+    }
+  }
+  if (key !== 'Enter' && key !== ' ') return { handled: false };
   const hit = node?.dataset?.uiNode || node?.dataset?.uiMapStop
     || (node?.closest ? node.closest('[data-ui-node]') || node.closest('[data-ui-map-stop]') : null);
   if (!hit) return { handled: false };
@@ -4300,7 +4535,7 @@ function renderUiStatePanel(body) {
   );
   if (!entries.length) return;
   const fit = (s) => { const t = String(s); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
-  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍', map: '地图', arrange: '排列' };
+  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍', map: '地图', arrange: '排列', sketch: '草图' };
   const card = el('div', 'ui-state-card');
   card.append(el('div', 'panel-section-title', '这局动过的界面'));
   for (const [key, s] of entries) {
@@ -4360,6 +4595,14 @@ function renderUiStatePanel(body) {
         } else {
           card.append(el('div', 'state-note', '· 还没有分过'));
         }
+      } else {
+        card.append(el('div', 'state-note', '· 还没有动过'));
+      }
+    } else if (s.uiKind === 'sketch') {
+      // 只报"每个点现在在哪"：点的位置是证据，不是分数；没有目标坐标可对照。
+      const points = Object.entries(s).filter(([k]) => k !== 'uiKind');
+      if (points.length) {
+        for (const [k, v] of points) card.append(el('div', 'state-note', `· ${fit(k)} 在 ${fit(v)}`));
       } else {
         card.append(el('div', 'state-note', '· 还没有动过'));
       }
@@ -5649,6 +5892,12 @@ function bindEvents() {
   document.addEventListener('pointerdown', (e) => noteUiPointerDown(e.target), true);
   document.addEventListener('pointerup', () => noteUiPointerUp(), true);
   document.addEventListener('pointercancel', () => noteUiPointerUp(), true);
+  // 第七十二轮：草图的拖动走 document 级指针事件——手滑出 SVG 也不能把点丢在半路；
+  // pointercancel（来电、系统手势）按松手处理，不留在"拖到一半"的状态里。
+  document.addEventListener('pointerdown', (e) => beginSketchDrag(e), true);
+  document.addEventListener('pointermove', (e) => moveSketchDrag(e), true);
+  document.addEventListener('pointerup', () => endSketchDrag(), true);
+  document.addEventListener('pointercancel', () => endSketchDrag(), true);
   document.addEventListener('focusout', () => setTimeout(flushHeldProse, 0), true);
 }
 
@@ -5859,6 +6108,15 @@ export const __hooks = {
   hydrateUiState,
   repaintUiCalc,
   repaintUiForm,
+  // 第七十二轮：图上手（可拖的点）
+  repaintUiSketch,
+  moveSketchHandle,
+  nudgeSketchHandle,
+  beginSketchDrag,
+  moveSketchDrag,
+  endSketchDrag,
+  sketchPointFromClient,
+  uiPointOf,
   textBlock,
   // 配置备份（第十四轮）：设置面板里的导出/导入设置块
   renderConfig,
