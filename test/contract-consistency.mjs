@@ -1266,6 +1266,37 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
       !(stateful || []).includes('figure') && (stateful || []).includes('callout'), (stateful || []).join(','));
   }
 
+  // 第七十四轮：公式词法长出 `^` 与括号（复利 / 退休储蓄那一手）。三处必须说同一句话：
+  // 提示的 form / calculator 两行与硬规则、README 的 6.3、编译器的拒绝话术。
+  // 早一轮漏掉任何一处，模型就会写出 `**` 或口算一个数——界面能拖，数字却是死的。
+  {
+    const formRow74 = rowOf25('form');
+    const calcRow74 = rowOf25('calculator');
+    const rule74 = promptLines25.find((l) => l.includes('只认参数（字段）名')) || '';
+    check('提示里 form 的 compute 教了 `^` 与括号',
+      formRow74.includes('^') && formRow74.includes('括号'), formRow74.slice(0, 240));
+    check('提示里 calculator 的 formula 教了复利这个写法',
+      calcRow74.includes('^') && calcRow74.includes('(1 + 年利率)') && calcRow74.includes('括号'),
+      calcRow74.slice(0, 300));
+    check('硬规则写清 `^` 右结合（2 ^ 3 ^ 2 = 512）与三类人话错误',
+      rule74.includes('右结合') && rule74.includes('2 ^ 3 ^ 2') && rule74.includes('512') &&
+      rule74.includes('除零') && rule74.includes('不吐') && rule74.includes('NaN'), rule74.slice(0, 420));
+    check('README 的 6.3 与提示同一句：`^` 右结合、括号、复利例子、不吐 NaN',
+      readmeDoc.includes('`^` 是乘方、右结合') &&
+      readmeDoc.includes('本息 = 本金 * (1 + 年利率) ^ 年数') &&
+      readmeDoc.includes('不吐 `NaN`'), '');
+    check('编译器的拒绝话术与词表同源（+ - * / ^ 与括号，form 与 calculator 各一句）',
+      /只认参数名、数、\+ - \* \/ \^ 与括号/.test(uiSrc) &&
+      /只认字段名、数、\+ - \* \/ \^ 与括号/.test(uiSrc), '');
+    check('`^` 的优先级与右结合只声明在解析器一处（+ - < * / < 一元 - < ^）',
+      uiSrc.includes('`+ -` < `* /` < 一元 `-` < `^`') && /const parseP\s*=/.test(uiSrc) &&
+      uiSrc.includes('右结合'), '');
+    check('表达式语言仍不动态构造代码（没有 eval / new Function）',
+      !/\beval\(/.test(uiSrc) && !/new Function/.test(uiSrc), '');
+    check('宿主没有第二份求值（乘方只可能在编译器里算）',
+      !/function evalUi/.test(hostSrc25) && !/Math\.pow/.test(hostSrc25), '');
+  }
+
   // 4) 降级回报那条闭环：宿主报的事件名 ↔ 提示里承诺的那句话
   check('宿主报的是 ui_degraded 事件', /name: 'ui_degraded'/.test(hostSrc25));
   check('提示里预告了这个事件（模型不认这个事件名就永远读不懂这条反馈）',

@@ -4149,8 +4149,9 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('词汇表里没有能给判分留位置的一档（Invariant 4 第 ③ 条：判分不进控件）',
     !ui.UI_KINDS.some((k) => /quiz|answer|grade|judge/.test(k)), ui.UI_KINDS.join(','));
 
-  // 4) 公式：没有 eval，词法 = 参数名 / 数 / + - * /（第五十六轮把 - 与 / 补进词表；
-  //    它们不再是"一律不编"，而是正常编成 − / ÷，仍不引 eval / new Function）
+  // 4) 公式：没有 eval，词法 = 参数名 / 数 / + - * / ^ / 括号（第五十六轮把 - 与 / 补进词表；
+  //    第七十四轮把 ^ 与括号补进来——它们不再是"一律不编"，而是正常编成乘方与分组，
+  //    仍不引 eval / new Function）
   const src39 = fs.readFileSync(path.join(webDir, 'ui-compile.js'), 'utf8');
   check('编译器里没有 eval / new Function（表达式语言也在词汇表里）',
     !/\beval\(/.test(src39) && !/new Function/.test(src39), '');
@@ -4163,9 +4164,10 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
       !r.degraded && /− 1|÷ 3/.test(r.html), ok);
   }
   for (const evil of [
-    'formula: 肉 = (人数 + 1) * 0.4',
     'formula: 肉 = Math.ceil(人数)',
     'formula: 肉 = 人数 * alert(1)',
+    'formula: 肉 = 人数 ^ (1',
+    'formula: 肉 = 人数 ** 2',
   ]) {
     check(`公式「${evil.slice(9, 30)}」这类写法一律不编（越出词法就退回原文）`,
       Boolean(compile(['kind: calculator', 'id: x1', 'param: 人数 | 8', evil]).degraded), evil);
@@ -8404,6 +8406,144 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
 
   ui62.resetUiState();
   check('这一节无异常', errors.length === errsBefore62, errors.slice(errsBefore62).join(' | '));
+}
+
+// ─── 63. 公式长出乘方与括号（第七十四轮，学 Intelligent UI 的旗舰演示——
+// 复利 / 退休储蓄这类"改一个数，屏幕上的钱跟着变"的计算器。第五十轮的词法只有
+// 加减乘除：总量能算、账能分，`(1 + 年利率) ^ 年数` 却写不出来，于是"十年后长成
+// 多少"只能由模型口算一个数写进正文——滑杆能拖，屏上的数却跟它对不上。这一轮把
+// `^` 与括号编进同一棵语法树：标准优先级、右结合、仍不引 eval。
+{
+  console.log('\n63. 乘方与括号（复利能算了：公式是算出来的，不是模型口算的）');
+  const errsBefore63 = errors.length;
+  const ui63 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { handleUiDeskEvent: handle63 } = appModule.__hooks;
+  const compile63 = (lines, partial) => ui63.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const deg63 = (lines) => ui63.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  ui63.resetUiState();
+
+  // 1) 旗舰用例：复利（退休储蓄那一手）
+  const retire = ['kind: calculator', 'id: retire74', 'title: 十年后的本息', 'unit: 元',
+    'param: 本金 | 10000', 'param: 年利率 | 0.05', 'param: 年数 | 10 | 0 | 40',
+    'formula: 本息 = 本金 * (1 + 年利率) ^ 年数'];
+  const r63 = compile63(retire).html;
+  check('复利公式编得出来（`本息 = 本金 × (1 + 年利率) ^ 年数`）',
+    r63.includes('本息 = 本金 × (1 + 年利率) ^ 年数'), r63.slice(0, 700));
+  check('结果与代入都是算出来的（10000 × (1 + 0.05) ^ 10 = 16288.946 元）',
+    r63.includes('>16288.946 元<') && r63.includes('= 10000 × (1 + 0.05) ^ 10 = 16288.946 元'), r63);
+  check('写出来的上限照用（年数能拖到 40，不靠模型在正文里另算）',
+    /<input[^>]*max="40"[^>]*data-ui-param="年数"/.test(r63), r63.slice(0, 700));
+
+  // 2) 优先级 / 结合性 / 一元负号：与数学写法一致
+  const calc63 = (formula) => compile63(['kind: calculator', 'id: p74', 'param: a | 4', `formula: ${formula}`]).html;
+  const out63 = (formula) => (calc63(formula).match(/ui-out-value">([^<]*)/) || [])[1];
+  check('乘方先于乘、乘先于加（2 + 3 * 4 ^ 2 = 50）', out63('结果 = 2 + 3 * 4 ^ 2') === '50', out63('结果 = 2 + 3 * 4 ^ 2'));
+  check('括号先算（(2 + 3) * 4 = 20）', out63('结果 = (2 + 3) * 4') === '20', out63('结果 = (2 + 3) * 4'));
+  check('`^` 右结合（2 ^ 3 ^ 2 = 2 ^ 9 = 512，不是 8 ^ 2 = 64）',
+    out63('结果 = 2 ^ 3 ^ 2') === '512', out63('结果 = 2 ^ 3 ^ 2'));
+  check('一元负号照常（-2 ^ 2 = −4：先乘方再取负）', out63('结果 = -2 ^ 2') === '−4', out63('结果 = -2 ^ 2'));
+  check('负指数（2 ^ -1 = 0.5）', out63('结果 = 2 ^ -1') === '0.5', out63('结果 = 2 ^ -1'));
+  check('开方就写 `^ 0.5`（2 ^ 0.5 = 1.414）', out63('结果 = 2 ^ 0.5') === '1.414', out63('结果 = 2 ^ 0.5'));
+  check('减法 / 除法里的括号照旧（10 − (2 − 1) = 9、100 ÷ (5 × 2) = 10）',
+    out63('结果 = 10 - (2 - 1)') === '9' && out63('结果 = 100 / (5 * 2)') === '10',
+    `${out63('结果 = 10 - (2 - 1)')} / ${out63('结果 = 100 / (5 * 2)')}`);
+  check('嵌套括号与乘方混排（2 * (3 + 4) ^ 2 = 98）',
+    out63('结果 = 2 * (3 + 4) ^ 2') === '98', out63('结果 = 2 * (3 + 4) ^ 2'));
+  check('带参数的乘方逐项替换（a ^ 2，a = 4 → = 4 ^ 2 = 16）',
+    out63('结果 = a ^ 2') === '16' && calc63('结果 = a ^ 2').includes('= 4 ^ 2 = 16'), '');
+  check('参数放在指数上（2 ^ a，a = 4 → 16）', out63('结果 = 2 ^ a') === '16', out63('结果 = 2 ^ a'));
+
+  // 3) 错就说话：三类失败各一句人话，不吐 NaN / Infinity
+  check('除零（1 / (2 - 2)）回一句人话', out63('结果 = 1 / (2 - 2)') === '除零了（除数不能是 0）', '');
+  check('负数的分数次幂（(0 - 8) ^ 0.5）说没有实数结果',
+    out63('结果 = (0 - 8) ^ 0.5') === '算不出来：这个幂没有实数结果', '');
+  check('溢出（10 ^ 400）说超出范围', out63('结果 = 10 ^ 400') === '算不出来：结果超出了范围', '');
+  check('0 的负次幂（0 ^ -1）按除零处理', out63('结果 = 0 ^ -1') === '除零了（除数不能是 0）', '');
+  check('三类失败都不出现 NaN / Infinity',
+    !/NaN|Infinity/.test(calc63('结果 = 1 / (2 - 2)') + calc63('结果 = (0 - 8) ^ 0.5') + calc63('结果 = 10 ^ 400')), '');
+
+  // 4) 词汇表之外：没闭合的括号、`**`、函数调用、空括号、悬空运算符、隐式乘法
+  for (const bad of ['a ^ (1', 'a ** 2', 'Math.ceil(a)', '()', 'a +', 'a ^', '(a', '2(3)']) {
+    check(`「${bad}」这类写法不编（越出词表就退回原文，并点名）`,
+      deg63(['kind: calculator', 'id: bad74', 'param: a | 4', `formula: 结果 = ${bad}`]).includes('词汇表之外'), bad);
+  }
+  check('嵌套过深 / 项数过多的表达式有上限（不是先崩再说）',
+    deg63(['kind: calculator', 'id: deep74', 'param: a | 4',
+      `formula: 结果 = ${'('.repeat(30)}a${')'.repeat(30)}`]).length > 0 &&
+    deg63(['kind: calculator', 'id: wide74', 'param: a | 4',
+      `formula: 结果 = ${Array.from({ length: 40 }, () => 'a').join(' + ')}`]).length > 0, '');
+  check('不引参数也照算（2 + 3 * 4 = 14；代入行留空，没什么可代）',
+    out63('结果 = 2 + 3 * 4') === '14' && !calc63('结果 = 2 + 3 * 4').includes('ui-math-work">= '), '');
+
+  // 5) form 的 compute 同一份词法；空字段不拿 0 冒充
+  const f74 = ['kind: form', 'id: save74', 'field: 本金 | number', 'field: 年利率 | number', 'field: 年数 | number',
+    'compute: 本息 = 本金 * (1 + 年利率) ^ 年数'];
+  const fh74 = compile63(f74).html;
+  check('form 的 compute 也认乘方与括号（算式摆出来）', fh74.includes('本息 = 本金 × (1 + 年利率) ^ 年数'), fh74.slice(0, 700));
+  check('三格都没填：代入行空着（不写 = 0 × (1 + 0) ^ 0）',
+    fh74.includes('<p class="ui-math-work"></p>') && !fh74.includes('(1 + 0)'), fh74.slice(-500));
+  const saveBox = doc.createElement('div'); saveBox.className = 'ui-form'; saveBox.dataset.uiForm = 'save74';
+  const saveOut = doc.createElement('p'); saveOut.className = 'ui-out';
+  const saveVal = doc.createElement('output'); saveVal.className = 'ui-out-value'; saveOut.append(saveVal);
+  const saveWork = doc.createElement('p'); saveWork.className = 'ui-math-work';
+  saveBox.append(saveOut, saveWork); domRoot.append(saveBox);
+  compile63(f74);
+  for (const [name, value] of [['本金', '10000'], ['年利率', '0.05'], ['年数', '10']]) {
+    handle63({ target: { dataset: { uiField: 'save74', uiName: name }, value } });
+  }
+  check('填满三格：输出与代入同一次更新（16288.946）',
+    saveVal._text === '16288.946' && saveWork._text === '= 10000 × (1 + 0.05) ^ 10 = 16288.946',
+    `${saveVal._text} / ${saveWork._text}`);
+  handle63({ target: { dataset: { uiField: 'save74', uiName: '年数' }, value: '' } });
+  check('清空指数那一格：输出按 0 次方算（10000），代入行藏掉（不写 ^ 0）',
+    saveVal._text === '10000' && saveWork._text === '', `${saveVal._text} / ${saveWork._text}`);
+  saveBox.remove();
+
+  // 6) 真在台上拖：app.js 的 repaint 拿同一棵 AST 重算
+  ui63.resetUiState();
+  compile63(retire);
+  const calcBox = doc.createElement('div'); calcBox.className = 'ui-calc'; calcBox.dataset.uiCalc = 'retire74';
+  const ro = doc.createElement('output'); ro.className = 'ui-param-value';
+  const outP = doc.createElement('p'); outP.className = 'ui-out';
+  const outV = doc.createElement('output'); outV.className = 'ui-out-value'; outP.append(outV);
+  const workP = doc.createElement('p'); workP.className = 'ui-math-work';
+  calcBox.append(ro, outP, workP); domRoot.append(calcBox);
+  const rDrag = handle63({ target: { dataset: { uiSlider: 'retire74', uiParam: '年数' }, value: '30' } });
+  check('滑杆被接住（还是既有 calculator 通道）', rDrag.handled === true && rDrag.kind === 'calculator', JSON.stringify(rDrag));
+  check('拖到 30 年：结果与代入一起重算（10000 × (1 + 0.05) ^ 30 = 43219.424 元）',
+    outV._text === '43219.424 元' && workP._text === '= 10000 × (1 + 0.05) ^ 30 = 43219.424 元',
+    `${outV._text} / ${workP._text}`);
+  check('没拖过的参数不会被念成 undefined', !/undefined/.test(workP._text + outV._text), workP._text);
+  calcBox.remove();
+
+  // 7) 旧 notebook 回放：第五十轮的 terms 裸数组仍是同一条求值链
+  check('旧形状公式表照算（人数 × 0.4 = 3.2，代入照旧）',
+    ui63.uiEval([[{ p: '人数' }, { n: 0.4 }]], { 人数: 8 }) === 3.2 &&
+    ui63.uiWork([[{ p: '人数' }, { n: 0.4 }]], { 人数: 8 }, '公斤') === '= 8 × 0.4 = 3.2 公斤', '旧形状没归一');
+  check('旧形状里的减号组也照算（100 − 30 = 70）',
+    ui63.uiEval([{ sign: '+', terms: [{ p: '本金' }] }, { sign: '-', terms: [{ p: '支出' }] }], { 本金: 100, 支出: 30 }) === 70, '');
+  compile63(['kind: calculator', 'id: e74', 'param: a | 2', 'param: b | 3', 'formula: 结果 = a * b + 2']);
+  const expr74 = ui63.readUiState('e74')?.spec?.formulas?.[0]?.expr;
+  check('两种形状不各算各的：编译出的 AST 与等价旧数组都给 8',
+    Boolean(expr74) && ui63.uiEval(expr74, { a: 2, b: 3 }) === 8 &&
+    ui63.uiEval([{ sign: '+', terms: [{ p: 'a' }, { p: 'b' }] }, { sign: '+', terms: [{ n: 2 }] }], { a: 2, b: 3 }) === 8,
+    JSON.stringify(expr74));
+  check('同一棵 AST 的符号算式与代入（a × b + 2 / = 2 × 3 + 2 = 8）',
+    ui63.uiFormula(expr74) === 'a × b + 2' && ui63.uiWork(expr74, { a: 2, b: 3 }) === '= 2 × 3 + 2 = 8',
+    `${ui63.uiFormula(expr74)} / ${ui63.uiWork(expr74, { a: 2, b: 3 })}`);
+
+  // 8) 不变量：界面能算复利，也不长出判分词；编译器仍无 eval
+  check('复利界面里没有判分词（Invariant 4：算得出钱，不算"他会不会"）',
+    !/score|percent|mastery|correct|incorrect|rank|badge/i.test(r63 + fh74), '');
+  const src74 = fs.readFileSync(path.join(webDir, 'ui-compile.js'), 'utf8');
+  check('编译器里仍然没有 eval / new Function（乘方是解析出来的，不是请浏览器代算）',
+    !/\beval\(/.test(src74) && !/new Function/.test(src74), '');
+  check('宿主没有第二份求值（repaint 走编译器的 uiOutText / uiWork）',
+    /uiOutText/.test(fs.readFileSync(path.join(webDir, 'app.js'), 'utf8')) &&
+    !/function evalUi(?:Terms|Out|Work)?\s*\(/.test(fs.readFileSync(path.join(webDir, 'app.js'), 'utf8')), '');
+
+  ui63.resetUiState();
+  check('这一节无异常', errors.length === errsBefore63, errors.slice(errsBefore63).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

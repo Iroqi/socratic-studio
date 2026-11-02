@@ -782,19 +782,17 @@ function compileForm(fields, lines, partial) {
   for (const f of pick(fields, 'compute')) {
     const m = outRe.exec(f.trim());
     if (!m || !UI_IDENT.test(m[1].trim())) return { error: `compute「${f.slice(0, 40)}」不是「输出名 = 表达式」` };
-    const terms = compileFormula(m[2]);
-    if (!terms) return { error: `表达式「${m[2].slice(0, 60)}」里有词汇表之外的写法（只认字段名、数、+ - * /）` };
-    formulas.push({ out: m[1].trim(), terms });
+    const expr = compileExpr(m[2]);
+    if (!expr) return { error: `表达式「${m[2].slice(0, 60)}」里有词汇表之外的写法（只认字段名、数、+ - * / ^ 与括号）` };
+    formulas.push({ out: m[1].trim(), expr });
   }
   if (formulas.length > 4) return { error: '输出最多 4 个' };
   // compute 只许引用 number 字段：text 字段没有数可算，写进去是语义词写错档（点名，不静默吞）。
   const numberNames = new Set(parsed.filter((f) => f.type === 'number').map((f) => f.name));
   for (const f of formulas) {
-    for (const group of f.terms) {
-      for (const t of group.terms) {
-        if (t.p !== undefined && !numberNames.has(t.p)) {
-          return { error: `compute「${f.out}」引了「${t.p}」——只认 number 字段（text 字段没数可算）` };
-        }
+    for (const name of exprRefs(f.expr)) {
+      if (!numberNames.has(name)) {
+        return { error: `compute「${f.out}」引了「${name}」——只认 number 字段（text 字段没数可算）` };
       }
     }
   }
@@ -850,7 +848,7 @@ function compileForm(fields, lines, partial) {
     .join('');
   const outs = formulas
     .map((f) => `<p class="ui-out"><span class="ui-out-name">${escapeHtml(f.out)}</span>` +
-      `<output class="ui-out-value">${uiOutText(f.terms, values, '')}</output></p>`)
+      `<output class="ui-out-value">${uiOutText(f.expr, values, '')}</output></p>`)
     .join('');
   const math = mathHtml(formulas, values, '');
   return { html: `${cap}<div class="ui-form" data-ui-form="${escapeHtml(id)}">${inputs}${outs}${math}${assumeHtml(meta.assumes)}${sourceHtml(src.source)}</div>${missHtml}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'form' };
@@ -957,9 +955,9 @@ function compileCalculator(fields, lines, partial) {
   for (const f of pick(fields, 'formula')) {
     const m = outRe.exec(f.trim());
     if (!m || !UI_IDENT.test(m[1].trim())) return { error: `formula「${f.slice(0, 40)}」不是「输出名 = 表达式」` };
-    const terms = compileFormula(m[2]);
-    if (!terms) return { error: `表达式「${m[2].slice(0, 60)}」里有词汇表之外的写法（只认参数名、数、+ - * /）` };
-    formulas.push({ out: m[1].trim(), terms });
+    const expr = compileExpr(m[2]);
+    if (!expr) return { error: `表达式「${m[2].slice(0, 60)}」里有词汇表之外的写法（只认参数名、数、+ - * / ^ 与括号）` };
+    formulas.push({ out: m[1].trim(), expr });
   }
   if (!formulas.length) return { error: '没有任何 formula' };
   if (formulas.length > 4) return { error: '输出最多 4 个' };
@@ -1030,7 +1028,7 @@ function compileCalculator(fields, lines, partial) {
     .map(
       (f) =>
         `<p class="ui-out"><span class="ui-out-name">${escapeHtml(f.out)}</span>` +
-        `<output class="ui-out-value">${uiOutText(f.terms, values, unit)}</output></p>`,
+        `<output class="ui-out-value">${uiOutText(f.expr, values, unit)}</output></p>`,
     )
     .join('');
   const math = mathHtml(formulas, values, unit);
@@ -1038,55 +1036,146 @@ function compileCalculator(fields, lines, partial) {
 }
 
 /**
- * 表达式的形状（第五十六轮把 / 与 - 补进词表）：`金额 / 人数`、`本金 - 支出`、
- * `a * b + 3 * c`。解析成组（sign: '+'|'-'，项按 op: '*'|'/' 从左到右）：
- * `a * b + 3 * c` → [{sign:'+',terms:[{p:'a'},{p:'b'}]},{sign:'+',terms:[{n:3},{p:'c'}]}]
- * `每人 = 金额 / 人数` → [{sign:'+',terms:[{p:'金额'},{op:'/',p:'人数'}]}]。
- * 不认这个形状就返回 null（调用方按"词汇表之外的写法"降级回原文）。
+ * 表达式（第七十四轮）：`本金 * (1 + 年利率) ^ 年数`。
+ *
+ * 词汇表仍然是封闭的：名字、数、`+ - * / ^`、括号。没有函数、没有隐式乘法、
+ * 没有 `**`；求值用手写递归下降，**不动态构造代码**——表达式语言本身也在词汇表里。
+ * 优先级（低到高）：`+ -` < `* /` < 一元 `-` < `^`；`^` 右结合（`2 ^ 3 ^ 2 = 2 ^ 9`）。
+ * 上限：源码 160 字、AST 48 个节点、嵌套 12 层。超了按"词汇表之外的写法"退回原文，
+ * 不把一条长公式变成一次计算风暴。
  */
-function compileFormula(src) {
-  // 顶层按 +/- 拆组并记每组符号；组内按 */ 拆项并记每项运算符。
-  const segs = [];
-  let cur = '';
-  let sign = '+';
-  const flushSeg = () => {
-    const s = cur.trim();
-    if (s) segs.push([sign, s]);
-    cur = '';
-  };
-  for (const ch of src) {
-    if (ch === '+' || ch === '-') {
-      flushSeg();
-      sign = ch;
-    } else cur += ch;
-  }
-  flushSeg();
-  if (!segs.length || segs.length > 6) return null;
-  const out = [];
-  for (const [s, seg] of segs) {
-    const terms = [];
-    let buf = '';
-    let op = '*';
-    const pushTerm = () => {
-      const f = buf.trim();
-      buf = '';
-      if (!f) return false;
-      const n = num(f);
-      if (n !== null) terms.push({ op, n });
-      else if (UI_IDENT.test(f)) terms.push({ op, p: f });
-      else return false;
-      return true;
-    };
-    for (const ch of seg) {
-      if (ch === '*' || ch === '/') {
-        if (!pushTerm()) return null;
-        op = ch;
-      } else buf += ch;
+const EXPR_MAX_CHARS = 160;
+const EXPR_MAX_NODES = 48;
+const EXPR_MAX_DEPTH = 12;
+const EXPR_MAX_AST_DEPTH = 24;
+
+function exprTokens(src) {
+  const toks = [];
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    if (/\s/.test(ch)) {
+      i += 1;
+      continue;
     }
-    if (!pushTerm() || !terms.length || terms.length > 4) return null;
-    out.push({ sign: s, terms });
+    if ('+-*/^()'.includes(ch)) {
+      toks.push(ch);
+      i += 1;
+      continue;
+    }
+    // 数字连带千分位逗号 / 下划线一起收，交给 num 判有限数（与参数默认值同一把尺）。
+    if (/[0-9]/.test(ch) || (ch === '.' && /[0-9]/.test(src[i + 1] || ''))) {
+      let j = i;
+      while (j < src.length && /[0-9_,.]/.test(src[j])) j += 1;
+      const n = num(src.slice(i, j));
+      if (n === null) return null;
+      toks.push({ n });
+      i = j;
+      continue;
+    }
+    let j = i;
+    while (j < src.length && /[\w一-龥]/.test(src[j])) j += 1;
+    const name = src.slice(i, j);
+    if (!name || !UI_IDENT.test(name)) return null;
+    toks.push({ p: name });
+    i = j;
   }
-  return out;
+  return toks;
+}
+
+function compileExpr(src) {
+  const text = String(src ?? '');
+  if (text.length > EXPR_MAX_CHARS) return null;
+  const toks = exprTokens(text);
+  if (!toks || !toks.length) return null;
+  let i = 0;
+  let nodes = 0;
+  const fail = () => {
+    throw new Error('expr');
+  };
+  const node = (x) => {
+    nodes += 1;
+    if (nodes > EXPR_MAX_NODES) fail();
+    return x;
+  };
+  const peek = () => toks[i];
+  const eat = (t) => {
+    if (toks[i] === t) {
+      i += 1;
+      return true;
+    }
+    return false;
+  };
+  const guard = (depth) => {
+    if (depth > EXPR_MAX_DEPTH) fail();
+  };
+  const parseE = (depth) => {
+    guard(depth);
+    let left = parseT(depth);
+    for (;;) {
+      const op = peek();
+      if (op !== '+' && op !== '-') break;
+      i += 1;
+      const right = parseT(depth);
+      left = node({ t: 'bin', op, l: left, r: right });
+    }
+    return left;
+  };
+  const parseT = (depth) => {
+    guard(depth);
+    let left = parseU(depth);
+    for (;;) {
+      const op = peek();
+      if (op !== '*' && op !== '/') break;
+      i += 1;
+      const right = parseU(depth);
+      left = node({ t: 'bin', op, l: left, r: right });
+    }
+    return left;
+  };
+  const parseU = (depth) => {
+    guard(depth);
+    const op = peek();
+    if (op === '+' || op === '-') {
+      i += 1;
+      const x = parseU(depth + 1);
+      return op === '-' ? node({ t: 'neg', x }) : x;
+    }
+    return parseP(depth);
+  };
+  const parseP = (depth) => {
+    guard(depth);
+    const base = parseAtom(depth);
+    if (eat('^')) {
+      // 右结合：指数位再走一次一元 / 幂，`2 ^ 3 ^ 2` 因此是 2 ^ (3 ^ 2)。
+      const exp = parseU(depth + 1);
+      return node({ t: 'bin', op: '^', l: base, r: exp });
+    }
+    return base;
+  };
+  const parseAtom = (depth) => {
+    guard(depth);
+    const t = peek();
+    if (t && typeof t === 'object') {
+      i += 1;
+      if ('n' in t) return node({ t: 'num', v: t.n });
+      if ('p' in t) return node({ t: 'ref', p: t.p });
+      fail();
+    }
+    if (eat('(')) {
+      const inner = parseE(depth + 1);
+      if (!eat(')')) fail();
+      return inner;
+    }
+    fail();
+  };
+  try {
+    const expr = parseE(0);
+    if (i !== toks.length) return null;
+    return expr;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1101,29 +1190,98 @@ function normGroups(groups) {
   return groups;
 }
 
-/** 与编译器同一份求值口径（第五十六轮：组内乘除从左到右，组间加减；除零不吐 Infinity/NaN）。 */
-export function uiEval(groups, values) {
-  groups = normGroups(groups);
-  let total = 0;
-  for (const { sign, terms } of groups) {
-    let acc = 1;
-    for (const t of terms) {
-      const v = t.n !== undefined ? t.n : (values?.[t.p] ?? 0);
-      if (t.op === '/') {
-        if (v === 0) return NaN;
-        acc /= v;
-      } else acc *= v;
+/** 组项表 → 同一棵表达式树：旧值不删，只是换一种能继续长的形状。 */
+function groupsToExpr(groups) {
+  const gs = normGroups(groups);
+  if (!Array.isArray(gs) || !gs.length) return null;
+  let total = null;
+  for (const g of gs) {
+    if (!g || !Array.isArray(g.terms) || !g.terms.length) return null;
+    let acc = null;
+    for (const t of g.terms) {
+      if (!t || typeof t !== 'object') return null;
+      let e = null;
+      if (t.n !== undefined && Number.isFinite(t.n)) e = { t: 'num', v: t.n };
+      else if (t.p !== undefined) e = { t: 'ref', p: String(t.p) };
+      if (!e) return null;
+      if (!acc) acc = e;
+      else acc = { t: 'bin', op: t.op === '/' ? '/' : '*', l: acc, r: e };
     }
-    total += sign === '-' ? -acc : acc;
+    if (total === null) total = g.sign === '-' ? { t: 'neg', x: acc } : acc;
+    else total = { t: 'bin', op: g.sign === '-' ? '-' : '+', l: total, r: acc };
   }
-  return Math.round(total * 1000) / 1000;
+  return total;
 }
 
-/** 结果文本：除零给一句人话，不吐 NaN（第五十六轮）。与 .ui-out 的渲染共用一个出口。 */
-export function uiOutText(groups, values, unit = '') {
-  const v = uiEval(groups, values);
-  if (!Number.isFinite(v)) return '除零了（除数不能是 0）';
-  return unit ? `${v} ${unit}` : `${v}`;
+function normalizeExpr(x) {
+  if (!x) return null;
+  if (Array.isArray(x)) return groupsToExpr(x);
+  if (typeof x === 'object' && typeof x.t === 'string') return x;
+  return null;
+}
+
+/** 公式里引用了哪些名字（form 的 compute 只许引 number 字段，靠它逐条点名）。 */
+function exprRefs(ast) {
+  const out = [];
+  const stack = [ast];
+  let seen = 0;
+  while (stack.length) {
+    const n = stack.pop();
+    seen += 1;
+    if (seen > 200) break;
+    if (!n || typeof n !== 'object') continue;
+    if (n.t === 'ref' && typeof n.p === 'string') out.push(n.p);
+    else if (n.t === 'neg') stack.push(n.x);
+    else if (n.t === 'bin') stack.push(n.r, n.l);
+  }
+  return out;
+}
+
+/** 求值：数字、名字、四则、乘方。错误分三类——除零 / 无实数结果 / 超出范围。 */
+function evalExpr(ast, values, depth = 0) {
+  if (!ast || typeof ast !== 'object' || depth > EXPR_MAX_AST_DEPTH) return { err: 'syntax' };
+  if (ast.t === 'num') return Number.isFinite(ast.v) ? { v: ast.v } : { err: 'range' };
+  if (ast.t === 'ref') {
+    const raw = values?.[ast.p];
+    let v;
+    if (typeof raw === 'number') v = raw;
+    else if (typeof raw === 'string' && raw.trim() !== '' && Number.isFinite(Number(raw))) v = Number(raw);
+    else v = 0;
+    return Number.isFinite(v) ? { v } : { err: 'range' };
+  }
+  if (ast.t === 'neg') {
+    const r = evalExpr(ast.x, values, depth + 1);
+    return r.err ? r : { v: -r.v };
+  }
+  if (ast.t === 'bin') {
+    const l = evalExpr(ast.l, values, depth + 1);
+    if (l.err) return l;
+    const r = evalExpr(ast.r, values, depth + 1);
+    if (r.err) return r;
+    let v;
+    if (ast.op === '+') v = l.v + r.v;
+    else if (ast.op === '-') v = l.v - r.v;
+    else if (ast.op === '*') v = l.v * r.v;
+    else if (ast.op === '/') {
+      if (r.v === 0) return { err: 'div0' };
+      v = l.v / r.v;
+    } else if (ast.op === '^') {
+      // 0 的负次幂就是 1/0：按除零说，别让学习者看到 "Infinity"。
+      if (l.v === 0 && r.v < 0) return { err: 'div0' };
+      v = Math.pow(l.v, r.v);
+    } else return { err: 'syntax' };
+    if (Number.isNaN(v)) return { err: 'nan' };
+    if (!Number.isFinite(v)) return { err: 'range' };
+    return { v };
+  }
+  return { err: 'syntax' };
+}
+
+/** 结果只保留三位小数；大数不套这层（Math.round(1e308 * 1000) 会自己溢出成 Infinity）。 */
+function round3(n) {
+  if (!Number.isFinite(n)) return n;
+  if (Math.abs(n) >= 1e15) return n;
+  return Math.round(n * 1000) / 1000;
 }
 
 /**
@@ -1131,77 +1289,147 @@ export function uiOutText(groups, values, unit = '') {
  * 与 chartNum 同一套精度，但这里不换科学计数——算式要让人一眼读出来。
  */
 function fmtNum(n) {
-  if (Object.is(n, -0)) n = 0;
-  const r = Math.round(n * 1000) / 1000;
+  if (typeof n !== 'number' || !Number.isFinite(n)) return '—';
+  let r = Math.abs(n) >= 1e15 ? n : Math.round(n * 1000) / 1000;
+  if (Object.is(r, -0)) r = 0;
   return r < 0 ? `−${Math.abs(r)}` : String(r);
 }
 
-/** 组的字符串（第五十六轮）：`2 × 人数 + 3`、`金额 ÷ 人数 − 1`；负项读成 `− 3`，不写 `+ -3`。 */
-function joinGroups(groups) {
-  let out = '';
-  groups.forEach(({ sign, terms }, i) => {
-    let body = '';
-    terms.forEach((t, j) => {
-      const v = t.n !== undefined ? fmtNum(t.n) : t.p;
-      if (j === 0) {
-        body = v;
-        return;
-      }
-      body += t.op === '/' ? ` ÷ ${v}` : ` × ${v}`;
-    });
-    if (i === 0) {
-      out = body;
-      return;
-    }
-    if (sign === '-') out += ` − ${body}`;
-    else out += ` + ${body}`;
-  });
-  return out;
+const EXPR_OP_TEXT = { '+': '+', '-': '−', '*': '×', '/': '÷', '^': '^' };
+
+function astPrec(n) {
+  if (!n || typeof n !== 'object') return 0;
+  if (n.t === 'bin') return n.op === '+' || n.op === '-' ? 1 : n.op === '*' || n.op === '/' ? 2 : n.op === '^' ? 4 : 0;
+  if (n.t === 'neg') return 3;
+  return 5;
 }
 
 /**
- * 符号算式：`肉 = 人数 × 0.4`、`每人 = 金额 ÷ 人数`。从编译器自己解析出的那份
- * 组项表生成，与求值、代入过程共用一份词法——四处各写一遍，迟早有一处漂。
+ * 算式文本（第七十四轮）：从同一棵 AST 生成，求值 / 符号 / 代入三处共用一份词法。
+ * 括号只在改变运算顺序时才出现；`^` 右结合，所以 `2 ^ 3 ^ 2` 不写成 `2 ^ (3 ^ 2)`。
  */
-export function uiFormula(groups) {
-  return joinGroups(normGroups(groups));
+function astText(n, parentPrec = 0, side = '', parentOp = '', depth = 0) {
+  if (!n || typeof n !== 'object' || depth > EXPR_MAX_AST_DEPTH) return '';
+  const p = astPrec(n);
+  let text = '';
+  if (n.t === 'num') text = fmtNum(n.v);
+  else if (n.t === 'ref') text = String(n.p ?? '');
+  else if (n.t === 'neg') text = `−${astText(n.x, 3, 'right', '-', depth + 1)}`;
+  else if (n.t === 'bin') {
+    const opText = EXPR_OP_TEXT[n.op];
+    if (!opText) return '';
+    const left = astText(n.l, p, 'left', n.op, depth + 1);
+    // 负常数读成减号：`a + -3` → `a − 3`，`a - -3` → `a + 3`（旧围栏里写过的也照这个走）。
+    if ((n.op === '+' || n.op === '-') && n.r?.t === 'neg' && n.r.x?.t === 'num') {
+      text = `${left} ${n.op === '+' ? '−' : '+'} ${fmtNum(n.r.x.v)}`;
+    } else if ((n.op === '+' || n.op === '-') && n.r?.t === 'num' && n.r.v < 0) {
+      text = `${left} ${n.op === '+' ? '−' : '+'} ${fmtNum(Math.abs(n.r.v))}`;
+    } else {
+      text = `${left} ${opText} ${astText(n.r, p, 'right', n.op, depth + 1)}`;
+    }
+  } else return '';
+
+  let need = p < parentPrec;
+  if (!need && p === parentPrec) {
+    if (side === 'right') {
+      if (parentOp === '-' || parentOp === '/') need = true;
+      // ^ 右结合；其他同优先级右孩子要括号（a × (b ÷ c)、a ^ (b + c) 的低优先级已被上面拦住）。
+      if (parentOp === '^' && !(n.t === 'bin' && n.op === '^')) need = true;
+      if (parentOp === '*' && n.t === 'bin' && n.op === '/') need = true;
+    }
+    if (side === 'left' && parentOp === '^') need = true;
+  }
+  return need ? `(${text})` : text;
+}
+
+/** 代入：把名字换成数，只用于"怎么算的"那一行；有格子空着就整行不出（不拿 0 冒充）。 */
+function substExpr(n, values, state, depth = 0) {
+  if (!n || typeof n !== 'object' || depth > EXPR_MAX_AST_DEPTH) {
+    state.bad = true;
+    return null;
+  }
+  if (n.t === 'num') return n;
+  if (n.t === 'ref') {
+    const raw = values?.[n.p];
+    const v =
+      typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string' && raw.trim() !== '' && Number.isFinite(Number(raw))
+          ? Number(raw)
+          : null;
+    if (v === null || !Number.isFinite(v)) {
+      state.missing = true;
+      return n;
+    }
+    return { t: 'num', v };
+  }
+  if (n.t === 'neg') {
+    const x = substExpr(n.x, values, state, depth + 1);
+    return x ? { t: 'neg', x } : null;
+  }
+  if (n.t === 'bin') {
+    const l = substExpr(n.l, values, state, depth + 1);
+    const r = substExpr(n.r, values, state, depth + 1);
+    return l && r ? { t: 'bin', op: n.op, l, r } : null;
+  }
+  state.bad = true;
+  return null;
+}
+
+function hasOperator(n) {
+  return Boolean(n && (n.t === 'bin' || n.t === 'neg'));
+}
+
+/** 与编译器同一份求值口径（第七十四轮：四则 + 乘方；除零不吐 Infinity/NaN）。 */
+export function uiEval(expr, values) {
+  const ast = normalizeExpr(expr);
+  if (!ast) return NaN;
+  const r = evalExpr(ast, values);
+  return r.err ? NaN : round3(r.v);
+}
+
+/** 结果文本：除零 / 无实数幂 / 溢出各给一句人话，不吐 NaN 或 Infinity。 */
+export function uiOutText(expr, values, unit = '') {
+  const ast = normalizeExpr(expr);
+  if (!ast) return '算式没编出来';
+  const r = evalExpr(ast, values);
+  if (r.err === 'div0') return '除零了（除数不能是 0）';
+  if (r.err === 'nan') return '算不出来：这个幂没有实数结果';
+  if (r.err === 'range') return '算不出来：结果超出了范围';
+  if (r.err) return '算不出来：算式里有不认识的写法';
+  const v = round3(r.v);
+  return unit ? `${fmtNum(v)} ${unit}` : `${fmtNum(v)}`;
+}
+
+/** 符号算式：`肉 = 人数 × 0.4`、`本息 = 本金 × (1 + 年利率) ^ 年数`。 */
+export function uiFormula(expr) {
+  const ast = normalizeExpr(expr);
+  return ast ? astText(ast) : '';
 }
 
 /**
- * 代入过程：`= 8 × 0.4 = 3.2 公斤`、`= 120 ÷ 3 = 40`。
+ * 代入过程：`= 8 × 0.4 = 3.2 公斤`、`= 120 ÷ 3 = 40`、`= 10000 × (1 + 0.05) ^ 10 = 16288.946`。
  *
  * 只在"真能核对"时出现：公式里没引参数（没什么可代入）、或引用的表单字段空着 / 不是数
  * （没东西可代入）时返回空串——不拿 0 冒充学习者填过的值。参数引用了就逐项替换，
  * 结果与 .ui-out 用同一个 uiEval，保证两行永远对得上。除零时整行写成"除零了"，
  * 不吐 NaN——学习者看到的是人话，不是浏览器报错。
  */
-export function uiWork(groups, values, unit = '') {
-  groups = normGroups(groups);
-  let hasParam = false;
-  let missing = false;
-  const subst = groups.map(({ sign, terms }) => ({
-    sign,
-    terms: terms.map((t) => {
-      if (t.n !== undefined) return { op: t.op, n: t.n };
-      hasParam = true;
-      const raw = values?.[t.p];
-      const n =
-        typeof raw === 'number' && Number.isFinite(raw)
-          ? raw
-          : typeof raw === 'string' && raw.trim() !== '' && Number.isFinite(Number(raw))
-            ? Number(raw)
-            : null;
-      if (n === null) missing = true;
-      return { op: t.op, n: n };
-    }),
-  }));
-  if (!hasParam || missing) return '';
-  if (!Number.isFinite(uiEval(groups, values))) return '除零了（除数不能是 0）';
-  const text = joinGroups(subst);
-  const total = uiEval(groups, values);
+export function uiWork(expr, values, unit = '') {
+  const ast = normalizeExpr(expr);
+  if (!ast) return '';
+  if (!exprRefs(ast).length) return '';
+  const state = { missing: false, bad: false };
+  const subst = substExpr(ast, values, state);
+  if (state.missing || state.bad || !subst) return '';
+  const r = evalExpr(ast, values);
+  if (r.err === 'div0') return '除零了（除数不能是 0）';
+  if (r.err) return '';
+  const total = round3(r.v);
+  const text = astText(subst);
   const suffix = unit ? ` ${unit}` : '';
   // 裸参数（`输出 = 人数`）没有运算可展示，只报结果，不写 `= 8 = 8`。
-  if (!/[+\u2212]|×|÷/.test(text)) return `= ${fmtNum(total)}${suffix}`;
+  if (!hasOperator(ast)) return `= ${fmtNum(total)}${suffix}`;
   return `= ${text} = ${fmtNum(total)}${suffix}`;
 }
 
@@ -1213,8 +1441,8 @@ function mathHtml(formulas, values, unit) {
   const rows = formulas
     .map(
       (f) =>
-        `<p class="ui-math-formula">${escapeHtml(f.out)} = ${escapeHtml(uiFormula(f.terms))}</p>` +
-        `<p class="ui-math-work">${escapeHtml(uiWork(f.terms, values, unit))}</p>`,
+        `<p class="ui-math-formula">${escapeHtml(f.out)} = ${escapeHtml(uiFormula(f.expr ?? f.terms))}</p>` +
+        `<p class="ui-math-work">${escapeHtml(uiWork(f.expr ?? f.terms, values, unit))}</p>`,
     )
     .join('');
   return `<div class="ui-math"><p class="ui-math-label">怎么算的</p>${rows}</div>`;

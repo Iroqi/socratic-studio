@@ -3143,10 +3143,10 @@ function repaintUiCalc(id) {
       if (holder) {
         // kids() 不是洁癖：children 是 HTMLCollection，没有 find——直接写会当场炸
         const target = kids(holder).find((c) => c.classList?.contains('ui-out-value')) || holder;
-        target.textContent = uiOutText(f.terms, values, rec.spec.unit || '');
+        target.textContent = uiOutText(f.expr ?? f.terms, values, rec.spec.unit || '');
       }
       // 算式与代入必须和结果同一次求值、同一份 spec：两行对不上比不摆更糟（第五十轮）。
-      if (works[i]) works[i].textContent = uiWork(f.terms, values, rec.spec.unit || '');
+      if (works[i]) works[i].textContent = uiWork(f.expr ?? f.terms, values, rec.spec.unit || '');
     });
   }
 }
@@ -3176,11 +3176,11 @@ function repaintUiForm(id) {
       const holder = outs[i];
       if (holder) {
         const target = kids(holder).find((c) => c.classList?.contains('ui-out-value')) || holder;
-        target.textContent = uiOutText(f.terms, values, '');
+        target.textContent = uiOutText(f.expr ?? f.terms, values, '');
       }
       // 表单里空着的字段没有代入可言：uiWork 返回空串，CSS 把这一行藏掉——
       // 不拿 0 冒充学习者填过的值（输出仍按 0 算，那是表单原有的口径）。
-      if (works[i]) works[i].textContent = uiWork(f.terms, values, '');
+      if (works[i]) works[i].textContent = uiWork(f.expr ?? f.terms, values, '');
     });
   }
 }
