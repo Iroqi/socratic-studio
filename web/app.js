@@ -3259,6 +3259,25 @@ function repaintUiSketch(id) {
   for (const out of [...(document.querySelectorAll?.('.ui-sketch-readout') || [])]) {
     if (out.dataset?.uiSketchReadout === id) out.textContent = readout;
   }
+  // formula（第七十五轮）：拖点即时重算值，式子不动——与滑杆同一把尺，就地改字不重画整块。
+  const formulas = rec.spec.formulas || [];
+  if (formulas.length) {
+    const vals = {};
+    for (const h of handles) {
+      const p = pos[h.name] || uiPointOf(h.point);
+      if (p) {
+        vals[`${h.name}.x`] = p.x;
+        vals[`${h.name}.y`] = p.y;
+      }
+    }
+    for (const row of [...(document.querySelectorAll?.('.ui-sketch-formula-value') || [])]) {
+      const m = /^(.+):(\d+)$/.exec(String(row.dataset?.uiSketchFormula || ''));
+      if (!m || m[1] !== id) continue;
+      const fm = formulas[Number(m[2])];
+      if (!fm) continue;
+      row.textContent = ` = ${uiOutText(fm.expr, vals)}`;
+    }
+  }
 }
 
 /**

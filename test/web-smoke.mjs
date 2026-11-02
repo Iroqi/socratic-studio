@@ -8129,6 +8129,108 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore61, errors.slice(errsBefore61).join(' | '));
 }
 
+// ─── 64. sketch 有算式（第七十五轮）：拖点即时算，几何可核对。
+// 74 轮把公式语言扩到 `^` 之后，calculator 的数值参数能"拖→即时算"；sketch 拖完点却
+// 只有坐标读数——拖三角形顶点，斜边长度是死的。这一轮让 sketch 可带 1–2 条
+// `formula: 输出名 = 表达式`：表达式与计算器同一套词表，坐标分量写 `点.x` / `点.y`，
+// 拖点即时重算值（式子不动），初始值用声明坐标在编译期算好。轴后缀只在这档开，
+// `calculator` / `form` 里写 `.x` 仍是词汇表之外（不变量 4：界面上是现象，不是判分）。
+{
+  console.log('\n64. sketch 有算式（拖点即时算：图上的量跟着手走，几何定律当场演算）');
+  const errsBefore64 = errors.length;
+  const ui64 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { moveSketchHandle: move64 } = appModule.__hooks;
+  const compile64 = (lines, partial) => ui64.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const deg64 = (lines) => ui64.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  ui64.resetUiState();
+
+  // 1) 编译：一条公式编进 spec，初始值用声明坐标算好写进 HTML
+  const triF = ['kind: sketch', 'id: s75', 'title: 拖一拖', 'alt: 一个三角形，顶点可以拖动', 'frame: 320x180',
+    'shape: 底边 | line | 40,140,280,140',
+    'handle: A | 40,140 | 左下顶点', 'handle: B | 280,140 | 右下顶点', 'handle: C | 160,40 | 顶点',
+    'connect: A > B | 底边', 'formula: 距离 = ((A.x - C.x) ^ 2 + (A.y - C.y) ^ 2) ^ 0.5'];
+  const r64 = compile64(triF);
+  check('formula 编得进 sketch：spec 里带一条算式',
+    !r64.degraded && ui64.readUiState('s75')?.spec?.formulas?.length === 1 &&
+    ui64.readUiState('s75').spec.formulas[0].out === '距离', JSON.stringify(ui64.readUiState('s75')?.spec?.formulas));
+  check('初始值用声明坐标算好（A 40,140、C 160,40 → 距离 = 156.205）',
+    r64.html.includes('距离 = ((A.x − C.x) ^ 2 + (A.y − C.y) ^ 2) ^ 0.5') &&
+    r64.html.includes('<span class="ui-sketch-formula-value"> = 156.205</span>'), r64.html.slice(-500));
+  check('式子照最小括号显示（减法在乘方里加括号，最外层 ^ 0.5 也加括号）',
+    r64.html.includes('((A.x − C.x) ^ 2 + (A.y − C.y) ^ 2) ^ 0.5'), r64.html.slice(-400));
+  check('输出名是纯文本', r64.html.includes('距离 = '), r64.html.slice(-400));
+  check('没有答案键 / 判分词（不变量 4：算的是现象，不是判他会不会）',
+    !/score|percent|mastery|correct|incorrect/.test(r64.html), r64.html.slice(0, 300));
+  check('点数照旧存成一份平表（formula 不进状态：算式是编译期声明）',
+    JSON.stringify(ui64.readUiState('s75').state) === JSON.stringify({ uiKind: 'sketch', A: '40,140', B: '280,140', C: '160,40' }),
+    JSON.stringify(ui64.readUiState('s75').state));
+
+  // 2) 拖点即时算：值行跟着手走，式子不动
+  const svg75 = doc.createElement('svg');
+  svg75.className = 'ui-sketch ui-figure'; svg75.dataset.uiSketch = 's75';
+  const ga75 = doc.createElement('g'); ga75.className = 'ui-sketch-handle'; ga75.dataset.uiHandle = 'A';
+  ga75.setAttribute('transform', 'translate(40 140)'); svg75.append(ga75);
+  const gb75 = doc.createElement('g'); gb75.className = 'ui-sketch-handle'; gb75.dataset.uiHandle = 'B';
+  gb75.setAttribute('transform', 'translate(280 140)'); svg75.append(gb75);
+  const gc75 = doc.createElement('g'); gc75.className = 'ui-sketch-handle'; gc75.dataset.uiHandle = 'C';
+  gc75.setAttribute('transform', 'translate(160 40)'); svg75.append(gc75);
+  domRoot.append(svg75);
+  const val75 = doc.createElement('span');
+  val75.className = 'ui-sketch-formula-value'; val75.dataset.uiSketchFormula = 's75:0';
+  val75.textContent = ' = 156.205';
+  domRoot.append(val75);
+  const valOther75 = doc.createElement('span');
+  valOther75.className = 'ui-sketch-formula-value'; valOther75.dataset.uiSketchFormula = 's99:0';
+  valOther75.textContent = ' = 1';
+  domRoot.append(valOther75);
+
+  const prev75 = ui64.readUiState('s75').state;
+  const moved75 = move64('s75', 'A', 40, 90, { commit: true, prevState: prev75 });
+  check('拖 A 到 (40,90)：距离即时变成 130（(120² + 50²) ^ 0.5）',
+    moved75?.x === 40 && moved75?.y === 90 && val75.textContent === ' = 130', val75.textContent);
+  check('拖点照旧只更新快照与读数（没有判分词进状态）',
+    ui64.readUiState('s75').state.A === '40,90' && !/score|percent|mastery/.test(JSON.stringify(ui64.readUiState('s75').state)),
+    JSON.stringify(ui64.readUiState('s75').state));
+  check('别的草图的算式不被串改', valOther75.textContent === ' = 1', valOther75.textContent);
+  move64('s75', 'A', 40, 140, { commit: true, prevState: ui64.readUiState('s75').state });
+  check('拖回 (40,140)：值回到 156.205', val75.textContent === ' = 156.205', val75.textContent);
+
+  // 3) 续回：拖过的坐标参与初始值（重画用盘上的位置算，不是声明值）
+  ui64.setUiValues('s75', 'sketch', { uiKind: 'sketch', A: '40,90', B: '280,140', C: '160,40' });
+  const r64b = compile64(triF).html;
+  check('重画续回拖过的 A：初始值按盘上坐标算（= 130）',
+    r64b.includes('<span class="ui-sketch-formula-value"> = 130</span>'), r64b.slice(-400));
+  ui64.resetUiState();
+
+  // 4) 降级：每一条都点名，不静默吞
+  check('formula 引了没声明的点：掉回原文并点名（没拖到的点不能假装有数）',
+    deg64(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'formula: 距离 = Z.x']).includes('不是这张草图上的点'), '');
+  check('formula 不是「输出名 = 表达式」：掉回原文并点名',
+    deg64(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'formula: A.x']).includes('不是「输出名 = 表达式」'), '');
+  check('formula 超过 2 条：掉回原文并点名（一张草图讲一两件量就够）',
+    deg64(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'formula: 甲 = A.x', 'formula: 乙 = A.y', 'formula: 丙 = A.x + A.y'])
+      .includes('算式最多 2 条'), '');
+  check('别的档写 .x 仍是词汇表之外（calculator 的 formula）',
+    deg64(['kind: calculator', 'id: a', 'param: a | 4', 'formula: 结果 = a.x']).includes('词汇表之外'), '');
+  check('别的档写 .x 仍是词汇表之外（form 的 compute）',
+    deg64(['kind: form', 'id: a', 'field: a | number | 4', 'compute: 结果 = a.x']).includes('词汇表之外'), '');
+  for (const bad of ['A.x5', 'A.xy', 'A.z', 'A.x.x', 'A.x2']) {
+    check(`轴后缀只认一个 x / y：「${bad}」这类不编（词表封闭）`,
+      deg64(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', `formula: 结果 = ${bad}`]).includes('词汇表之外'), bad);
+  }
+  check('小数点跟数字仍是数（2.5 不误读成轴后缀，还能参与算式）',
+    (() => { const rr = compile64(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10',
+      'formula: 结果 = 2.5 + A.x']); return !rr.degraded && rr.html.includes('结果 = 2.5 + A.x'); })(), '');
+  check('输出名不合法：掉回原文并点名',
+    deg64(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'formula: 1 = A.x']).includes('不是「输出名 = 表达式」'), '');
+  check('formula 写进 figure：被点名不是 figure 的字段（静态图没有"图上的量"）',
+    deg64(['kind: figure', 'alt: x', 'shape: a | rect | 0,0,10,10', 'formula: 甲 = A.x']).includes('不是 figure 的字段'), '');
+  check('XSS：输出名里的标签进不了页面（名字必须是标识符，非法就掉回原文并点名）',
+    deg64(['kind: sketch', 'id: a', 'alt: x', 'handle: A | 10,10', 'formula: <img> = A.x']).includes('不是「输出名 = 表达式」'), '');
+
+  check('这一节无异常', errors.length === errsBefore64, errors.slice(errsBefore64).join(' | '));
+}
+
 // ─── 62. callout：图上点名（第七十三轮，学 Intelligent UI 的 numbered callouts 那一手）。
 // figure 的静态是契约，sketch 让点能拖，但"一张图里有几块各有名字的部件、想逐块点开看"
 // 还没有形状：explore 不落在图上、map 是示意地理、diagram 是节点与连线。这一档留下 figure

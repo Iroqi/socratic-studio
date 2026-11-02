@@ -1049,7 +1049,7 @@ const EXPR_MAX_NODES = 48;
 const EXPR_MAX_DEPTH = 12;
 const EXPR_MAX_AST_DEPTH = 24;
 
-function exprTokens(src) {
+function exprTokens(src, allowAxis) {
   const toks = [];
   let i = 0;
   while (i < src.length) {
@@ -1075,18 +1075,30 @@ function exprTokens(src) {
     }
     let j = i;
     while (j < src.length && /[\w一-龥]/.test(src[j])) j += 1;
-    const name = src.slice(i, j);
-    if (!name || !UI_IDENT.test(name)) return null;
-    toks.push({ p: name });
+    const base = src.slice(i, j);
+    if (!base || !UI_IDENT.test(base)) return null;
+    // 名字后允许 `.x` / `.y` 坐标分量后缀（第七十五轮：sketch 的 formula 引用点在哪）。
+    // 只认 x / y 一个字母、且再后面不是字母数字——`甲.x5` / `甲.xy` 不认，保持词表封闭。
+    let p = base;
+    if (
+      allowAxis &&
+      src[j] === '.' &&
+      /[xy]/.test(src[j + 1] || '') &&
+      !/[\w一-龥0-9]/.test(src[j + 2] || '')
+    ) {
+      p = base + '.' + src[j + 1];
+      j += 2;
+    }
+    toks.push({ p });
     i = j;
   }
   return toks;
 }
 
-function compileExpr(src) {
+function compileExpr(src, { allowAxis = false } = {}) {
   const text = String(src ?? '');
   if (text.length > EXPR_MAX_CHARS) return null;
-  const toks = exprTokens(text);
+  const toks = exprTokens(text, allowAxis);
   if (!toks || !toks.length) return null;
   let i = 0;
   let nodes = 0;
@@ -2149,7 +2161,7 @@ function figureWords(fields) {
 const FIGURE_ONLY = 'shape / label / arrow / frame / alt 只配 figure / sketch（把形状与构造画出来，别的档没有"几何"这回事）';
 
 // ── 图上手（第七十二轮，学 Intelligent UI 的 "editable graphics" 那一面） ──
-const SKETCH_FIELDS = new Set([...FIGURE_FIELDS, 'id', 'handoff', 'handle', 'connect']);
+const SKETCH_FIELDS = new Set([...FIGURE_FIELDS, 'id', 'handoff', 'handle', 'connect', 'formula']);
 const SKETCH_MAX_HANDLES = 4;
 const SKETCH_MAX_CONNECTS = 6;
 const SKETCH_NAME_MAX = 12;
@@ -2183,7 +2195,7 @@ function compileSketch(fields, lines, partial) {
   }
   const stray = fields.filter(([k]) => !SKETCH_FIELDS.has(k)).map(([k]) => k);
   if (stray.length) {
-    return { error: `「${stray[0]}」不是 sketch 的字段（sketch 只认 id / alt / frame / shape / label / arrow / handle / connect / title / handoff）` };
+    return { error: `「${stray[0]}」不是 sketch 的字段（sketch 只认 id / alt / frame / shape / label / arrow / handle / connect / formula / title / handoff）` };
   }
   const ids = pick(fields, 'id');
   if (ids.length > 1) return { error: 'id 写了两遍' };
@@ -2276,6 +2288,45 @@ function compileSketch(fields, lines, partial) {
     pos[h.name] = saved && figInFrame(saved.x, saved.y, W, H) ? saved : h.point;
   }
   const pointText = (p) => `${figNum(p.x)},${figNum(p.y)}`;
+  // formula（第七十五轮）：这张草图上的量——拖点即时算，几何可核对。
+  // 引用句柄的坐标分量 `点.x` / `点.y`，复用与 calculator / form 同一份表达式语言
+  // （词法只在这档开轴后缀，其他档写 `.x` 仍是词汇表之外的写法）。
+  const formulas = [];
+  const formulaRe = /^(\S[^=]*?)\s*=\s*(.+)$/;
+  for (const f of pick(fields, 'formula')) {
+    const m = formulaRe.exec(f.trim());
+    if (!m || !UI_IDENT.test(m[1].trim())) {
+      const e = soft(`formula「${f.slice(0, 40)}」不是「输出名 = 表达式」`);
+      if (e) return e;
+      continue;
+    }
+    const expr = compileExpr(m[2], { allowAxis: true });
+    if (!expr) {
+      const e = soft(`表达式「${m[2].slice(0, 60)}」里有词汇表之外的写法（只认点名、数、+ - * / ^ 与括号；坐标分量写 点.x / 点.y）`);
+      if (e) return e;
+      continue;
+    }
+    // 引用的基础名必须在这张草图上：没声明过的点被拖到哪都没法算，静默成 0 是骗人。
+    const refs = [];
+    (function collectRefs(n) {
+      if (!n || typeof n !== 'object') return;
+      if (n.t === 'ref') refs.push(String(n.p).split('.')[0]);
+      else if (n.t === 'neg') collectRefs(n.x);
+      else if (n.t === 'bin') { collectRefs(n.l); collectRefs(n.r); }
+    })(expr);
+    const bad = refs.find((base) => !handleNames.has(base));
+    if (bad) {
+      const e = soft(`「${bad}」不是这张草图上的点（formula 只能引用 handle 声明过的名字）`);
+      if (e) return e;
+      continue;
+    }
+    if (formulas.length >= 2) {
+      const e = soft('算式最多 2 条（一张草图讲一两件量就够）');
+      if (e) return e;
+      continue;
+    }
+    formulas.push({ out: m[1].trim(), expr });
+  }
   const state = { uiKind: 'sketch' };
   for (const h of handles) state[h.name] = pointText(pos[h.name]);
   const spec = {
@@ -2284,6 +2335,7 @@ function compileSketch(fields, lines, partial) {
     title,
     handles: handles.map((h) => ({ name: h.name, point: pointText(h.point), hint: h.hint })),
     links,
+    formulas,
   };
   // partial 不落位置：流里这一行随时会重排，写下来会把刚拖好的点冲掉（与 arrange 同一把握）。
   writeUiState(id, 'sketch', partial ? { ...stored, uiKind: 'sketch' } : state, spec);
@@ -2321,6 +2373,23 @@ function compileSketch(fields, lines, partial) {
     })
     .join('');
   const readout = handles.map((h) => `${h.name} ${pointText(pos[h.name])}`).join(' · ');
+  const formulaEls = formulas
+    .map((fm, idx) => {
+      const vals = {};
+      for (const h of handles) {
+        const p = pos[h.name];
+        vals[`${h.name}.x`] = p.x;
+        vals[`${h.name}.y`] = p.y;
+      }
+      // 初始值用声明坐标算好写进 HTML（与 calculator 首次上台同一把尺）；拖点后宿主就地改值。
+      const v = uiOutText(fm.expr, vals);
+      return (
+        `<p class="ui-sketch-formula" data-ui-sketch-formula="${escapeHtml(id)}:${idx}">` +
+        `${escapeHtml(fm.out)} = ${escapeHtml(uiFormula(fm.expr))}` +
+        `<span class="ui-sketch-formula-value"> = ${escapeHtml(v)}</span></p>`
+      );
+    })
+    .join('');
   const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
   const aria = alt || '这张草图还在长';
   const svg =
@@ -2332,6 +2401,7 @@ function compileSketch(fields, lines, partial) {
     `</svg>`;
   const out =
     `<p class="ui-sketch-readout" data-ui-sketch-readout="${escapeHtml(id)}" aria-live="polite">${escapeHtml(readout)}</p>` +
+    `${formulaEls}` +
     `<p class="ui-sketch-hint">拖动圆点改位置；聚焦后方向键微调（Shift 走大步）。这里只记你摆的样子，不判对错</p>`;
   return {
     html: `${cap}${svg}${out}${handoff ? handoffButton(id, handoff) : ''}`,

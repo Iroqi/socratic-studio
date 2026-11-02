@@ -1226,7 +1226,7 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   // 比的是"有哪几种"，不是"各写了几处"：同一个记号在两个档里都写一次是常事（data-ui-name
   // 先由 form 写、第四十七轮 map 的点也写）——名字对得上就行，多一种没人读的才该红。
   check('编译器一共只写这几个 data-*（多一个就是多一条没人读的记号，契约测试会把它认成断线）',
-    [...new Set(emittedAttrs)].sort().join(',') === 'ui-arrange,ui-arrange-bin,ui-arrange-item,ui-arrange-move,ui-ask-opt,ui-ask-skip,ui-ask-submit,ui-bucket,ui-calc,ui-callout,ui-callout-mark,ui-chart,ui-chart-snap,ui-check,ui-diagram,ui-dir,ui-explore,ui-explore-tab,ui-field,ui-form,ui-game,ui-game-try,ui-handle,ui-handoff,ui-item,ui-map,ui-map-stop,ui-name,ui-node,ui-param,ui-sketch,ui-sketch-link,ui-sketch-readout,ui-slider,ui-suggest,ui-tab-name,ui-try-name,ui-walk,ui-walk-next,ui-walk-prev',
+    [...new Set(emittedAttrs)].sort().join(',') === 'ui-arrange,ui-arrange-bin,ui-arrange-item,ui-arrange-move,ui-ask-opt,ui-ask-skip,ui-ask-submit,ui-bucket,ui-calc,ui-callout,ui-callout-mark,ui-chart,ui-chart-snap,ui-check,ui-diagram,ui-dir,ui-explore,ui-explore-tab,ui-field,ui-form,ui-game,ui-game-try,ui-handle,ui-handoff,ui-item,ui-map,ui-map-stop,ui-name,ui-node,ui-param,ui-sketch,ui-sketch-formula,ui-sketch-link,ui-sketch-readout,ui-slider,ui-suggest,ui-tab-name,ui-try-name,ui-walk,ui-walk-next,ui-walk-prev',
     [...new Set(emittedAttrs)].sort().join(','));
   for (const attr of new Set(emittedAttrs)) {
     const key = attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
@@ -1313,6 +1313,53 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   check('这一轮没让 server/rules/ 变胖（run.mjs 那道 65000 的墙不许因为新词汇被推高）',
     /RULES_CHAR_BUDGET = 65000/.test(fs.readFileSync(path.join(app, 'test', 'run.mjs'), 'utf8')),
     '上限被改了：放宽预算要连同理由一起改，不许顺手');
+}
+
+// ────────────────────────────────────────── 第七十五轮：sketch 带上算式（拖点即时算）
+/*
+ * 这一轮的新词横跨提示、README、编译器与宿主四处，最容易坏的方式是"只改了一处"：
+ *   ① 提示不教 formula 与 点.x/点.y —— 模型照旧口算一个数写死进正文，拖一次就对不上；
+ *   ② 轴后缀被算进 calculator/form 的词法 —— 词汇表悄悄变宽，别的档也能写 .x；
+ *   ③ 宿主另起炉灶自己求值 —— 两棵语法树，值慢慢对不上。
+ * 全在这里钉住。规则本体一个字不动（预算墙已在上一块钉住）。
+ */
+{
+  const rulesDir75 = path.join(app, 'server', 'rules');
+  const rulesMd75 = fs.readdirSync(rulesDir75).filter((f) => f.endsWith('.md'));
+  const promptSrc75 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+  const readmeDoc75 = fs.readFileSync(path.join(app, 'README.md'), 'utf8');
+  const uiSrc75 = fs.readFileSync(path.join(app, 'web', 'ui-compile.js'), 'utf8');
+  const hostSrc75 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+  const promptLines75 = promptSrc75.split('\n');
+  const rowOf75 = (kind) => promptLines75.find((l) => l.includes('| \\`' + kind + '\\` |')) || '';
+  const rule75 = promptLines75.find((l) => l.includes('图上有个量想让他看着拖出来的')) || '';
+  const skRow75 = rowOf75('sketch');
+  check('提示第 19 条硬规则教了 formula 的写法与斜边例子（开方写 ^ 0.5，别写死数）',
+    rule75.includes('formula: 输出名 = 表达式') && rule75.includes('点.x') &&
+    rule75.includes('斜边 = ((甲.x - 乙.x) ^ 2') && rule75.includes('^ 0.5') &&
+    rule75.includes('别把算好的数写死在正文'), rule75.slice(0, 300));
+  check('提示的 sketch 字段表把 formula 写进可选栏（1–2 条、引用 点.x/点.y、拖点即时算）',
+    skRow75.includes('formula: 输出名 = 表达式') && skRow75.includes('点.x') &&
+    skRow75.includes('拖点即时算') && skRow75.includes('1–2 条'), skRow75.slice(0, 280));
+  check('README 6.2 档位表 sketch 行带 formula，段落给同一句斜边例子',
+    /\| `sketch` \|/.test(readmeDoc75) && readmeDoc75.includes('formula`（引用 `点.x` / `点.y`，拖点即时算）') &&
+    readmeDoc75.includes('斜边 = ((甲.x - 乙.x) ^ 2 + (甲.y - 乙.y) ^ 2) ^ 0.5'), '');
+  check('README 6.3 钉住边界：轴后缀只配 sketch，calculator / form 里写 .x 仍是词汇表之外',
+    readmeDoc75.includes('坐标分量后缀 `点.x` / `点.y` 只配 `sketch` 的 `formula`') &&
+    readmeDoc75.includes('仍是词汇表之外的写法'), '');
+  check('编译器的拒绝话术与提示同一句（坐标分量写 点.x / 点.y）',
+    uiSrc75.includes('坐标分量写 点.x / 点.y'), '');
+  check('轴后缀只在 sketch 档开启（allowAxis 的 true 只出现一次，在 compileSketch 里）',
+    (uiSrc75.match(/allowAxis/g) || []).length >= 3 && (uiSrc75.match(/allowAxis: true/g) || []).length === 1,
+    String((uiSrc75.match(/allowAxis: true/g) || []).length));
+  check('sketch 的字段表与 SKETCH_FIELDS 都收下 formula，spec 挂 formulas',
+    uiSrc75.includes("'formula'") && uiSrc75.includes('「输出名 = 表达式」') && uiSrc75.includes('formulas,'), '');
+  check('宿主就地改值用的是编译器的求值（没有第二份 evalUi / Math.pow）',
+    !/function evalUi/.test(hostSrc75) && !/Math\.pow/.test(hostSrc75) &&
+    hostSrc75.includes('.ui-sketch-formula-value'), '');
+  check('新词全在 APP_ADAPTER：规则文件一字没提 formula',
+    rulesMd75.every((f) => !fs.readFileSync(path.join(rulesDir75, f), 'utf8').includes('formula')),
+    rulesMd75.filter((f) => fs.readFileSync(path.join(rulesDir75, f), 'utf8').includes('formula')).join(','));
 }
 
 // ────────────────────────────────────────── 第六十一轮：界面的经过（落定的那几步）

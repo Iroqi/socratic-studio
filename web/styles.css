@@ -873,6 +873,8 @@ html, body {
 .ui-sketch-dot { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
 .ui-sketch-name { fill: var(--ink); font-size: 12px; font-weight: 600; pointer-events: none; }
 .ui-sketch-readout { margin: -0.35em 0 0.5em; color: var(--ink-2); font-family: var(--mono); font-size: 12px; }
+.ui-sketch-formula { margin: 0 0 0.35em; color: var(--ink); font-family: var(--mono); font-size: 12.5px; }
+.ui-sketch-formula-value { color: var(--accent-ink); }
 .ui-sketch-hint { margin: 0 0 1em; color: var(--ink-3); font-size: 12px; }
 
 /* callout（第七十三轮）：figure 的几何 + 能点开的编号标注——学 IUI 旗舰演示里
