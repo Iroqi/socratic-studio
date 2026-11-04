@@ -1725,6 +1725,37 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
     readmeSrc71.includes('围栏原文一条不少'), 'README 折叠段的承诺没跟上');
 }
 
+// ── 第七十六轮：README 是服务面的完整门面——serve 的每条路由、每个 server 模块、
+//    每个回合事件都写进文档。此前只钉 README→serve 单向（引用都有真路由），
+//    漏了反方向：服务面长出新出口、新模块、新事件时，文档可以不写而契约依旧全绿。
+//    这一块把方向补齐，让「没文档的出口」变红。
+{
+  const readmeDoc76 = fs.readFileSync(path.join(app, 'README.md'), 'utf8');
+  const serveSrc76 = fs.readFileSync(path.join(app, 'server', 'serve.mjs'), 'utf8');
+  const appSrc76 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+  // ① 反向路由钉：serve 的全部路由都出现在 README（复用顶层 routeSet / normalizeRouteTemplate）
+  const refs76 = new Set();
+  for (const m of readmeDoc76.matchAll(/\/api\/[^\s"'，。；）】、`]+/g)) {
+    refs76.add(normalizeRouteTemplate(m[0]));
+  }
+  const missingRoutes76 = [...routeSet].filter((r) => !refs76.has(r));
+  check('serve 的每条路由都写进 README 的接口表（服务面不许有没文档的出口）',
+    missingRoutes76.length === 0, missingRoutes76.join(' '));
+  // ② 目录结构钉：server/ 每个模块都在 README 目录表（新增模块不许悄悄缺页）
+  const serverFiles76 = fs.readdirSync(path.join(app, 'server')).filter((f) => f.endsWith('.mjs')).sort();
+  const missingFiles76 = serverFiles76.filter((f) => !readmeDoc76.includes('`server/' + f + '`'));
+  check('README 目录结构表列出每个 server 模块（文档随代码长）',
+    missingFiles76.length === 0, missingFiles76.join(' '));
+  // ③ SSE 事件钉：前端处理的每个回合事件都写在 README 事件表（artifact_command / closed 是
+  //    宿主内部通道，不是 SSE 事件，排除在外）
+  const sseEvents76 = new Set();
+  for (const m of appSrc76.matchAll(/case '([a-z_]+)':/g)) sseEvents76.add(m[1]);
+  for (const internal of ['artifact_command', 'closed']) sseEvents76.delete(internal);
+  const missingEvents76 = [...sseEvents76].filter((e) => !readmeDoc76.includes('`' + e + '`'));
+  check('前端处理的每个回合事件都写进 README 的事件表（新增事件不许没文档）',
+    missingEvents76.length === 0, missingEvents76.join(' '));
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;

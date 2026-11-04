@@ -32,9 +32,11 @@ npm run test:all   # 六个套件，见第 9 节
 | `server/agent.mjs` | 回合主循环、工具表（提问 / 图谱 / 进度 / 场景 / 制品 / 笔记 / 后台任务）的注册与执行、对话窗口、状态机校验 |
 | `server/prompt.mjs` | 组装 system prompt：规则全文 + 宿主适配说明 `APP_ADAPTER` + 状态快照 |
 | `server/rules/` | 五份教学规则（总则 / 协议 / 运行时 / 教学法 / 制品），本应用的运行时输入 |
+| `server/config.mjs` | 会话数据目录、共享常量与损坏副本体检 |
 | `server/store.mjs` | 所有落盘读写，原子写，导出与导入，体检与隔离区 |
 | `server/graph.mjs` | Learning Graph 的校验与拓扑排序 |
 | `server/scene.mjs` | 场的状态：开场、相位、道具、场上参数 |
+| `server/starters.mjs` | 新会话的起点建议：按已学过什么生成候选主题 |
 | `server/ui-trace.mjs` | 界面「经过」的记录：学习者落定过的每一步 |
 | `server/ui-ledger.mjs` | 界面台账：从对话里认出每件内联界面的档位、标题与围栏原文 |
 | `server/lifecycle.mjs` | 状态工作集：哪些界面进入本回合上下文，其余如何折叠 |
@@ -42,11 +44,15 @@ npm run test:all   # 六个套件，见第 9 节
 | `server/tasks.mjs` | 后台任务与分身任务的调度 |
 | `server/artifact.mjs` | 制品的落盘、清单与生命周期 |
 | `server/decision.mjs` | 决策路由：主回合与轻量判定走不同模型 |
-| `server/providers*.mjs` | 模型供应商目录、凭据与解析 |
+| `server/providers.mjs` | 模型供应商目录、凭据与解析 |
+| `server/providers-catalog.mjs` | 供应商清单、自定义端点与密钥管理 |
+| `server/zip.mjs` | 制品打包与导出归档 |
 | `web/app.js` | 单页应用：会话视图、台面、SSE 处理、界面状态回传 |
 | `web/ui-compile.js` | 内联界面编译器：围栏文本 → DOM，含全部二十档与降级路径 |
 | `web/inline.js` | 行内语法：正文与组件叙事文字共用一套（粗斜体 / 删除线 / 代码 / 公式；链接只在正文） |
 | `web/markdown.js` | Markdown 渲染，围栏抽取与界面挂载 |
+| `web/escape.js` | HTML 转义与安全写入 |
+| `web/index.html` | 单页应用的宿主页 |
 | `web/socratic-runtime.js` | 制品页内运行时，向宿主回报交互事件 |
 | `web/styles.css` | 全部样式，深色为主、浅色可切 |
 | `test/` | 六个套件与若干手动探针 |
@@ -207,26 +213,39 @@ Invariant 4 的可机械检查指纹：学习者可见面上出现百分比、�
 | 方法与路径 | 用途 |
 |---|---|
 | `GET /api/bootstrap` | 首次加载所需的全部配置与会话摘要 |
+| `GET /api/starters` | 新会话起点建议：按已学过什么生成候选主题 |
+| `GET /api/providers` · `PUT /api/providers/:id/key` · `POST /api/providers/:id/test` | 模型订阅与可用模型、配置供应商密钥、连通性测试 |
+| `GET /api/custom-endpoints` · `DELETE /api/custom-endpoints/:id` | 自定义端点列表、删除 |
+| `GET /api/search` | 跨会话全文搜索（词为空回空结果） |
+| `GET /api/settings` · `PUT /api/settings` | 模型与界面设置 |
+| `GET /api/config/export` · `POST /api/config/import` | 配置备份（含密钥，勿外传） |
+| `GET /api/config/decision` · `PUT` · `POST /api/config/decision/test` | 决策路由配置、保存与探测 |
 | `GET /api/notebooks` · `POST /api/notebooks` | 会话列表、新建 |
-| `GET /api/notebooks/:id` · `PATCH` · `DELETE` | 读取、改名、删除（有进行中回合时拒绝） |
+| `POST /api/notebooks/import` | 整本导入 |
+| `GET /api/notebooks/:id` · `PATCH` · `DELETE` | 读取、改名、删除（有进行中回合或后台任务时拒绝） |
+| `GET /api/notebooks/:id/summary` | 小结（Markdown，?format=html 时给 HTML） |
+| `GET /api/notebooks/:id/conversation` | 对话过程导出：只有过程与时间戳，没有状态数字 |
 | `POST /api/notebooks/:id/turn` | 发送一条消息，返回 SSE 流 |
 | `GET /api/notebooks/:id/stream` | 重连进行中的回合 |
+| `GET /api/notebooks/:id/turn-state` | 当前回合是否活跃与已缓冲事件数 |
 | `POST /api/notebooks/:id/interrupt` | 中断当前回合 |
 | `POST /api/notebooks/:id/answer` | 提交题卡作答 |
 | `POST /api/notebooks/:id/plan` | 裁决计划卡 |
-| `POST /api/notebooks/:id/artifact-message` | 制品页回传交互事件或状态 |
 | `GET /api/notebooks/:id/graph` | 读取 Learning Graph |
 | `POST /api/notebooks/:id/patches/:id` | 裁决 Graph 修改提案 |
 | `PUT /api/notebooks/:id/notes/:id` · `DELETE` | 写、删结构化笔记 |
-| `POST /api/notebooks/:id/uploads` | 上传素材 |
+| `POST /api/notebooks/:id/uploads` · `GET /api/notebooks/:id/uploads/:name` | 上传素材、取回素材 |
 | `GET /api/notebooks/:id/artifacts/:id` | 取制品 HTML |
 | `GET /api/notebooks/:id/artifacts.zip` | 打包全部制品 |
 | `POST /api/notebooks/:id/artifacts/:id/lifetime` | 收起或恢复一件制品 |
+| `POST /api/notebooks/:id/artifact-message` | 制品页回传交互事件或状态 |
 | `GET /api/notebooks/:id/tasks` · `POST /api/notebooks/:id/tasks/:id/stop` | 后台任务列表与停止 |
-| `GET /api/notebooks/:id/export` · `POST /api/notebooks/import` | 整本导出与导入 |
-| `GET /api/settings` · `PUT /api/settings` | 模型与界面设置 |
-| `GET /api/config/export` · `POST /api/config/import` | 配置备份（含密钥，勿外传） |
-| `GET /api/health` | 数据体检；隔离区可查、可恢复 |
+| `GET /api/notebooks/:id/task-stream` | 后台任务事件流（SSE） |
+| `GET /api/notebooks/:id/export` | 整本导出 |
+| `GET /api/health` | 数据体检 |
+| `POST /api/health/quarantine` · `POST /api/health/restore` | 隔离区：收起可疑数据、恢复 |
+| `GET /api/health/corrupt` | 损坏副本清单（?path=<rel> 定位） |
+| `POST /api/__faux` | 测试桩：假模型流，供排查回合用 |
 
 回合 SSE 的事件类型：
 
@@ -234,14 +253,18 @@ Invariant 4 的可机械检查指纹：学习者可见面上出现百分比、�
 |---|---|
 | `status` | 阶段提示（思考中 / 停滞 / 触及步数上限） |
 | `text_delta` | 正文字符增量 |
+| `thinking_delta` | 思考过程增量 |
 | `tool_start` / `tool_exec` / `tool_end` | 工具调用的三段：开始、执行详情、结束 |
 | `ask` / `answer` | 题卡出现、作答已被接收 |
 | `plan` / `plan_decided` | 计划卡出现、已裁决 |
 | `artifact` / `artifact_pending` | 制品上台、大件制品的占位 |
+| `artifact_state` / `artifact_event` / `artifact_evidence` | 制品状态更新、页内交互事件、证据回流 |
+| `patch` | Graph 修改提案出现 |
 | `scene` | 场变化：开场、换相位、摆撤道具 |
 | `todo` | 待办列表更新 |
 | `graph` / `progress` | 结构或进度的落盘结果 |
 | `note_saved` | 一条笔记已写入 |
+| `done` | 回合流收尾 |
 | `turn_end` | 本回合结束 |
 | `error` | 回合失败，附可读原因 |
 
