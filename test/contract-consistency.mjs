@@ -1756,6 +1756,31 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
     missingEvents76.length === 0, missingEvents76.join(' '));
 }
 
+// ── 第七十七轮：待办不撒谎——僵尸进度条连样式清场，工具注脚不再说假话。
+//    界面 IUI 统一那一轮起，待办就不再单列一节渲染（右栏砍除），renderTodoBar
+//    成了零调用的死函数，却还带着「本轮 done/total」的 Invariant 4 违例指纹，
+//    .todo-bar 一族样式只喂它一个；SSE todo 事件进 state.todos 后也没有任何
+//    消费点。工具注脚还骗模型说「学习者能在右侧页签看到」。本轮：死渲染连样式
+//    一起删，注脚改成不画进界面的真话；以下契约把这三件事钉死，不许复活。
+{
+  const appSrc77 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+  const agentSrc77 = fs.readFileSync(path.join(app, 'server', 'agent.mjs'), 'utf8');
+  const cssSrc77 = fs.readFileSync(path.join(app, 'web', 'styles.css'), 'utf8');
+  // ① 界面实现层没有待办渲染与进度计数（死函数 / 记号表 / 计数文案都不许复活）
+  check('前端没有待办渲染与「本轮 done/total」进度计数（Invariant 4 指纹不进实现层）',
+    !/function renderTodoBar\(/.test(appSrc77) && !/TODO_MARK/.test(appSrc77)
+      && !/本轮 \$\{done\}\/\$\{todos\.length\}/.test(appSrc77),
+    '待办渲染或进度计数在 app.js 复活了');
+  // ② 待办样式清出场（.todo-bar 一族不再有名字，死 CSS 不许回流）
+  check('样式表没有 .todo-bar / .todo-chip / .todo-mark（死样式清场）',
+    !/\.todo-bar|\.todo-chip|\.todo-mark/.test(cssSrc77),
+    'todo 样式族回流');
+  // ③ 工具注脚不撒谎：不骗模型「学习者能在右侧页签看到」，完成度仍如实回报
+  check('update_todo_list 注脚不撒谎（没有「右侧页签」，完成度照报）',
+    !/右侧页签/.test(agentSrc77) && /done\}\/\$\{this\.todos\.length\} 已完成/.test(agentSrc77),
+    '注脚撒谎或完成度丢了');
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;

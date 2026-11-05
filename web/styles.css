@@ -1411,26 +1411,6 @@ html, body {
   border-radius: 999px; padding: 2px 9px; white-space: nowrap;
 }
 .task-count:empty { display: none; }
-/* 讲解顺序标题下的本轮进度条：待办不再单列一节，就压成这一行 */
-.todo-bar {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-  margin: 0 0 10px;
-}
-.todo-bar-count {
-  font-size: 11.5px; font-weight: 600; color: var(--accent-ink);
-  background: var(--accent-soft); border-radius: 999px; padding: 2px 9px; white-space: nowrap;
-}
-.todo-chip {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11.5px; color: var(--ink-2);
-  border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px;
-}
-.todo-chip.in_progress { background: var(--accent-soft); border-color: transparent; color: var(--accent-ink); }
-.todo-chip.completed { color: var(--ink-3); }
-.todo-chip.completed .todo-text { text-decoration: line-through; }
-.todo-mark { flex: 0 0 auto; font-size: 10px; line-height: 1; }
-.todo-chip.in_progress .todo-mark { color: var(--accent); }
-.todo-chip.completed .todo-mark { color: var(--teal); }
 
 .tasks-list { display: flex; flex-direction: column; gap: 8px; }
 .task-item {

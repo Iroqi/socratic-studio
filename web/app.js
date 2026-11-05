@@ -166,7 +166,6 @@ const state = {
   pendingFiles: [], // 还没建会话时选中的文件（草稿态）：住在浏览器里，发第一条消息才补传
   turn: null, // { flow, blocks: [{text,node}|{node}], controller } —— flow = 老师当前那一拍的内容流
   panelTab: 'learn',
-  todos: [],
   tasks: [],
   taskSource: null, // 当前会话的后台任务 SSE，切会话必须先关
   camera: null, // 取景中的概念 { conceptId }
@@ -643,7 +642,6 @@ async function openNotebook(id, { carryComposer = false } = {}) {
   releaseSession();
   state.pendingNew = false;
   state.notebook = notebook;
-  state.todos = notebook.todos || [];
   state.tasks = [];
   state.camera = null;
   // 场上参数要赶在第一次编译之前（renderThread 里就会编译围栏），不能等 applySceneState。
@@ -2513,11 +2511,6 @@ function handleTurnEvent(evt) {
       }
       break;
     }
-    case 'todo':
-      state.todos = evt.todos || [];
-      if (state.notebook) state.notebook.todos = state.todos;
-      renderDeskState();
-      break;
     case 'graph':
       if (state.notebook) {
         state.notebook.graph = evt.graph;
@@ -2792,23 +2785,7 @@ function applyDeskFilter() {
   $('deskSearchNone')?.classList.toggle('hidden', !q || visible > 0);
 }
 
-// ─────────────────────────────────────────────── 待办 / 后台任务面板
-
-const TODO_MARK = { pending: '○', in_progress: '◐', completed: '●' };
-
-// 待办和讲解顺序是同一件事（"这一轮到哪儿了"），所以待办做成讲解顺序标题下的一条进度条，不再单列一节。
-function renderTodoBar(body, todos) {
-  const done = todos.filter((t) => t.status === 'completed').length;
-  const bar = el('div', 'todo-bar');
-  bar.append(el('span', 'todo-bar-count', `本轮 ${done}/${todos.length}`));
-  for (const t of todos) {
-    const chip = el('span', `todo-chip ${t.status}`);
-    chip.append(el('span', 'todo-mark', TODO_MARK[t.status] || '○'));
-    chip.append(el('span', 'todo-text', t.content));
-    bar.append(chip);
-  }
-  body.append(bar);
-}
+// ─────────────────────────────────────────────── 后台任务面板
 
 function renderTasksPanel(body) {
   const tasks = state.tasks || [];
@@ -6215,3 +6192,4 @@ export const __hooks = {
   renderConfig,
   refreshConfig,
 };
+

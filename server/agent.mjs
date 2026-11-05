@@ -1627,7 +1627,7 @@ export class TeachingSession {
     }
   }
 
-  /** 更新右侧「本轮待办」。整体替换，不是追加。 */
+  /** 更新「本轮待办」。整体替换，不是追加。待办是回合的组织线，不画进界面。 */
   execUpdateTodo(args) {
     this.todos = normaliseTodos(args.todos);
     this.todosDirty = true;
@@ -1635,7 +1635,7 @@ export class TeachingSession {
     const done = this.todos.filter((t) => t.status === 'completed').length;
     return {
       ok: true,
-      note: `待办已更新：${done}/${this.todos.length} 已完成。学习者能在右侧页签看到。`,
+      note: `待办已更新：${done}/${this.todos.length} 已完成（组织线，不画进界面）。`,
     };
   }
 
