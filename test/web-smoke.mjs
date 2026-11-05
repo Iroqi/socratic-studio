@@ -4095,7 +4095,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const calcBare = compile(['calculator', 'id: feast2', 'unit: 公斤', 'param: 人数 | 8 | 2 | 20', 'formula: 肉 = 人数 * 0.4']).html;
   check('首行裸 calculator 同样能编（裸档名是通用行为，不只 question）',
     calcBare.includes('data-ui-param="人数"'), calcBare.slice(0, 120));
-  // 第五十九轮起：二十档 × 裸档名 / kind: 前缀 双写法全编（防"某档悄悄渲染不出来"回归）
+  // 第五十九轮起：全档 × 裸档名 / kind: 前缀 双写法全编（防"某档悄悄渲染不出来"回归）
   const ALL_KINDS = {
     compare: ['row: 甲 | 乙', 'row: 丙 | 丁'],
     steps: ['step: 打开仓库', 'step: 提交一次'],
@@ -4109,6 +4109,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     sketch: ['id: s1', 'alt: 甲乙两点可以拖', 'handle: 甲 | 20,20', 'handle: 乙 | 80,80', 'connect: 甲 > 乙'],
     callout: ['id: co1', 'alt: 甲乙两块，编号可以点开', 'shape: 甲 | rect | 10,10,60,40', 'shape: 乙 | circle | 200,60,20',
       'callout: 甲 | 40,30 | 左边那一块', 'callout: 乙 | 200,60 | 右边那一块'],
+    mark: ['id: mk1', 'alt: 一块布，指一处', 'shape: 甲 | rect | 10,10,60,40', 'ask: 你会按在哪里'],
     explore: ['id: e1', 'tab: 基础', 'tab: 进阶'],
     chart: ['type: line', 'series: 一月 = 1,2', 'series: 二月 = 3,4'],
     suggest: ['pick: 再举个例子', 'pick: 换一个'],
@@ -8873,6 +8874,334 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   ui65.resetUiState();
   ui65.setSceneParams({});
   check('这一节无异常', errors.length === errsBefore65, errors.slice(errsBefore65).join(' | '));
+}
+
+// ─── 66. mark：图上他指的一处（第七十九轮，学 Intelligent UI 的 completeness 那条评估项）。
+// figure 的几何由模型写、sketch 的点是模型先摆好再让他拖、callout 的编号是模型标好的——
+// 三档都没有"学习者指一处宿主事先没摆过的地方"这个动词。而一对一教学里最值钱的证据
+// 恰恰是那一处：他要能在图上落一个记号说"升力就是从这一面来的"。这一档把笔递过去：
+// `ask` 必填（没有要指的事，记号就只是一个点——编译器的机械门槛，不靠散文自觉），
+// 记号由他落、按宿主生成的槽位存，界面上只有方位没有像素，也没有答案键与完成度。
+{
+  console.log('\n66. mark（图上他指的一处：记号由学习者落，ask 是门槛，没有答案键）');
+  const errsBefore66 = errors.length;
+  const ui66 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const {
+    state: st66, handleUiDeskEvent: handle66, handleUiDeskKey: key66, renderDeskState: renderPanel66,
+    repaintUiMark: repaint66, placeUiMark: place66, removeUiMark: remove66,
+    uiMarkFrame: frame66, nudgeUiMarkCursor: nudge66,
+  } = appModule.__hooks;
+  const compile66 = (lines, partial) => ui66.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const deg66 = (lines) => ui66.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  const ann66 = () => doc.getElementById('announcer');
+  const input66 = doc.getElementById('input');
+  const boxBefore66 = input66.value;
+  ui66.resetUiState();
+
+  const wing = ['kind: mark', 'id: mk79', 'title: 指一指升力的来处', 'alt: 机翼剖面与来流',
+    'ask: 升力主要从哪一面来', 'max: 3', 'frame: 320x180',
+    'shape: 机翼 | polygon | 40,140 140,140 175,92 70,92 | solid',
+    'label: 更快的气流 | 150,36', 'arrow: 108,116 > 108,74 | 升力',
+    'handoff: 把我指的地方带回对话'];
+  const c66 = compile66(wing).html;
+
+  // 1) 编译：figure 的几何 + 他要落的那几处 + 门槛那句话
+  check('编译成一张能落的图：class 带 ui-mark-canvas、role=group、tabindex=0、data-ui-mark-add 带 id',
+    c66.includes('<svg class="ui-mark-canvas" role="group" tabindex="0" data-ui-mark-add="mk79"') &&
+      c66.includes('viewBox="0 0 320 180"'), c66.slice(0, 500));
+  check('ask 是界面上第一句话（没有它这一档不成立）',
+    c66.includes('<p class="ui-mark-ask">升力主要从哪一面来</p>'), c66.slice(0, 400));
+  check('读屏拿到这张图要你指一处，并知道键盘怎么走',
+    c66.includes('<p class="sr-only">这张图要你指一处。升力主要从哪一面来。用键盘：聚焦这张图后方向键移动光标（Shift 走大步），Enter 标上；标好的记号可聚焦，Enter 掉它。</p>'),
+    c66.slice(0, 900));
+  check('形状 / 标签 / 箭头照 figure 的词法长出来（这一档不新写一套几何）',
+    c66.includes('<polygon class="ui-fig-shape is-solid" points="40,140 140,140 175,92 70,92">') &&
+      c66.includes('<text class="ui-fig-label" x="150" y="36"') && c66.includes('marker-end="url(#ui-mark-arrow-'),
+    c66.slice(300, 1200));
+  check('整框铺一层透明的取景面（形状之间的空处也点得到——这一档要的就是"任意一处"）',
+    c66.includes('<rect class="ui-mark-hit" data-ui-mark-add="mk79" x="0" y="0" width="320" height="180" fill="transparent"/>'),
+    c66.slice(300, 1300));
+  check('记号层先空着、十字光标摆在图框正中（位置不进状态：它是取景）',
+    c66.includes('<g class="ui-mark-layer" data-ui-mark-layer="mk79"></g>') &&
+      c66.includes('<g class="ui-mark-cross" data-ui-mark-cross="mk79" aria-hidden="true" transform="translate(160 90)">'),
+    c66.slice(300, 1400));
+  check('读数条按 id 落一处、aria-live=polite，第一句就说还没有标上',
+    c66.includes('<p class="ui-mark-readout" data-ui-mark-readout="mk79" aria-live="polite">现在还没有标上记号</p>'),
+    c66.slice(-800));
+  check('提示说清只记地方不判对错（Invariant 4：界面上没有"指得对不对"）',
+    c66.includes('这里只记你指的地方，不判对错'), c66.slice(-700));
+  check('title 是可见图注、alt 是读屏那句（两层各说各的）',
+    c66.includes('<p class="ui-cap">指一指升力的来处</p>') && c66.includes('<title>机翼剖面与来流</title>'),
+    c66.slice(0, 300));
+  check('同一份围栏两次编译一模一样（流里每帧重编，图不能跳来跳去）',
+    compile66(wing).html === c66, '');
+
+  // 2) 续状态：槽位号是身份、屏幕上只报方位
+  ui66.setUiValues('mk79', 'mark', { uiKind: 'mark', 标1: '62,18' });
+  const c66b = compile66(wing).html;
+  check('续回他标过的那一处：记号是一枚可聚焦的 role=button，槽位号进 data',
+    c66b.includes('<g class="ui-mark-dot" data-ui-mark="mk79" data-ui-mark-slot="标1" transform="translate(62 18)" tabindex="0" role="button" aria-label="第 1 处在图框的西北部（按 Enter 掉这一处）">'),
+    c66b.slice(700, 1600));
+  check('读数只报方位、不报像素（第五十二轮那条尺量到这一档）',
+    c66b.includes('现在标在：第 1 处在图框的西北部') && !c66b.includes('62,18'), c66b.slice(-700));
+  ui66.setUiValues('mk79', 'mark', { uiKind: 'mark', 标1: '62,18', 标3: '300,170' });
+  const c66c = compile66(wing).html;
+  check('删过一格后面补位：显示"第 2 处"，槽位号还是标3（身份不重排）',
+    c66c.includes('data-ui-mark-slot="标3"') && c66c.includes('第 2 处在图框的东南部') &&
+      c66c.includes('现在标在：第 1 处在图框的西北部、第 2 处在图框的东南部'), c66c.slice(700, 1700));
+  check('状态里只有"他在哪儿落了记号"，没有答案键也没有对错位',
+    !/answer|correct|key/.test(JSON.stringify(ui66.readUiState('mk79'))), JSON.stringify(ui66.readUiState('mk79')));
+
+  // 3) 改版装不下的不静默：越界与超上限都点名
+  ui66.setUiValues('mk79', 'mark', { uiKind: 'mark', 标1: '62,18', 标2: '4000,18', 标3: '10,10', 标4: '20,20' });
+  const c66d = compile66(wing).html;
+  check('超出 max 与落在图框外的旧记号不画上来，但照实说装不下几处',
+    c66d.includes('这一版的图框或上限装不下 2 处旧记号，没有画上来') &&
+      ui66.readUiState('mk79').state['标2'] === undefined &&
+      ui66.readUiState('mk79').state['标4'] === undefined, c66d.slice(-700));
+  check('留下的那几处照旧续上（丢掉不该丢的不算续状态）',
+    ui66.readUiState('mk79').state['标1'] === '62,18' && ui66.readUiState('mk79').state['标3'] === '10,10',
+    JSON.stringify(ui66.readUiState('mk79').state));
+
+  // 4) 降级：每条都点名为什么不行
+  ui66.resetUiState();
+  check('没有 id：掉回原文并点名（他标在哪几处没地方续）',
+    deg66(['kind: mark', 'ask: 指一处', 'alt: x', 'shape: 甲 | rect | 10,10,60,40']).includes('这张标图没有 id'), '');
+  check('没有 ask：掉回原文并点名（没有要指的事，记号就只是一个点）',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'shape: 甲 | rect | 10,10,60,40']).includes('没写 ask'), '');
+  check('ask 太长：掉回原文并点名（那是一句话，不是一段讲解）',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'ask: ' + '一'.repeat(61), 'shape: 甲 | rect | 10,10,60,40']).includes('ask 太长了'), '');
+  check('ask 写了两行：掉回原文并点名',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'ask: 一句', 'ask: 另一句', 'shape: 甲 | rect | 10,10,60,40']).includes('ask 只写一行'), '');
+  check('max 写非整数：掉回原文并点名（要写 1 到 8 的整数）',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'ask: 指一处', 'max: 2.5', 'shape: 甲 | rect | 10,10,60,40']).includes('不合法'), '');
+  check('max 越界（0 与 9）：掉回原文并点名',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'ask: 指一处', 'max: 0', 'shape: 甲 | rect | 10,10,60,40']).includes('1 到 8') &&
+      deg66(['kind: mark', 'id: m2', 'alt: x', 'ask: 指一处', 'max: 9', 'shape: 甲 | rect | 10,10,60,40']).includes('1 到 8'), '');
+  check('没有 alt：掉回原文并点名（写不出"让人看到什么"就不画）',
+    deg66(['kind: mark', 'id: m1', 'ask: 指一处', 'shape: 甲 | rect | 10,10,60,40']).includes('没有 alt'), '');
+  check('一个 shape 都没有：掉回原文并点名（没有图可指）',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'ask: 指一处']).includes('一个 shape 都没有'), '');
+  check('id 写了两遍：掉回原文并点名',
+    deg66(['kind: mark', 'id: a', 'id: b', 'alt: x', 'ask: 指一处', 'shape: 甲 | rect | 10,10,60,40']).includes('id 写了两遍'), '');
+  check('别的档的字段写进 mark：掉回原文并点名',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'ask: 指一处', 'shape: 甲 | rect | 10,10,60,40', 'step: 一步']).includes('不是 mark 的字段'), '');
+  check('node / edge 写进 mark：点名 diagram',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'ask: 指一处', 'shape: 甲 | rect | 10,10,60,40', 'node: 甲']).includes('diagram 的字段'), '');
+  check('stop / route 写进 mark：点名 map',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'ask: 指一处', 'shape: 甲 | rect | 10,10,60,40', 'stop: 甲 | 1,2']).includes('map 的字段'), '');
+  check('handle 写进 mark：点名 sketch（拖已有的点是另一档）',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'ask: 指一处', 'shape: 甲 | rect | 10,10,60,40', 'handle: 甲 | 20,20']).includes('只配 sketch'), '');
+  check('callout 写进 mark：点名 callout（点开看部件是另一档）',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'ask: 指一处', 'shape: 甲 | rect | 10,10,60,40', 'callout: 甲 | 40,30 | 一句']).includes('只配带 id 的 callout'), '');
+  check('table 写进 mark：点名 chart',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'ask: 指一处', 'shape: 甲 | rect | 10,10,60,40', 'table: 甲 | 1']).includes('table 只配 chart'), '');
+  check('ask 写进 figure：点名"只配带 id 的 mark"（语义词写错档不静默吞）',
+    deg66(['kind: figure', 'alt: x', 'shape: 甲 | rect | 10,10,60,40', 'ask: 指一处']).includes('只配带 id 的 mark'), '');
+  check('max 写进 compare：同样被点名',
+    deg66(['kind: compare', 'row: 甲 | 乙', 'row: 丙 | 丁', 'max: 3']).includes('只配带 id 的 mark'), '');
+  check('ask 写进 deck 的 steps 子块：整块被点名',
+    deg66(['kind: deck', 'title: 图', 'part: steps', '  step: 一', '  ask: 指一处',
+      'part: checklist', '  item: 甲']).includes('只配带 id 的 mark'), '');
+  check('handoff 超 24 字：掉回原文并点名',
+    deg66(['kind: mark', 'id: m1', 'alt: x', 'ask: 指一处', 'shape: 甲 | rect | 10,10,60,40',
+      'handoff: ' + '发'.repeat(25)]).includes('24'), '');
+
+  // 5) 渐进：流里长到一半先摆占位；终态缺 ask / id 是硬错
+  const p66a = compile66(['kind: mark', 'alt: x', 'shape: 甲 | rect | 10,10,60,40'], true);
+  check('流里还没有 id：先摆占位（标在哪没地方续）',
+    p66a.pending === true && p66a.html.includes('ui-skeleton'), p66a.html.slice(0, 200));
+  const p66b = compile66(['kind: mark', 'id: p1', 'alt: x', 'shape: 甲 | rect | 10,10,60,40'], true);
+  check('流里还没有 ask：先摆占位（要指什么还没写完，不算写坏）',
+    p66b.pending === true && p66b.html.includes('ui-skeleton'), p66b.html.slice(0, 200));
+  const p66c = compile66(['kind: mark', 'id: p1', 'ask: 指一处', 'shape: 甲 | rect | 10,10,60,40'], true);
+  check('流里还没有 alt：图先长出来，读屏名先用一句中性的话顶着',
+    p66c.pending === true && !p66c.degraded && p66c.html.includes('aria-label="这张标图还在长'),
+    String(p66c.degraded || p66c.html).slice(0, 300));
+
+  // 6) 宿主接线：点图上落一处、点记号掉一处（判分一个字都不发生）
+  st66.notebook = sampleNotebook();
+  st66.uiReported.clear();
+  const posts66 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const bodies66 = [];
+  const realFetch66 = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (/\/artifact-message$/.test(url)) {
+      try { bodies66.push(JSON.parse(opts.body)); } catch {}
+    }
+    return realFetch66(url, opts);
+  };
+  compile66(wing);
+
+  const holder66 = doc.createElement('div'); holder66.className = 'ui-mark'; holder66.dataset.uiMarkHolder = 'mk79';
+  const svg66 = doc.createElement('svg'); svg66.className = 'ui-mark-canvas'; svg66.dataset.uiMarkAdd = 'mk79';
+  svg66._rect = { left: 0, top: 0, width: 320, height: 180 };
+  const layer66 = doc.createElement('g'); layer66.className = 'ui-mark-layer'; layer66.dataset.uiMarkLayer = 'mk79';
+  const cross66 = doc.createElement('g'); cross66.className = 'ui-mark-cross'; cross66.dataset.uiMarkCross = 'mk79';
+  cross66.setAttribute('transform', 'translate(160 90)');
+  const out66 = doc.createElement('p'); out66.className = 'ui-mark-readout'; out66.dataset.uiMarkReadout = 'mk79';
+  out66.textContent = '现在还没有标上记号';
+  const outOther66 = doc.createElement('p'); outOther66.className = 'ui-mark-readout';
+  outOther66.dataset.uiMarkReadout = '别的图'; outOther66.textContent = '不动';
+  svg66.append(layer66, cross66);
+  holder66.append(svg66, out66);
+  domRoot.append(holder66, outOther66);
+
+  const before66 = posts66();
+  const r66 = handle66({ type: 'click', target: svg66, clientX: 62, clientY: 18 });
+  check('点图上被接住（返回档位与 id）',
+    r66.handled === true && r66.kind === 'mark' && r66.id === 'mk79' && r66.action === 'place', JSON.stringify(r66));
+  check('记号落在点的那一处，槽位号由宿主补最小空位',
+    ui66.readUiState('mk79').state['标1'] === '62,18', JSON.stringify(ui66.readUiState('mk79').state));
+  check('落一处就报回一次，经过记的是"标1 从空到 62,18"',
+    posts66() === before66 + 1 && bodies66[bodies66.length - 1]?.trace?.length === 1 &&
+      bodies66[bodies66.length - 1].trace[0].k === '标1' &&
+      bodies66[bodies66.length - 1].trace[0].from === null &&
+      bodies66[bodies66.length - 1].trace[0].to === '62,18', JSON.stringify(bodies66[bodies66.length - 1]?.trace));
+  check('就地重画：记号层换上那一枚、读数跟着走（整块不重画）',
+    layer66._innerHTML.includes('data-ui-mark-slot="标1"') &&
+      out66.textContent === '现在标在：第 1 处在图框的西北部' && outOther66.textContent === '不动',
+    layer66._innerHTML + ' / ' + out66.textContent);
+  handle66({ type: 'click', target: svg66, clientX: 300, clientY: 170 });
+  check('再点一处：补进标2，屏幕上"第 2 处"',
+    ui66.readUiState('mk79').state['标2'] === '300,170' &&
+      out66.textContent === '现在标在：第 1 处在图框的西北部、第 2 处在图框的东南部', out66.textContent);
+  const dot66 = doc.createElement('g'); dot66.className = 'ui-mark-dot';
+  dot66.dataset.uiMark = 'mk79'; dot66.dataset.uiMarkSlot = '标1';
+  const beforeRm66 = posts66();
+  const r66rm = handle66({ type: 'click', target: dot66 });
+  check('点记号掉它：那一格空出来，别的不动',
+    r66rm.handled === true && r66rm.action === 'remove' && r66rm.slot === '标1' &&
+      ui66.readUiState('mk79').state['标1'] === undefined &&
+      ui66.readUiState('mk79').state['标2'] === '300,170', JSON.stringify(ui66.readUiState('mk79').state));
+  check('掉一处也记一步经过（写清从哪个值到空，自动那本账认不到没留下的键）',
+    posts66() === beforeRm66 + 1 && bodies66[bodies66.length - 1]?.trace?.[0]?.k === '标1' &&
+      bodies66[bodies66.length - 1].trace[0].from === '62,18' &&
+      bodies66[bodies66.length - 1].trace[0].to === null, JSON.stringify(bodies66[bodies66.length - 1]?.trace));
+  check('掉完读数照实说没有（不摆空数）',
+    out66.textContent === '现在标在：第 1 处在图框的东南部', out66.textContent);
+  const r66child = handle66({ type: 'click', target: { dataset: {}, closest: (sel) => (sel === '.ui-mark-canvas' ? svg66 : null) }, clientX: 20, clientY: 20 });
+  check('点在形状 / 取景面上：靠 closest 找回那张图（真实 DOM 的点击落在子节点）',
+    r66child.handled === true && r66child.action === 'place' && ui66.readUiState('mk79').state['标1'] === '20,20',
+    JSON.stringify(r66child));
+
+  // 上限：满了不静默吞，也不挤掉旧的
+  ui66.resetUiState();
+  compile66(['kind: mark', 'id: only1', 'alt: 一处就够', 'ask: 只指一处', 'max: 1', 'shape: 甲 | rect | 10,10,60,40']);
+  const svgOnly = doc.createElement('svg'); svgOnly.className = 'ui-mark-canvas'; svgOnly.dataset.uiMarkAdd = 'only1';
+  svgOnly._rect = { left: 0, top: 0, width: 320, height: 180 };
+  handle66({ type: 'click', target: svgOnly, clientX: 30, clientY: 30 });
+  const afterFirst = posts66();
+  const r66full = handle66({ type: 'click', target: svgOnly, clientX: 90, clientY: 90 });
+  check('标满了再点：不报回、不挤掉旧的，照实说一句上限（不静默、也不骗）',
+    r66full.handled === false && posts66() === afterFirst &&
+      ui66.readUiState('only1').state['标1'] === '30,30' && !('标2' in ui66.readUiState('only1').state) &&
+      ann66()?.textContent === '这张标图最多标 1 处，先掉一处再标新的',
+    JSON.stringify(ui66.readUiState('only1').state) + ' / ' + ann66()?.textContent);
+
+  // 7) 键盘同权：方向键移光标（不进状态）、Enter 落定、记号上 Enter 掉它
+  ui66.resetUiState();
+  compile66(wing);
+  const beforeKey66 = posts66();
+  const k66arrow = key66({ key: 'ArrowLeft', target: svg66, preventDefault() {}, shiftKey: false });
+  check('方向键移光标被接住：不写状态、不报回（取景不是他落定的选择）',
+    k66arrow.handled === true && posts66() === beforeKey66 &&
+      Object.keys(ui66.readUiState('mk79').state).join(',') === 'uiKind',
+    JSON.stringify(ui66.readUiState('mk79').state));
+  check('十字光标跟着走，播报说出现在在哪',
+    cross66.getAttribute('transform') === 'translate(152 90)' && ann66()?.textContent === '光标在 152,90',
+    cross66.getAttribute('transform') + ' / ' + ann66()?.textContent);
+  key66({ key: 'ArrowDown', target: svg66, preventDefault() {}, shiftKey: true });
+  check('按住 Shift 走大步（4 倍步长）',
+    cross66.getAttribute('transform') === 'translate(152 122)', cross66.getAttribute('transform'));
+  let scrolled66 = false;
+  const k66enter = key66({ key: ' ', target: svg66, preventDefault() { scrolled66 = true; } });
+  check('空格在图上就是标一处，并且拦住页面滚动',
+    k66enter.handled === true && k66enter.action === 'place' && scrolled66 === true &&
+      ui66.readUiState('mk79').state['标1'] === '152,122', JSON.stringify(ui66.readUiState('mk79').state));
+  check('键盘标的那一处同样报回、同样进经过（两条路同权）',
+    posts66() === beforeKey66 + 1 && bodies66[bodies66.length - 1]?.trace?.[0]?.to === '152,122',
+    JSON.stringify(bodies66[bodies66.length - 1]?.trace));
+  const k66rm = key66({ key: 'Enter', target: dot66, preventDefault() {} });
+  check('记号上按 Enter 就是掉它（掉完把焦点还给这张图）',
+    k66rm.handled === true && k66rm.action === 'remove' &&
+      ui66.readUiState('mk79').state['标1'] === undefined && doc.activeElement === svg66,
+    JSON.stringify(ui66.readUiState('mk79').state));
+  const k66bk = key66({ key: 'Backspace', target: { dataset: { uiMark: 'mk79', uiMarkSlot: '标1' }, closest: () => null }, preventDefault() {} });
+  check('退格与 Delete 同义（掉它没有方向之分）：没标过就什么都不做',
+    k66bk.handled === false, JSON.stringify(k66bk));
+  check('别的档的键盘路没被抢（清单的一行不认得标图的 data）',
+    key66({ key: 'Enter', target: { dataset: { uiCheck: 'c1' } } }).handled === false, '');
+
+  // 8) handoff：把"他指了哪几处"机械地拼成话递回对话
+  const spec66 = ui66.readUiState('mk79')?.spec;
+  ui66.writeUiState('mk79', 'mark', { uiKind: 'mark', 标1: '62,18' }, spec66);
+  const h66 = handle66({ type: 'click', target: { dataset: { uiHandoff: 'mk79' } } });
+  check('mark 的 handoff 被接住', h66.handled === true && h66.kind === 'handoff' && h66.id === 'mk79', JSON.stringify(h66));
+  check('拼句：方位说人话、坐标留在括号里给老师对',
+    input66.value === '我在标图「指一指升力的来处」里指的是：图框的西北部（62,18）', input66.value);
+  ui66.writeUiState('mk79', 'mark', { uiKind: 'mark' }, spec66);
+  handle66({ type: 'click', target: { dataset: { uiHandoff: 'mk79' } } });
+  check('一处都没标：照实说没有，并把要指的那件事带回话里',
+    input66.value === '我在标图「指一指升力的来处」里还没有标上记号（升力主要从哪一面来）', input66.value);
+  check('拼句里没有判分词（Invariant 4）',
+    !/score|percent|mastery|correct|incorrect/.test(input66.value), input66.value);
+  input66.value = boxBefore66;
+
+  // 9) 右栏回看卡：标图出现在「这局动过的界面」；figure 仍不进
+  st66.notebook.progress.artifact_state = {
+    'ui:mk79': { uiKind: 'mark', 标1: '62,18', 标2: '300,170' },
+    'ui:fig79': { uiKind: 'figure' },
+  };
+  renderPanel66();
+  const card66 = deepAll(deskBody(), 'ui-state-card')[0] || null;
+  const notes66 = card66 ? deepAll(card66, 'state-note').map((n) => n.textContent) : [];
+  check('右栏卡把标图排进来（只出现象：哪一格落在哪，没有"标了几处"）',
+    notes66.includes('标图「mk79」') && notes66.includes('· 标1 在 62,18') && notes66.includes('· 标2 在 300,170') &&
+      !notes66.some((n) => /共\s*\d|\/\s*\d/.test(n)), notes66.join(' / '));
+  check('静态 figure 不进回看卡（这一档没有动它的分界还在）',
+    !notes66.some((n) => n.includes('fig79')), notes66.join(' / '));
+  st66.notebook.progress.artifact_state = { 'ui:mk79': { uiKind: 'mark' } };
+  renderPanel66();
+  const notes66b = (() => {
+    const c = deepAll(deskBody(), 'ui-state-card')[0] || null;
+    return c ? deepAll(c, 'state-note').map((n) => n.textContent) : [];
+  })();
+  check('一处都没标：卡上照实说还没有标上记号', notes66b.includes('· 还没有标上记号'), notes66b.join(' / '));
+
+  // 10) XSS：id / ask / title / alt 里的引号与标签挤不出处理器
+  const x66 = compile66(['kind: mark', 'id: x1" onfocus=alert(1) x="', 'ask: "><img src=x onerror=1>',
+    'alt: a" onload="alert(1)', 'title: 图 <img src=x onerror=1>', 'shape: 甲 | rect | 10,10,60,40']).html;
+  check('id / ask / alt / title 里的标签与引号被转义（属性位也跑不掉）',
+    !x66.includes('<img') && x66.includes('&lt;img') && x66.includes('&quot;') && !x66.includes('onload="alert'),
+    x66.slice(0, 700));
+
+  // 11) deck：mark 是可拼块，子块按自己的 id 走同一条通道
+  ui66.resetUiState();
+  const d66 = compile66(['kind: deck', 'title: 一张图加一问',
+    'part: mark', '  id: mk9', '  alt: 一块布', '  ask: 薄弱在哪一处', '  shape: 布 | rect | 10,10,120,60',
+    'part: steps', '  step: 先看那一处']).html;
+  check('deck 里能拼 mark（记号按子块自己的 id 走）',
+    d66.includes('data-ui-mark-add="mk9"') && d66.includes('<p class="ui-mark-ask">薄弱在哪一处</p>'), d66.slice(0, 500));
+  const d66svg = { dataset: { uiMarkAdd: 'mk9' }, getBoundingClientRect: () => ({ left: 0, top: 0, width: 320, height: 180 }) };
+  const d66r = handle66({ type: 'click', target: d66svg, clientX: 40, clientY: 40 });
+  check('deck 内 mark 子块照旧被接住（按子块自己的 id）',
+    d66r.handled === true && ui66.readUiState('mk9')?.state?.['标1'] === '40,40', JSON.stringify(d66r));
+
+  // 12) 宿主不养第二份画法：重画调的是编译器导出的那一份
+  const hostSrc66 = fs.readFileSync(path.join(webDir, 'app.js'), 'utf8');
+  check('宿主重画走导出的 markLayerSvg / markReadoutText / markSlotsFrom（不各写一遍）',
+    /import \{[^}]*markLayerSvg[^}]*\} from '\.\/ui-compile\.js'/s.test(hostSrc66) &&
+      /markReadoutText,/.test(hostSrc66) && /markSlotsFrom,/.test(hostSrc66) &&
+      !/function markDotSvg|function markReadout\b/.test(hostSrc66), '');
+  check('编译与每次落定共用同一份记号画法（markLayerSvg 一处定义、编译与宿主各调一次）',
+    (fs.readFileSync(path.join(webDir, 'ui-compile.js'), 'utf8').match(/function markLayerSvg/g) || []).length === 1 &&
+      (hostSrc66.match(/markLayerSvg\(/g) || []).length === 1, '');
+
+  holder66.remove(); outOther66.remove();
+  globalThis.fetch = realFetch66;
+  ui66.resetUiState();
+  check('这一节无异常', errors.length === errsBefore66, errors.slice(errsBefore66).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

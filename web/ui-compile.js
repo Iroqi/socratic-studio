@@ -23,7 +23,7 @@ import { escapeHtml } from './escape.js';
 import { renderInline } from './inline.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'figure', 'sketch', 'callout', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
+export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'figure', 'sketch', 'callout', 'mark', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -46,8 +46,9 @@ export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'met
  * arrange 第六十六轮："他排成什么顺序 / 分进哪一栏"就是状态（亲手摆，按 id 续着）。
  * sketch 第七十二轮："每个点拖到哪"就是状态（几何能亲手改，按 id 续着）。
  * callout 第七十三轮："点开过图上的哪几块"就是状态（编号落在部件上，点一个看那一块）。
+ * mark 第七十九轮："他在图上指了哪几处"就是状态（记号由学习者自己落，槽位号是身份）。
  */
-export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map', 'arrange', 'sketch', 'callout'];
+export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map', 'arrange', 'sketch', 'callout', 'mark'];
 
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
@@ -2609,6 +2610,232 @@ function calloutWords(fields) {
 }
 const CALLOUT_ONLY = 'callout 只配带 id 的 callout（图上的部件要点开看说明，别的档没有"编号标注"这回事）';
 
+// ── 图上手标 ─────────────────────────────────────────────────────────────
+/**
+ * mark（第七十九轮）：**记号由学习者自己放**——figure / sketch / callout 三档的位置都是
+ * 模型写进围栏的，学习者能拖的点是模型先声明好的那几枚。缺的一维是「指」：
+ * 「你告诉我，升力主要从哪一面来」——他要能在图上落一个宿主事先没摆过的记号。
+ * Intelligent UI 把"能直接动手的图"立成旗舰演示（可拖、可点、可改的形状），
+ * 而一对一教学里最值钱的那个动作恰恰不是改模型给的点，是**在模型没标记的地方标一处**：
+ * 那一处就是他此刻的判断，是可回读的证据，而不是一个分数。
+ *
+ * `ask: 要他指什么`（必填）+ figure 的几何词汇 + `id`（必填）；可选 `max: 1–8`（默认 5）。
+ *
+ * 为什么 `ask` 是必填而不是可选：Intelligent UI 公开的实现里，评估项是 clarity /
+ * usefulness / **completeness**——"有滑块却没说范围"就是不完备的界面。一枚记号没有要
+ * 回答的问题，就只是一个点；把任务写在界面上，这一档才成立。编译器机械守这一条，
+ * 不靠散文自觉。
+ *
+ * 三条边界，与 sketch / callout 同一把尺（Invariant 4）：
+ *   ① **没有答案键**：界面只记"他在哪儿落了记号"（`标1 = "x,y"`），不判"指得对不对"——
+ *      图上那一处对不对，是对话里老师的事；
+ *   ② 界面上不出现完成度：不写"标了 2 / 共 5 处"这类计数，读数只报**现在标在哪几处**；
+ *   ③ 槽位（标1…标8）由宿主生成、按落定顺序补最小空位，删一处只空出那一格——
+ *      身份稳定，改版续得回来；显示的序号是"第几处"，不是进度。
+ *
+ * 键盘与指针同权（与 arrange / sketch 同一条纪律）：指针点图上任意处放一个记号、点记号
+ * 掉它；键盘 Tab 聚焦这张图后方向键移光标（Shift 走大步）、Enter 在当前光标处标上。
+ * 光标此刻在哪**不进状态**——它是取景，不是他落定的选择。
+ */
+const MARK_FIELDS = new Set([...FIGURE_FIELDS, 'id', 'handoff', 'ask', 'max']);
+const MARK_ASK_MAX = 60;
+export const MARK_MAX_DEFAULT = 5;
+const MARK_MAX_LIMIT = 8;
+const MARK_R = 9;
+const MARK_SLOT_PREFIX = '标';
+
+/** 槽位名由宿主生成：`标1`…`标8`。它是身份，不是序号进度。 */
+export function markSlotName(n) {
+  return `${MARK_SLOT_PREFIX}${n}`;
+}
+
+/** `"62,18"` → {x, y}（与 sketch 的位置写法同一形状：一格一个点，宿主两侧都认得）。 */
+function markPoint(raw) {
+  return figPoint(String(raw ?? ''));
+}
+
+/**
+ * 记号层的那一段 SVG：编译摆第一帧、宿主每次落定都走它（一份画法两处用，
+ * 与第七十八轮的 chartFigureSvg 同一条道理——两处各写一遍迟早漂）。
+ * slots = [{ key, x, y, ord }]，ord 是此刻屏幕上"第几处"（按槽位号数，删一处后面补位）。
+ * 可见与可读的话里只有方位、没有像素：第五十二轮立的那条「位置是内容，数字不是」
+ * 在这儿同样成立——图框是不按比例的手绘框，"西南部"是对它的诚实描述，
+ * 而 62,18 那对数交给经过与递回，由老师在对话里接。
+ */
+export function markLayerSvg(id, slots, W, H) {
+  return slots
+    .map((s) => {
+      const where = markPlace(s.x, s.y, W, H);
+      return (
+        `<g class="ui-mark-dot" data-ui-mark="${escapeHtml(id)}" data-ui-mark-slot="${escapeHtml(s.key)}" ` +
+        `transform="translate(${figNum(s.x)} ${figNum(s.y)})" tabindex="0" role="button" ` +
+        `aria-label="第 ${s.ord} 处在${where}（按 Enter 掉这一处）">` +
+        `<title>${escapeHtml(`第 ${s.ord} 处：${where}`)}</title>` +
+        `<circle class="ui-mark-ring" r="${MARK_R}"/>` +
+        `<text class="ui-mark-num" text-anchor="middle" dominant-baseline="middle">${s.ord}</text>` +
+        `</g>`
+      );
+    })
+    .join('');
+}
+
+/** 一处记号在图框里的方位（借 map 那一套三分法；数字只进状态，不进可见的话）。 */
+export function markPlace(x, y, W, H) {
+  return `图框的${mapDir(Math.round((x / W) * 100), Math.round((y / H) * 100))}`;
+}
+
+/**
+ * 从一份 state 里还原"此刻标在哪几处"：槽位号是身份，装不下的（越界 / 超出 max）不摆上来。
+ * 编译与宿主重画共用这一个函数——两处各写一遍，早晚会有一边悄悄把旧记号吞了。
+ * 返回 { slots, dropped }；ord 是屏幕上"第几处"（删一处后面补位），不是进度。
+ */
+export function markSlotsFrom(state, W, H, max) {
+  const slots = [];
+  let dropped = 0;
+  for (let i = 1; i <= MARK_MAX_LIMIT; i += 1) {
+    const key = markSlotName(i);
+    const raw = state?.[key];
+    if (raw === undefined || raw === null || raw === '') continue;
+    const p = markPoint(raw);
+    if (!p || i > (Number(max) || MARK_MAX_DEFAULT) || !figInFrame(p.x, p.y, W, H)) {
+      dropped += 1;
+      continue;
+    }
+    slots.push({ key, x: p.x, y: p.y, ord: slots.length + 1 });
+  }
+  return { slots, dropped };
+}
+
+/** 下一个空槽位（按落定顺序补最小空位）；满了返回 null。 */
+export function markFreeSlot(state, max) {
+  const limit = Number(max) || MARK_MAX_DEFAULT;
+  for (let i = 1; i <= limit; i += 1) {
+    const raw = state?.[markSlotName(i)];
+    if (raw === undefined || raw === null || raw === '') return markSlotName(i);
+  }
+  return null;
+}
+
+/** 键盘光标（十字）：只在聚焦这张图时看得见它在哪，位置不进状态。 */
+export function markCrossSvg(id, x, y, W, H) {
+  const arm = Math.min(14, Math.max(6, Math.round(Math.min(W, H) / 12)));
+  return (
+    `<g class="ui-mark-cross" data-ui-mark-cross="${escapeHtml(id)}" aria-hidden="true" ` +
+    `transform="translate(${figNum(x)} ${figNum(y)})">` +
+    `<line class="ui-mark-cross-arm" x1="${-arm}" y1="0" x2="${arm}" y2="0"/>` +
+    `<line class="ui-mark-cross-arm" x1="0" y1="${-arm}" x2="0" y2="${arm}"/>` +
+    `<circle class="ui-mark-cross-ring" r="${MARK_R}"/>` +
+    `</g>`
+  );
+}
+
+/** 现在标在哪几处 → 一行读数（没有就照实说没有，不摆空数；只报方位，不报进度）。 */
+export function markReadoutText(slots, W, H) {
+  if (!slots.length) return '现在还没有标上记号';
+  return `现在标在：${slots.map((s) => `第 ${s.ord} 处在${markPlace(s.x, s.y, W, H)}`).join('、')}`;
+}
+
+function compileMark(fields, lines, partial) {
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（数值逐项查是 chart 的形状）' };
+  if (pick(fields, 'node').length || pick(fields, 'edge').length) {
+    return { error: 'node / edge 是 diagram 的字段：谁连着谁用 diagram，要在图上落记号用 mark' };
+  }
+  if (pick(fields, 'stop').length || pick(fields, 'route').length) {
+    return { error: 'stop / route 是 map 的字段：谁在哪儿用 map，要在图上落记号用 mark' };
+  }
+  const stray = fields.filter(([k]) => !MARK_FIELDS.has(k)).map(([k]) => k);
+  if (stray.length) {
+    return { error: `「${stray[0]}」不是 mark 的字段（mark 只认 id / alt / ask / frame / shape / label / arrow / max / title / handoff）` };
+  }
+  const ids = pick(fields, 'id');
+  if (ids.length > 1) return { error: 'id 写了两遍' };
+  const id = (ids[0] || '').trim();
+  if (!id) {
+    if (!partial) return { error: '这张标图没有 id：他标在哪几处没地方续' };
+    return { html: skeleton('正在把这张标图长出来…'), pending: true };
+  }
+  // ask 是这一档的门槛（completeness 那条评估项的机械编码）：没有要回答的问题，
+  // 记号就只是一个点。流里那一行还没写出来不算写坏，终态缺它就是硬错。
+  const rawAsk = pick(fields, 'ask');
+  if (rawAsk.length > 1) return { error: 'ask 只写一行（要他指的那一件事，一句话）' };
+  const ask = (rawAsk[0] || '').trim();
+  if (!ask) {
+    if (!partial) return { error: '这张标图没写 ask：让学习者指一处，得先说要指什么（没有要指的事，记号就只是一个点）' };
+    return { html: skeleton('正在把这张标图长出来…'), pending: true };
+  }
+  if (ask.length > MARK_ASK_MAX) return { error: `ask 太长了（≤${MARK_ASK_MAX} 字）：那是一句要人指的话，不是一段讲解` };
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
+
+  // max：这一场最多容几处。写非数、越界都点名——"装不装得下"是这一档的口径，不能猜。
+  const rawMax = pick(fields, 'max');
+  if (rawMax.length > 1) return { error: 'max 只写一行' };
+  let max = MARK_MAX_DEFAULT;
+  if (rawMax.length) {
+    const n = num(rawMax[0]);
+    if (n === null || !Number.isInteger(n) || n < 1 || n > MARK_MAX_LIMIT) {
+      return { error: `max「${rawMax[0]}」不合法（要写 1 到 ${MARK_MAX_LIMIT} 的整数）` };
+    }
+    max = n;
+  }
+
+  const scene = parseFigureScene(fields, partial, 'mark');
+  if (scene.error) return { error: scene.error };
+  if (scene.pending) return { html: skeleton('正在把这张标图长出来…'), pending: true };
+  const { W, H, title, alt, shapes, labels, arrows } = scene;
+
+  // 续状态：槽位号是身份。改版后装不下的（越界 / 超出新的 max）不画上来，但**不静默**——
+  // 下面补一句为什么，经过与盘上的记录一条不少。
+  const { slots, dropped } = markSlotsFrom(readUiState(id)?.state || {}, W, H, max);
+  const state = { uiKind: 'mark' };
+  for (const s of slots) state[s.key] = `${figNum(s.x)},${figNum(s.y)}`;
+  const spec = { W, H, title, alt, ask, max };
+  writeUiState(id, 'mark', state, spec);
+
+  const markerId = `ui-mark-arrow-${hashText(`${id}\n${alt}\n${ask}`)}`;
+  const arrowEls = figureArrowEls(arrows, markerId);
+  const labelEls = labels.map((l) => figureLabelEl(l.text, l.x, l.y, l.align, W)).join('');
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const aria = alt || '这张标图还在长';
+  const keys = '聚焦这张图后方向键移动光标（Shift 走大步），Enter 标上；标好的记号可聚焦，Enter 掉它';
+  const svg =
+    `<svg class="ui-mark-canvas" role="group" tabindex="0" data-ui-mark-add="${escapeHtml(id)}" ` +
+    `aria-label="${escapeHtml(`${aria}（点图上任意处放一个记号，点记号掉它；方向键移光标，Enter 标上）`)}" ` +
+    `viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">` +
+    `<title>${escapeHtml(aria)}</title>` +
+    `<defs><marker id="${markerId}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+    `<path class="ui-fig-arrow-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>` +
+    // 一整块透明的取景面：SVG 默认只在"画出来的地方"收指针，形状之间的空处点了会落到
+    // svg 根之外——这一档的意义恰恰是"图上任意一处"，所以先把整框铺成可点的。
+    `<rect class="ui-mark-hit" data-ui-mark-add="${escapeHtml(id)}" x="0" y="0" width="${W}" height="${H}" fill="transparent"/>` +
+    shapes.join('') + arrowEls + labelEls +
+    `<g class="ui-mark-layer" data-ui-mark-layer="${escapeHtml(id)}">${markLayerSvg(id, slots, W, H)}</g>` +
+    markCrossSvg(id, W / 2, H / 2, W, H) +
+    `</svg>`;
+  // 读屏拿得到的结构替代：要指什么 + 键盘怎么走。此刻标在哪几处由下面那条 aria-live
+  // 读数播报（写在这里会在每次落定后变陈旧——第五十二轮立的那条"读屏要跟着状态走"）。
+  const body =
+    `<div class="ui-mark" data-ui-mark-holder="${escapeHtml(id)}">` +
+    `<p class="ui-mark-ask">${cell(ask)}</p>` +
+    `<p class="sr-only">这张图要你指一处。${escapeHtml(ask)}。用键盘：${escapeHtml(keys)}。</p>` +
+    svg +
+    `<p class="ui-mark-hint">点图上任意处放一个记号，点记号掉它；聚焦后方向键移光标，Enter 标上。这里只记你指的地方，不判对错</p>` +
+    `<p class="ui-mark-readout" data-ui-mark-readout="${escapeHtml(id)}" aria-live="polite">${escapeHtml(markReadoutText(slots, W, H))}</p>` +
+    (dropped ? paramNote(`这一版的图框或上限装不下 ${dropped} 处旧记号，没有画上来`) : '') +
+    `</div>`;
+  return {
+    html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`,
+    shape: 'mark',
+    pending: partial || undefined,
+  };
+}
+
+/** mark 的专属词写在别的档 = 语义词写错档：不许静默吞（与 handle / callout / stop 同一把尺）。 */
+function markWords(fields) {
+  return pick(fields, 'ask').length > 0 || pick(fields, 'max').length > 0;
+}
+const MARK_ONLY = 'ask / max 只配带 id 的 mark（让学习者在图上自己落记号，别的档没有"指一处"这回事）';
+
 // ── 分段探索 ─────────────────────────────────────────────────────────────
 /**
  * explore（第三十三轮，学 IUI 官方旗舰演示「Select a system to explore its role」——
@@ -3231,6 +3458,9 @@ function compileDeck(fields, lines, partial) {
     }
     if (part.kind !== 'callout' && calloutWords(child.fields)) {
       return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${CALLOUT_ONLY}` };
+    }
+    if (part.kind !== 'mark' && markWords(child.fields)) {
+      return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${MARK_ONLY}` };
     }
     // 与顶层同一把尺（第七十八轮添了带 param 的曲线）：chart 里的 uses 由 compileChart 自己判
     // （它要知道这条曲线有没有参数），别让这里的守卫把"带 param 的曲线"一并拒掉。
@@ -4128,7 +4358,7 @@ function compileQuestion(fields) {
 /** question 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
 const QUESTION_FIELDS = new Set(['id', 'question', 'header', 'option', 'multiSelect', 'allowText', 'conceptId']);
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, figure: compileFigure, sketch: compileSketch, callout: compileCallout, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, figure: compileFigure, sketch: compileSketch, callout: compileCallout, mark: compileMark, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
 
 /**
  * 稳定键（第六十五轮，学 Intelligent UI 的 "native, streamable components" 那一手）：
@@ -4198,6 +4428,7 @@ function compileUiBlockInner(lines, partial) {
     if (metaErr) return fail(metaErr);
     if (kind !== 'sketch' && sketchWords(parsed.fields)) return fail(SKETCH_ONLY);
     if (kind !== 'callout' && calloutWords(parsed.fields)) return fail(CALLOUT_ONLY);
+    if (kind !== 'mark' && markWords(parsed.fields)) return fail(MARK_ONLY);
     // uses 配 calculator / form / 带 param 的曲线（第六十三轮立的那两档，第七十八轮添了曲线）：
     // 只有这几档有"能被场上参数填上的默认值 / 空格子"，各档内部再校验名字对不对得上。
     if (kind !== 'calculator' && kind !== 'form' && kind !== 'chart') {

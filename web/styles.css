@@ -897,6 +897,25 @@ html, body {
 .ui-callout-pane-note { margin: 0; font-size: 12.5px; color: var(--ink-2); }
 .ui-callout-pane-hint { margin: 0; font-size: 12.5px; color: var(--ink-3); }
 
+/* mark（第七十九轮）：记号由学习者自己放——figure 的几何 + 他落下的那几处。
+   记号是一枚描边圆 + 序号；序号是"第几处"（身份），不是进度。十字光标只在他用键盘
+   聚焦这张图时才该显眼（指针路径上它是噪声）。没有"对/错"的两种颜色——判不在界面里。 */
+.ui-mark { margin: 0 0 1em; }
+.ui-mark-canvas { display: block; max-width: 100%; height: auto; cursor: crosshair; touch-action: none; }
+.ui-mark-ask { margin: 0 0 6px; color: var(--ink); font-size: 13.5px; font-weight: 620; }
+.ui-mark-hint { margin: 0 0 4px; color: var(--ink-3); font-size: 12px; }
+.ui-mark-readout { margin: 0; color: var(--ink-2); font-size: 12.5px; }
+.ui-mark-hit { pointer-events: all; }
+.ui-mark-layer { pointer-events: none; }
+.ui-mark-dot { pointer-events: auto; cursor: pointer; outline: none; }
+.ui-mark-dot:focus-visible .ui-mark-ring { stroke-width: 3; }
+.ui-mark-ring { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+.ui-mark-num { fill: var(--accent-ink); font-size: 11px; font-weight: 650; pointer-events: none; }
+.ui-mark-cross { pointer-events: none; opacity: 0; }
+.ui-mark-canvas:focus .ui-mark-cross { opacity: 1; }
+.ui-mark-cross-arm { stroke: var(--accent); stroke-width: 1.4; }
+.ui-mark-cross-ring { fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 3 3; }
+
 /* handoff（第二十九轮）：交互档把状态递回对话的按钮。底色仍只借 --surface-2
    （那条"底色全用量过的 surface-2"的账不许破），hover 只换文字与描边，不引新背景。 */
 .ui-handoff {

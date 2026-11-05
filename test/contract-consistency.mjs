@@ -1226,7 +1226,7 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   // 比的是"有哪几种"，不是"各写了几处"：同一个记号在两个档里都写一次是常事（data-ui-name
   // 先由 form 写、第四十七轮 map 的点也写）——名字对得上就行，多一种没人读的才该红。
   check('编译器一共只写这几个 data-*（多一个就是多一条没人读的记号，契约测试会把它认成断线）',
-    [...new Set(emittedAttrs)].sort().join(',') === 'ui-arrange,ui-arrange-bin,ui-arrange-item,ui-arrange-move,ui-ask-opt,ui-ask-skip,ui-ask-submit,ui-bucket,ui-calc,ui-callout,ui-callout-mark,ui-chart,ui-chart-snap,ui-check,ui-diagram,ui-dir,ui-explore,ui-explore-tab,ui-field,ui-form,ui-game,ui-game-try,ui-handle,ui-handoff,ui-item,ui-map,ui-map-stop,ui-name,ui-node,ui-param,ui-sketch,ui-sketch-formula,ui-sketch-link,ui-sketch-readout,ui-slider,ui-suggest,ui-tab-name,ui-try-name,ui-walk,ui-walk-next,ui-walk-prev',
+    [...new Set(emittedAttrs)].sort().join(',') === 'ui-arrange,ui-arrange-bin,ui-arrange-item,ui-arrange-move,ui-ask-opt,ui-ask-skip,ui-ask-submit,ui-bucket,ui-calc,ui-callout,ui-callout-mark,ui-chart,ui-chart-snap,ui-check,ui-diagram,ui-dir,ui-explore,ui-explore-tab,ui-field,ui-form,ui-game,ui-game-try,ui-handle,ui-handoff,ui-item,ui-map,ui-map-stop,ui-mark,ui-mark-add,ui-mark-cross,ui-mark-holder,ui-mark-layer,ui-mark-readout,ui-mark-slot,ui-name,ui-node,ui-param,ui-sketch,ui-sketch-formula,ui-sketch-link,ui-sketch-readout,ui-slider,ui-suggest,ui-tab-name,ui-try-name,ui-walk,ui-walk-next,ui-walk-prev',
     [...new Set(emittedAttrs)].sort().join(','));
   for (const attr of new Set(emittedAttrs)) {
     const key = attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
@@ -1236,8 +1236,8 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   }
   check('宿主报回的 id 前缀 = 编译器续状态用的那个键位（`ui:` 两边一份）',
     /const UI_PREFIX = 'ui:'/.test(hostSrc25), 'app.js 里 UI_PREFIX 变了形状');
-  check('只有该存的十二档进 UI_STATEFUL（静态形状没有"学习者做过什么"这回事；diagram 第二十七轮升成交互档；chart 第三十二轮随 slider 升档：滑到哪张快照就是状态，静态 chart 不写 id 不存；explore 第三十三轮：点开看了哪一面就是状态；game 第三十五轮：试到哪一步、试过哪些就是状态；walkthrough 第三十六轮：走到哪一步、走到过哪些就是状态；form 第四十四轮：填进去的值就是状态；map 第四十七轮：点开看了哪个点就是状态，"他看了哪"不是"他会了"；arrange 第六十六轮：排成的顺序 / 每条在哪一栏就是状态，"他摆成什么样"不是"他摆对了"；sketch 第七十二轮：每个点拖到哪就是状态，"他摆成什么样"不是"他摆对了"；callout 第七十三轮：点开过图上的哪几块就是状态，"他点开了哪"不是"他点对了"）',
-    (stateful || []).join(',') === 'checklist,form,calculator,diagram,chart,explore,game,walkthrough,map,arrange,sketch,callout', (stateful || []).join(','));
+  check('只有该存的十三档进 UI_STATEFUL（静态形状没有"学习者做过什么"这回事；diagram 第二十七轮升成交互档；chart 第三十二轮随 slider 升档：滑到哪张快照就是状态，静态 chart 不写 id 不存；explore 第三十三轮：点开看了哪一面就是状态；game 第三十五轮：试到哪一步、试过哪些就是状态；walkthrough 第三十六轮：走到哪一步、走到过哪些就是状态；form 第四十四轮：填进去的值就是状态；map 第四十七轮：点开看了哪个点就是状态，"他看了哪"不是"他会了"；arrange 第六十六轮：排成的顺序 / 每条在哪一栏就是状态，"他摆成什么样"不是"他摆对了"；sketch 第七十二轮：每个点拖到哪就是状态，"他摆成什么样"不是"他摆对了"；callout 第七十三轮：点开过图上的哪几块就是状态，"他点开了哪"不是"他点对了"；mark 第七十九轮：他在图上标了哪几处就是状态，"他指了哪"不是"他指对了"）',
+    (stateful || []).join(',') === 'checklist,form,calculator,diagram,chart,explore,game,walkthrough,map,arrange,sketch,callout,mark', (stateful || []).join(','));
   check('arrange 那一行说清了"界面里没有答案键"（order 故意打乱 / bucket 先落待分）',
     rowOf25('arrange').includes('没有答案键') && rowOf25('arrange').includes('故意打乱') && rowOf25('arrange').includes('待分'),
     rowOf25('arrange').slice(0, 120));
@@ -1264,6 +1264,44 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
     check('经过里 callout 有人话名字', /callout: '标注图'/.test(fs.readFileSync(path.join(app, 'server', 'ui-ledger.mjs'), 'utf8')), 'ui-ledger.mjs 的 KIND_WORDS 缺 callout');
     check('figure 没有因为 callout 被顺手改成状态档（静态与可点开是两档）',
       !(stateful || []).includes('figure') && (stateful || []).includes('callout'), (stateful || []).join(','));
+  }
+
+  // 第七十九轮：mark 是"记号由学习者自己落"，与 figure / sketch / callout 三档共用车道。
+  // 四处必须说同一件事：提示有 row、README 有行、经过有人话名字、几何仍归 figure 那份解析。
+  // 少一处，模型写出来的围栏就掉回原文，或者屏幕上悄悄长出像素坐标。
+  {
+    const mkRow = rowOf25('mark');
+    check('提示里 mark 那行点名 id / ask，并说清没有答案键',
+      /id/.test(mkRow) && /ask/.test(mkRow) && /没有答案键/.test(mkRow), mkRow.slice(0, 240));
+    check('提示里 mark 那行说的是"由他落记号"，不是又一层控件',
+      /自己落记号/.test(mkRow) && /点记号掉它/.test(mkRow), mkRow.slice(0, 240));
+    check('README 的档位表里有 mark 一行', /\| `mark` \|/.test(readmeDoc), '');
+    check('经过里 mark 有人话名字', /mark: '标图'/.test(fs.readFileSync(path.join(app, 'server', 'ui-ledger.mjs'), 'utf8')), 'ui-ledger.mjs 的 KIND_WORDS 缺 mark');
+    check('figure / sketch / callout 没有被顺手改档（指一处是新的一维，不是替谁加料）',
+      !(stateful || []).includes('figure') && (stateful || []).includes('sketch') &&
+        (stateful || []).includes('callout') && (stateful || []).includes('mark'),
+      (stateful || []).join(','));
+    check('编译器里 ask 缺失是硬错（没有要指的事就不给编：completeness 的机械编码）',
+      /没写 ask/.test(uiSrc), '编译器没有这条');
+    check('编译器守住 max 的口径（1–8 的整数，写别的名点退回）',
+      /不合法（要写 1 到/.test(uiSrc), 'max 没有硬校验');
+    check('ask / max 写进别的档被点名（语义词写错档不静默吞，与 handle / callout 同一把尺）',
+      /只配带 id 的 mark/.test(uiSrc), '没有这道守卫');
+    check('记号层与十字光标各一处定义（编译摆帧与宿主重画共用，两处各写一遍迟早漂）',
+      (fs.readFileSync(path.join(app, 'web', 'ui-compile.js'), 'utf8').match(/function markLayerSvg/g) || []).length === 1 &&
+        /markLayerSvg,/.test(hostSrc25) && /markLayerSvg\(/.test(hostSrc25),
+      '宿主没有走编译器导出的那一份画法');
+    check('界面上的读数只报方位、不报像素（第五十二轮那条尺量到这一档）',
+      /图框的/.test(uiSrc) && !/现在标在：.*\$\{figNum/.test(uiSrc), '读数里混进了坐标');
+    check('槽位号是身份不是进度：可见文字里没有「标了 N / 共 M 处」这一族计数',
+      !/共 \$\{|标了 \$\{.*\} 处/.test(uiSrc), '界面上长出了完成度');
+    check('提示与 README 都改口到二十一档（一处说二十一处说二十一=词表数目在漂）',
+      promptSrc25.includes('只能用下面二十一档') && promptSrc25.includes('二十一档（围栏内每行都是') &&
+        readmeDoc.includes('### 6.2 二十一档') && readmeDoc.includes('共二十一档') &&
+        !promptSrc25.includes('二十档') && !readmeDoc.includes('二十档'),
+      '还有没跟着改口的地方');
+    check('提示的第二十一条硬规矩说的是 mark（教了这档才写得出来）',
+      /^21\. \*\*\\?`mark\\?`/m.test(promptSrc25), '硬规矩没有排到 21');
   }
 
   // 第七十四轮：公式词法长出 `^` 与括号（复利 / 退休储蓄那一手）。三处必须说同一句话：

@@ -38,6 +38,7 @@ export const KIND_WORDS = {
   figure: '图形',
   sketch: '草图',
   callout: '标注图',
+  mark: '标图',
   explore: '探索',
   chart: '图表',
   suggest: '分支',

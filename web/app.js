@@ -20,6 +20,14 @@ import {
   uiOutText,
   mergeArrangeOrder,
   chartCurveFrame,
+  // mark（第七十九轮）：记号层、读数、方位说法与槽位口径都由编译器给——
+  // 宿主重画的那一帧必须和编译的第一帧一字不差，两处各写一遍迟早漂。
+  markLayerSvg,
+  markReadoutText,
+  markSlotsFrom,
+  markFreeSlot,
+  markPlace,
+  MARK_MAX_DEFAULT,
 } from './ui-compile.js';
 
 // ─────────────────────────────────────────────── 基础工具
@@ -3419,6 +3427,147 @@ function endSketchDrag() {
   return true;
 }
 
+// ── mark（第七十九轮）：记号由学习者自己放 ──────────────────────────────
+// 编译器摆第一帧，这一节接住"点一下落一个记号 / 点记号掉它"与键盘那条同权的路。
+// 宿主只做两件事：改那份状态、就地重画——"指得对不对"一个字都不在这儿判（Invariant 4）。
+
+/** 台面上此刻的标图（按 class 找、再比对 data：id 是模型写的，不拼进选择器）。 */
+function uiMarkNodes(id) {
+  return (document.querySelectorAll?.('.ui-mark') || []).filter((n) => n.dataset?.uiMarkHolder === id);
+}
+
+/** 这一张标图此刻的口径：图框、上限、屏幕上摆着的那几处（装不下的不摆，与编译器同一把尺）。 */
+function uiMarkFrame(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return null;
+  const W = Number(rec.spec.W) || 320;
+  const H = Number(rec.spec.H) || 180;
+  const max = Number(rec.spec.max) || MARK_MAX_DEFAULT;
+  const { slots } = markSlotsFrom(rec.state, W, H, max);
+  return { rec, W, H, max, slots };
+}
+
+/**
+ * 只重画动的那两处：记号层与读数。整块重画会把正聚焦的那个记号换掉——键盘用户
+ * 每掉一处就被扔回页首，和滑杆 / 草图那一路是同一条道理。
+ */
+function repaintUiMark(id) {
+  const f = uiMarkFrame(id);
+  if (!f) return;
+  const inner = markLayerSvg(id, f.slots, f.W, f.H);
+  for (const holder of uiMarkNodes(id)) {
+    for (const layer of [...(holder.querySelectorAll?.('.ui-mark-layer') || [])]) {
+      if (layer.dataset?.uiMarkLayer !== id) continue; // 认图靠 data，class 只管长相
+      layer.innerHTML = inner;
+    }
+  }
+  const text = markReadoutText(f.slots, f.W, f.H);
+  for (const out of [...(document.querySelectorAll?.('.ui-mark-readout') || [])]) {
+    if (out.dataset?.uiMarkReadout === id) out.textContent = text;
+  }
+}
+
+/**
+ * 键盘光标此刻在哪：住在宿主，**不进状态**——它是取景，不是他落定的选择。
+ * 没动过就在图框正中；换了图框（改版）就夹回来，不让他对着框外空按。
+ */
+const uiMarkCursors = new Map();
+
+function uiMarkCursor(id) {
+  const f = uiMarkFrame(id);
+  if (!f) return null;
+  const kept = uiMarkCursors.get(id);
+  const x = Number.isFinite(kept?.x) ? kept.x : f.W / 2;
+  const y = Number.isFinite(kept?.y) ? kept.y : f.H / 2;
+  return { ...f, x: Math.min(f.W, Math.max(0, x)), y: Math.min(f.H, Math.max(0, y)) };
+}
+
+/** 挪光标：只改那一截十字的 transform 与播报，状态一个字不写（取景不是落定的选择）。 */
+function nudgeUiMarkCursor(id, dirX, dirY, shift = false) {
+  const cur = uiMarkCursor(id);
+  if (!cur) return null;
+  // 步长按图框大小给（320x180 一步 8、按住 Shift 32）——定死 2 个单位在这一档太空。
+  const step = Math.max(2, Math.round(Math.min(cur.W, cur.H) / 24)) * (shift ? 4 : 1);
+  const x = Math.min(cur.W, Math.max(0, cur.x + dirX * step));
+  const y = Math.min(cur.H, Math.max(0, cur.y + dirY * step));
+  uiMarkCursors.set(id, { x, y });
+  for (const g of [...(document.querySelectorAll?.('.ui-mark-cross') || [])]) {
+    if (g.dataset?.uiMarkCross === id) g.setAttribute?.('transform', `translate(${uiPointText(x, y).replace(',', ' ')})`);
+  }
+  // 播报带上数：屏幕那行读数只有方位（第五十二轮），键盘用户要靠这一句知道自己在往哪走。
+  announce(`光标在 ${uiPointText(x, y)}`);
+  return { x, y };
+}
+
+/** 落一处记号：补最小空位；满了照实说，不静默吞，也不挤掉旧的。 */
+function placeUiMark(id, x, y) {
+  const f = uiMarkFrame(id);
+  if (!f) return null;
+  const prev = f.rec.state || {};
+  const key = markFreeSlot(prev, f.max);
+  if (!key) {
+    announce(`这张标图最多标 ${f.max} 处，先掉一处再标新的`);
+    return null;
+  }
+  const nx = Math.min(f.W, Math.max(0, Number(x)));
+  const ny = Math.min(f.H, Math.max(0, Number(y)));
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) return null;
+  const state = { ...prev, [key]: uiPointText(nx, ny), uiKind: 'mark' };
+  setUiValues(id, 'mark', state);
+  repaintUiMark(id);
+  forwardUiState(id, state, prev);
+  const ord = markSlotsFrom(state, f.W, f.H, f.max).slots.find((s) => s.key === key)?.ord;
+  announce(ord ? `第 ${ord} 处标在 ${uiPointText(nx, ny)}（${markPlace(nx, ny, f.W, f.H)}）` : '标上了一处');
+  return { key, x: nx, y: ny };
+}
+
+/** 掉一处记号：只空出那一格，槽位号不重排（身份稳定，改版续得回来）。 */
+function removeUiMark(id, slotKey) {
+  const f = uiMarkFrame(id);
+  if (!f) return null;
+  const prev = f.rec.state || {};
+  const raw = prev[slotKey];
+  if (raw === undefined || raw === null || raw === '') return null;
+  const ord = f.slots.find((s) => s.key === slotKey)?.ord;
+  const state = { ...prev };
+  delete state[slotKey];
+  state.uiKind = 'mark';
+  setUiValues(id, 'mark', state);
+  repaintUiMark(id);
+  // 掉的那一格不在新 state 里，自动那本账记不到它（它只认得留下的键）——这一步机械写明。
+  forwardUiState(id, state, prev, [{ k: slotKey, from: raw, to: null }]);
+  announce(ord ? `掉的是第 ${ord} 处` : '掉了一处');
+  // 记号层刚被整段换掉，正聚焦的那个节点已经没了：把焦点还给这张图，别把人扔回页首。
+  for (const svg of [...(document.querySelectorAll?.('.ui-mark-canvas') || [])]) {
+    if (svg.dataset?.uiMarkAdd === id) svg.focus?.();
+  }
+  return true;
+}
+
+/**
+ * 标图上的指针动作：落在记号上 = 掉它，落在图的别处 = 在那里标一处。
+ * 点击会落在子节点（圆、数字、形状）上，所以先按 closest 找回记号，再退回整张图。
+ * 认不出标图就返回 null（这一档之外的事件一律照原路走）。
+ */
+function handleUiMarkClick(evt) {
+  const node = evt?.target;
+  if (!node) return null;
+  const dot = node?.classList?.contains?.('ui-mark-dot') ? node : node?.closest?.('.ui-mark-dot');
+  const dotId = dot?.dataset?.uiMark;
+  const dotSlot = dot?.dataset?.uiMarkSlot;
+  if (dotId && dotSlot) {
+    return removeUiMark(dotId, dotSlot) ? { kind: 'mark', id: dotId, action: 'remove', slot: dotSlot } : null;
+  }
+  const svg = node?.dataset?.uiMarkAdd !== undefined ? node : node?.closest?.('.ui-mark-canvas');
+  const id = svg?.dataset?.uiMarkAdd;
+  if (!id) return null;
+  const f = uiMarkFrame(id);
+  if (!f) return null;
+  const p = sketchPointFromClient(svg, evt?.clientX, evt?.clientY, f.W, f.H);
+  if (!p) return null;
+  return placeUiMark(id, p.x, p.y) ? { kind: 'mark', id, action: 'place' } : null;
+}
+
 /**
  * handoff（第二十九轮，学 Intelligent UI 的 issueNewTurn 不学自动发言）：
  * 交互档把学习者当前的状态递回对话的唯一出口。点了把「勾了哪几项 / 参数滑到哪 /
@@ -3547,6 +3696,15 @@ function handoffUiState(id) {
       : viewed.length
         ? `我在标注图「${name}」里看过：${viewed[viewed.length - 1]}`
         : `我在标注图「${name}」里还没有点开任何一块`;
+  } else if (kind === 'mark') {
+    // 只报"他在哪儿落了记号"：方位说人话、数留在括号里给老师对——判"指得对不对"是对话的事。
+    const f = uiMarkFrame(id);
+    const shown = (f?.slots || []).slice(0, 5)
+      .map((s) => `${markPlace(s.x, s.y, f.W, f.H)}（${uiPointText(s.x, s.y)}）`)
+      .join('、');
+    text = f?.slots?.length
+      ? `我在标图「${name}」里指的是：${shown}${f.slots.length > 5 ? '…' : ''}`
+      : `我在标图「${name}」里还没有标上记号（${rec.spec?.ask || ''}）`;
   } else {
     return false;
   }
@@ -3576,6 +3734,11 @@ function handleUiDeskEvent(evt) {
     const ok = handoffUiState(handoffId);
     return ok ? { handled: true, kind: 'handoff', id: handoffId } : { handled: false };
   }
+
+  // mark（第七十九轮）：点图上落一处、点记号掉一处。放在 handoff 之后——递回那句话
+  // 是按钮，不该被"点在按钮上顺手标了一处"抢走。不认档位、只认这两个 data。
+  const markHit = handleUiMarkClick(evt);
+  if (markHit) return { handled: true, ...markHit };
 
   // ask / question（第三十九轮，ask 融入 IUI）：选项点选与提交都走桌面委托。
   // 编译器长的题卡（data-ui-ask-opt）没有 onclick，renderAskCard 也把 onclick 撤了——
@@ -3952,6 +4115,43 @@ function handleUiDeskKey(e) {
         return { handled: Boolean(moved), kind: 'sketch', id };
       }
     }
+  }
+  // mark（第七十九轮）的两条键盘路也排在通用 Enter/空格之前：记号是 <g role="button">、
+  // 这张图是 <svg role="group">，都不是原生控件；不先接住，空格会被当成"点一下"什么也不发生。
+  const markDot = node?.classList?.contains?.('ui-mark-dot') ? node : node?.closest?.('.ui-mark-dot');
+  if (markDot?.dataset?.uiMark && markDot?.dataset?.uiMarkSlot) {
+    // 聚焦在某个记号上：Enter / 空格 / 退格 / Delete 都是"掉这一处"（掉它没有方向之分）。
+    if (key === 'Enter' || key === ' ' || key === 'Backspace' || key === 'Delete') {
+      e.preventDefault?.();
+      uiSettling = true; // 键盘落定与指针点选同权：这一步要进经过
+      const ok = removeUiMark(markDot.dataset.uiMark, markDot.dataset.uiMarkSlot);
+      return { handled: Boolean(ok), kind: 'mark', id: markDot.dataset.uiMark, action: 'remove' };
+    }
+    return { handled: false };
+  }
+  const markCanvas = node?.dataset?.uiMarkAdd !== undefined ? node : node?.closest?.('.ui-mark-canvas');
+  if (markCanvas?.dataset?.uiMarkAdd) {
+    const id = markCanvas.dataset.uiMarkAdd;
+    const stepMark = key === 'ArrowLeft' ? [-1, 0]
+      : key === 'ArrowRight' ? [1, 0]
+        : key === 'ArrowUp' ? [0, -1]
+          : key === 'ArrowDown' ? [0, 1]
+            : null;
+    if (stepMark) {
+      e.preventDefault?.();
+      return { handled: Boolean(nudgeUiMarkCursor(id, stepMark[0], stepMark[1], Boolean(e?.shiftKey))), kind: 'mark', id };
+    }
+    if (key === 'Enter' || key === ' ') {
+      // 光标在哪就标在哪。位置不进状态的是取景，落下来的这一处才进。
+      e.preventDefault?.();
+      uiSettling = true;
+      const cur = uiMarkCursor(id);
+      if (!cur) return { handled: false };
+      return placeUiMark(id, cur.x, cur.y)
+        ? { handled: true, kind: 'mark', id, action: 'place' }
+        : { handled: false };
+    }
+    return { handled: false };
   }
   if (key !== 'Enter' && key !== ' ') return { handled: false };
   const hit = node?.dataset?.uiNode || node?.dataset?.uiMapStop || node?.dataset?.uiCalloutMark
@@ -4655,7 +4855,7 @@ function renderUiStatePanel(body) {
   );
   if (!entries.length) return;
   const fit = (s) => { const t = String(s); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
-  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍', map: '地图', arrange: '排列', sketch: '草图', callout: '标注图' };
+  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍', map: '地图', arrange: '排列', sketch: '草图', callout: '标注图', mark: '标图' };
   const card = el('div', 'ui-state-card');
   card.append(el('div', 'panel-section-title', '这局动过的界面'));
   for (const [key, s] of entries) {
@@ -4736,6 +4936,14 @@ function renderUiStatePanel(body) {
         for (const [k, v] of points) card.append(el('div', 'state-note', `· ${fit(k)} 在 ${fit(v)}`));
       } else {
         card.append(el('div', 'state-note', '· 还没有动过'));
+      }
+    } else if (s.uiKind === 'mark') {
+      // 与草图同一族：槽位号是他落定的那一处，位置是证据。不写"标了几个 / 共几个"。
+      const points = Object.entries(s).filter(([k]) => k !== 'uiKind');
+      if (points.length) {
+        for (const [k, v] of points) card.append(el('div', 'state-note', `· ${fit(k)} 在 ${fit(v)}`));
+      } else {
+        card.append(el('div', 'state-note', '· 还没有标上记号'));
       }
     }
     // 第六十一轮：经过（落定的那几步）。快照上面刚说完"现在停在哪"，这里说"怎么走到这"——
@@ -6251,6 +6459,14 @@ export const __hooks = {
   moveSketchDrag,
   endSketchDrag,
   sketchPointFromClient,
+  // 第七十九轮：标图（记号由学习者自己放）
+  repaintUiMark,
+  uiMarkFrame,
+  uiMarkCursor,
+  nudgeUiMarkCursor,
+  placeUiMark,
+  removeUiMark,
+  handleUiMarkClick,
   uiPointOf,
   textBlock,
   // 配置备份（第十四轮）：设置面板里的导出/导入设置块
