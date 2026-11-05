@@ -8648,6 +8648,233 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('这一节无异常', errors.length === errsBefore63, errors.slice(errsBefore63).join(' | '));
 }
 
+// ─── 65. 算出来的曲线（第七十八轮，学 Intelligent UI 的"改一个数，图上的线跟着动"那一手）。
+// chart 此前只有两种形状，点全是模型手打的数：它打错一个点，读的人无从起疑；连续的量也只能
+// 摆成 2–8 张手打快照。这一轮让宿主做算术——`axis: 量 | 起..止 [| 点数]` + `formula: 线名 = 式子`，
+// 横轴逐点代进式子，图上那条形状就是那条规律本身；再加 `param` 就拖滑杆看整条线动
+// （取值顺序、落盘口径、handoff 与 calculator 完全同一把尺，数学只有一份：chartCurveFrame）。
+{
+  console.log('\n65. 算出来的曲线（axis + formula：点是宿主算的，不是模型手打的）');
+  const errsBefore65 = errors.length;
+  const ui65 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const { state: st65, handleUiDeskEvent: handle65, renderDeskState: renderPanel65 } = appModule.__hooks;
+  const compile65 = (lines) => ui65.compileUiBlock(lines.filter((l) => l.trim())).html || '';
+  const deg65 = (lines) => ui65.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  ui65.resetUiState();
+  ui65.setSceneParams({});
+  const box65 = doc.getElementById('input');
+  const box65Before = box65.value;
+
+  // 1) 静态曲线：点由宿主算，式子明摆在图下
+  const grow = ['kind: chart', 'title: 一万块怎么长成', 'unit: 元', 'axis: 年 | 0..3', 'formula: 本息 = 1000 * 1.05 ^ 年'];
+  const g65 = compile65(grow);
+  check('横轴由 axis 自己排出来（0..3 整数范围就一格一个数，不再另写 x）',
+    (g65.match(/ui-chart-xlabel/g) || []).length === 4, g65.slice(0, 500));
+  check('每个点是宿主代进式子算的（1000 / 1050 / 1102.5 / 1157.625 摆在读屏表里）',
+    ['1000', '1050', '1102.5', '1157.625'].every((v) => g65.includes(`<td>${v}</td>`)), g65.slice(-700));
+  check('这条线怎么算的明摆在图下（本息 = 1000 × 1.05 ^ 年：学习者能拿任意一点自己代一遍核对）',
+    g65.includes('这条线怎么算的') && g65.includes('本息 = 1000 × 1.05 ^ 年'), g65.slice(-700));
+  check('读屏名说得出横轴是哪个量（形状之外还要说清"按什么排"）',
+    g65.includes('横轴是「年」'), g65.slice(-900));
+  check('没有可拖的数就不写 data-*、不落状态档（静态档照旧）',
+    !/data-ui-/.test(g65) && ui65.uiStateIds().length === 0, '');
+  check('曲线两次编译一模一样（流式每帧重编，坐标跳来跳去的图没法对着问为什么）',
+    compile65(grow) === g65, '');
+
+  // 2) 点数：整数范围一格一个数，小数范围默认 12 个点，也可以自己写
+  const decay = ['kind: chart', 'axis: 天 | 0..1', 'formula: 剩 = 100 * 0.5 ^ 天'];
+  check('整数范围但格子太少就均分成 12 个点（0..1 只画两个点是一条直线，看不出形状）',
+    (compile65(decay).match(/ui-chart-xlabel/g) || []).length === 12, '');
+  check('非整数边界同样均分（0..1.5 不是"0、1"两个点的事）',
+    (compile65(['kind: chart', 'axis: 天 | 0..1.5', 'formula: 剩 = 100 * 0.5 ^ 天']).match(/ui-chart-xlabel/g) || []).length === 12, '');
+  check('点数可以写在 axis 第三段（5 个点就 5 个刻度）',
+    (compile65(['kind: chart', 'axis: 天 | 0..1 | 5', 'formula: 剩 = 100 * 0.5 ^ 天']).match(/ui-chart-xlabel/g) || []).length === 5, '');
+  check('点数超出画布装得下的范围：掉回原文并点名',
+    deg65(['kind: chart', 'axis: 天 | 0..1 | 25', 'formula: 剩 = 100 * 0.5 ^ 天']).includes('24'), '');
+  check('止不大于起没有方向可画：掉回原文并点名',
+    deg65(['kind: chart', 'axis: 天 | 5..1', 'formula: 剩 = 100 * 0.5 ^ 天']).includes('大于'), '');
+
+  // 3) 三种形状不混着写：谁算的这句话不能含糊
+  check('手打的数与算出的线混在一张图里：掉回原文并点名',
+    deg65(['kind: chart', 'series: 收入 = 1,2', 'formula: 收入 = 年 * 2', 'axis: 年 | 0..3']).includes('混着写'), '');
+  check('曲线不用 x（刻度就是 axis 那个量排出来的）：掉回原文并点名',
+    deg65(['kind: chart', 'x: 一,二', 'axis: 年 | 0..3', 'formula: 收入 = 年 * 2']).includes('不用 x'), '');
+  check('只写 formula 不写 axis：没有横轴就没有可代的数（掉回原文）',
+    deg65(['kind: chart', 'formula: 收入 = 2 * 3']).includes('就要写 axis'), '');
+  check('只写 axis 不写 formula：没式子算不出线（掉回原文）',
+    deg65(['kind: chart', 'axis: 年 | 0..3']).includes('至少一条 formula'), '');
+  check('快照滑杆与曲线不混在一张图里（两套口径）：掉回原文并点名',
+    deg65(['kind: chart', 'id: mix1', 'slider: 情形', 'snap: 甲 = 1,2', 'snap: 乙 = 3,4', 'axis: 年 | 0..3', 'formula: 收入 = 年 * 2']).includes('两套口径'), '');
+  check('手打数据的 chart 想挂 param：掉回原文并点名（滑杆动不了手打的数）',
+    deg65(['kind: chart', 'series: 收入 = 1,2,3', 'param: 年 | 1 | 0 | 5']).includes('要让滑杆动曲线'), '');
+
+  // 4) 式子词汇表封闭：没声明的名字点名拒、算不出来如实说
+  check('式子里引用了没声明过的名字：点名它是谁（不静默当 0 算）',
+    deg65(['kind: chart', 'axis: 年 | 0..3', 'formula: 本息 = 本金 * 年'].map((l) => l)).includes('没声明过的「本金」'), '');
+  check('参数名与横轴名撞了：一个数不能既是滑杆又是横轴',
+    deg65(['kind: chart', 'id: c1', 'axis: 年 | 0..3', 'param: 年 | 1 | 0 | 3', 'formula: 本息 = 年 * 2']).includes('撞了'), '');
+  check('这条线在当前数上算不出来：如实报名字与人话（不画一条偷偷少几个点的线）',
+    deg65(['kind: chart', 'axis: 年 | 0..4', 'formula: 每人 = 100 / (年 - 2)']).includes('除零'), '');
+  check('负数开方没有实数结果：说人话，不吐 NaN',
+    !/NaN/.test(deg65(['kind: chart', 'axis: 年 | 0..1 | 3', 'formula: 边 = (利率 - 0.5) ^ 年', 'param: 利率 | 0.2 | 0 | 1', 'id: c2'])) &&
+      deg65(['kind: chart', 'axis: 年 | 0..1 | 3', 'formula: 边 = (利率 - 0.5) ^ 年', 'param: 利率 | 0.2 | 0 | 1', 'id: c2']).includes('没有实数结果'), '');
+  check('算出来的曲线仍然没有 eval / new Function（点是解析出来的，不是请浏览器代算）',
+    !/\beval\(/.test(fs.readFileSync(path.join(webDir, 'ui-compile.js'), 'utf8')) &&
+      !/new Function/.test(fs.readFileSync(path.join(webDir, 'ui-compile.js'), 'utf8')), '');
+
+  // 5) 柱状曲线照旧"长度就是值"：基线含 0、零线画在轴内（第五十四轮那条线不因新形状而破）
+  const bar65 = compile65(['kind: chart', 'type: bar', 'axis: 日 | -2..2', 'formula: 盈亏 = 日']);
+  check('曲线写成柱状图仍从 0 起基线（有负有负就画零线）',
+    bar65.includes('ui-chart-zero') && (bar65.match(/<rect /g) || []).length === 5, bar65.slice(0, 400));
+
+  // 6) 带 param 的曲线：滑杆与 calculator 同一把尺（同一套 data-*、同一个取值顺序）
+  ui65.resetUiState();
+  const curve65 = ['kind: chart', 'id: grow78', 'title: 本金怎么长', 'unit: 元', 'axis: 年 | 0..10',
+    'param: 本金 | 1000 | 0 | 10000', 'param: 利率 | 0.03 | 0 | 0.15',
+    'formula: 复利 = 本金 * (1 + 利率) ^ 年', 'formula: 定存 = 本金 + 本金 * 利率 * 年',
+    'handoff: 把我调的数发回对话'];
+  const p65 = compile65(curve65);
+  check('每个参数一根滑杆（复用 data-ui-slider / data-ui-param，宿主不新认一条通道）',
+    p65.includes('data-ui-slider="grow78" data-ui-param="本金"') && p65.includes('data-ui-slider="grow78" data-ui-param="利率"'), p65.slice(-900));
+  check('整数参数一格一个数（本金不该拖出 1000.4）',
+    p65.includes('min="0" max="10000" step="1" value="1000"'), p65.slice(-900));
+  check('小数参数的窄范围不再只有两根手指（利率 0..0.15 切成 0.01 一格，顶上那个数够得着）',
+    p65.includes('min="0" max="0.15" step="0.01" value="0.03"'), p65.slice(-900));
+  check('两条线各自摆出自己的式子（图上明摆着两条规律，不是一个黑箱）',
+    p65.includes('复利 = 本金 × (1 + 利率) ^ 年') && p65.includes('定存 = 本金 + 本金 × 利率 × 年'), p65.slice(-900));
+  check('读屏名说得出这两个量可拖动改变曲线', p65.includes('（「本金」「利率」可拖动改变曲线）'), p65.slice(0, 300));
+  check('整块带着归属 id（重画与续状态都找得到这张图）', p65.includes('<div class="ui-chart" data-ui-chart="grow78">'), p65.slice(0, 200));
+  const st65a = ui65.readUiState('grow78');
+  check('还没拖过就一个数都不记（默认值与场上参数不落他的账）',
+    st65a.state.uiKind === 'chart' && st65a.state.本金 === undefined && st65a.state.利率 === undefined, JSON.stringify(st65a.state));
+  check('没参数就不许写 id / handoff / uses（没有可续、可交回、可填的东西）',
+    deg65(['kind: chart', 'axis: 年 | 0..3', 'formula: 本息 = 1000 * 1.05 ^ 年', 'id: lone']).includes('没有可拖的参数') &&
+      deg65(['kind: chart', 'axis: 年 | 0..3', 'formula: 本息 = 1000 * 1.05 ^ 年', 'handoff: 递回']).includes('静态曲线没有可交回的状态') &&
+      deg65(['kind: chart', 'axis: 年 | 0..3', 'formula: 本息 = 1000 * 1.05 ^ 年', 'uses: 利率']).includes('uses 只配带 param 的曲线'), '');
+  check('写了 param 却没 id：掉回原文并点名（他拖到哪儿没地方续）',
+    deg65(['kind: chart', 'axis: 年 | 0..3', 'param: 利率 | 0.03 | 0 | 0.15', 'formula: 本息 = 1000 * (1 + 利率) ^ 年']).includes('必须有 id'), '');
+  check('uses 写了这条图没有的参数：点名它没有（与 calculator 同一句话的尺）',
+    deg65([...curve65, 'uses: 折扣']).includes('不是这条曲线的参数'), '');
+
+  // 7) 场上参数：曲线与计算器读同一份数
+  ui65.resetUiState();
+  ui65.setSceneParams({ 利率: 0.05 });
+  const viaScene = compile65([...curve65, 'uses: 利率']);
+  check('曲线读场上参数（滑杆起点=0.05，线也照 0.05 算：第 10 年复利 1628.895）',
+    viaScene.includes('step="0.01" value="0.05"') && viaScene.includes('<td>1628.895</td>'), viaScene.slice(-900));
+  ui65.resetUiState();
+  ui65.setSceneParams({});
+  const missScene = compile65([...curve65, 'uses: 利率']);
+  check('场上参数没接上不静默：界面下面说一句为什么，并用这里写的数',
+    missScene.includes('场上参数里还没有「利率」，先用这里写的 0.03'), missScene.slice(-900));
+  ui65.setSceneParams({});
+  // deck 子块里的曲线：uses 的守卫在顶层与 deck 两处口径要一致（否则文档说能写、块里却被拒）
+  ui65.resetUiState();
+  ui65.setSceneParams({ 利率: 0.05 });
+  const dk65 = compile65(['kind: deck', 'part: chart', '  id: growDeck', '  axis: 年 | 0..5',
+    '  param: 利率 | 0.03 | 0 | 0.15', '  formula: 复利 = 1000 * (1 + 利率) ^ 年', '  uses: 利率',
+    'part: steps', '  step: 拖一下利率，看第 5 年那条线']);
+  check('deck 里的曲线块也读场上参数（子块的 uses 不由顶层守卫代拒）',
+    dk65.includes('value="0.05"'), dk65.slice(0, 300));
+  ui65.setSceneParams({});
+
+  // 8) 宿主重画：滑杆一拖，SVG、读数、数据表、读屏表一起跟着这条线走（数学只有一份）
+  ui65.resetUiState();
+  compile65(curve65); // 把 spec 写进 Map（宿主重画靠它）
+  st65.notebook = sampleNotebook();
+  const posts65 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const before65 = posts65();
+  const block65 = doc.createElement('div');
+  block65.className = 'ui-chart';
+  block65.dataset.uiChart = 'grow78';
+  const svg65 = doc.createElement('svg');
+  svg65.className = 'ui-chart-svg';
+  svg65._innerHTML = '<title>旧的线</title>';
+  const outP = doc.createElement('output'); outP.className = 'ui-param-value'; outP.textContent = '1000';
+  const outR = doc.createElement('output'); outR.className = 'ui-param-value'; outR.textContent = '0.03';
+  const workA = doc.createElement('p'); workA.className = 'ui-math-work'; workA.textContent = '旧';
+  const workB = doc.createElement('p'); workB.className = 'ui-math-work'; workB.textContent = '旧';
+  const sr65 = doc.createElement('div'); sr65.className = 'sr-only'; sr65._innerHTML = '<table>旧的数</table>';
+  block65.append(svg65, outP, outR, workA, workB, sr65);
+  domRoot.append(block65);
+  const r65 = handle65({ target: { dataset: { uiSlider: 'grow78', uiParam: '利率' }, value: '0.08' } });
+  check('拖曲线上的滑杆被接住（还是那条通道，档位记 chart）',
+    r65.handled === true && r65.kind === 'chart' && r65.id === 'grow78', JSON.stringify(r65));
+  check('他拖过的那个数才落盘（没拖过的本金不记他的账）',
+    ui65.readUiState('grow78').state.利率 === 0.08 && ui65.readUiState('grow78').state.本金 === undefined,
+    JSON.stringify(ui65.readUiState('grow78').state));
+  check('拖一次报一条经过（判分一个字都不在这儿发生）', posts65() === before65 + 1, `posts ${before65} → ${posts65()}`);
+  check('SVG 当场换掉（不是等下一帧重画）：0.03 那两条线不在了，读屏名跟着换成 0.08',
+    svg65._innerHTML.includes('利率」可拖动改变曲线') && svg65._innerHTML.includes('2158.925') === false &&
+      svg65._innerHTML !== '<title>旧的线</title>', svg65._innerHTML.slice(0, 200));
+  check('读数跟着换：屏幕上那一排数就是算线用的那一排',
+    outR.textContent === '0.08' && outP.textContent === '1000', `${outR.textContent} / ${outP.textContent}`);
+  check('算得出来的时候那两行话不存在（空着，CSS 把空行藏掉）',
+    workA.textContent === '' && workB.textContent === '', `${workA.textContent} / ${workB.textContent}`);
+  check('读屏表跟着这条线重算（0.08 下第 10 年复利 2158.925、定存 1800）',
+    sr65._innerHTML.includes('<td>2158.925</td>') && sr65._innerHTML.includes('<td>1800</td>'), sr65._innerHTML.slice(0, 400));
+
+  // 9) 拖到一个算不出来的数：如实说一句，不拿一条 0 平线冒充数据
+  ui65.resetUiState();
+  const odd65 = ['kind: chart', 'id: odd78', 'axis: 天 | 0..1 | 3', 'param: 折价 | 0.7 | 0 | 1', 'formula: 剩 = (折价 - 0.5) ^ 天'];
+  compile65(odd65);
+  const block65b = doc.createElement('div');
+  block65b.className = 'ui-chart';
+  block65b.dataset.uiChart = 'odd78';
+  const svg65b = doc.createElement('svg'); svg65b.className = 'ui-chart-svg'; svg65b._innerHTML = '<polyline points="a"/>';
+  const work65b = doc.createElement('p'); work65b.className = 'ui-math-work'; work65b.textContent = '';
+  block65b.append(svg65b, work65b);
+  domRoot.append(block65b);
+  handle65({ target: { dataset: { uiSlider: 'odd78', uiParam: '折价' }, value: '0.2' } });
+  check('拖到算不出来的数：那条线的位置写一句人话（不 NaN、不缺点）',
+    work65b.textContent === '这条线此刻算不出来：这个幂没有实数结果', work65b.textContent);
+  check('算不出来时不画假线：轴照旧摆，线不画（旧那条不留在屏上）',
+    !svg65b._innerHTML.includes('points') && svg65b._innerHTML.includes('ui-chart-axis'), svg65b._innerHTML.slice(0, 300));
+
+  // 10) 可见数据表跟着线走（配 table: 的那一形：图看形状、表查数值，两版不许并存）
+  ui65.resetUiState();
+  compile65([...curve65, 'table: 逐年数值']);
+  const block65c = doc.createElement('div');
+  block65c.className = 'ui-chart';
+  block65c.dataset.uiChart = 'grow78';
+  const svg65c = doc.createElement('svg'); svg65c.className = 'ui-chart-svg'; svg65c._innerHTML = '<title>x</title>';
+  const body65c = doc.createElement('div'); body65c.className = 'ui-chart-table-body'; body65c._innerHTML = '<table>旧的表</table>';
+  block65c.append(svg65c, body65c);
+  domRoot.append(block65c);
+  handle65({ target: { dataset: { uiSlider: 'grow78', uiParam: '利率' }, value: '0.08' } });
+  check('配了 table 的曲线：拖滑杆时那张可见表也跟着重算',
+    body65c._innerHTML.includes('<td>2158.925</td>') && body65c._innerHTML.includes('单位：元'), body65c._innerHTML.slice(0, 400));
+
+  // 11) handoff 与右栏：交回的是"他调到哪几个数"（与计算器同一句话的形状）
+  ui65.resetUiState();
+  ui65.writeUiState('grow78', 'chart', { 利率: 0.08, uiKind: 'chart' },
+    { curve: true, title: '本金怎么长', params: [{ name: '本金', def: 1000 }, { name: '利率', def: 0.03 }], values: { 本金: 1000, 利率: 0.03 } });
+  handle65({ target: { dataset: { uiHandoff: 'grow78' } } });
+  check('曲线交回的话：调到哪几个数（没拖过的那个用屏幕上那一排）',
+    box65.value === '我在曲线图「本金怎么长」里调到：本金=1000、利率=0.08', box65.value);
+  box65.value = box65Before;
+  st65.notebook.progress.artifact_state = { 'ui:grow78': { uiKind: 'chart', 利率: 0.08 } };
+  renderPanel65();
+  const card65 = deepAll(deskBody(), 'ui-state-card')[0] || null;
+  const notes65 = card65 ? deepAll(card65, 'state-note').map((n) => n.textContent) : [];
+  check('右栏回看卡把曲线记成现象（只报他拖过的那个数，没有"掌握度"那一族）',
+    notes65.includes('图表「grow78」') && notes65.includes('· 利率 = 0.08'), notes65.join(' / '));
+
+  // 12) 宿主不养第二份数学：重画调的是编译器导出的那一份（两处实现迟早漂）
+  const hostSrc65 = fs.readFileSync(path.join(webDir, 'app.js'), 'utf8');
+  check('宿主重画走导出的 chartCurveFrame（没有第二套逐点代入）',
+    /import \{[^}]*chartCurveFrame[^}]*\} from '\.\/ui-compile\.js'/s.test(hostSrc65) &&
+      !/function evalExpr|function exprTokens/.test(hostSrc65), '');
+  check('编译与每次拖动共用同一份几何（chartFigureSvg 一处定义、静态图与曲线各调一次）',
+    (fs.readFileSync(path.join(webDir, 'ui-compile.js'), 'utf8').match(/function chartFigureSvg/g) || []).length === 1 &&
+      (fs.readFileSync(path.join(webDir, 'ui-compile.js'), 'utf8').match(/chartFigureSvg\(/g) || []).length === 3, '');
+
+  block65.remove(); block65b.remove(); block65c.remove();
+  ui65.resetUiState();
+  ui65.setSceneParams({});
+  check('这一节无异常', errors.length === errsBefore65, errors.slice(errsBefore65).join(' | '));
+}
+
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed.n} 项，失败 ${failed.n} 项`);

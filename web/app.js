@@ -19,6 +19,7 @@ import {
   uiWork,
   uiOutText,
   mergeArrangeOrder,
+  chartCurveFrame,
 } from './ui-compile.js';
 
 // ─────────────────────────────────────────────── 基础工具
@@ -3134,6 +3135,48 @@ function uiFormNodes(id) {
 }
 
 /**
+ * 算出来的曲线（第七十八轮）：参数一拖，整条线重画。
+ * 算术只在编译器那一份里（chartCurveFrame）——宿主换进去的是它此刻的结果：
+ * 线、数据表、读屏名、"这条线此刻算不出来"的那句人话，都出自同一次数学（两处实现迟早漂）。
+ * 与计算器 / 快照图同一把尺：就地改该动的部分，不重画整块（重画会把滑杆抹掉，手感当场没了）。
+ */
+function uiCurveNodes(id) {
+  return [...(document.querySelectorAll?.('.ui-chart') || [])].filter((n) => n.dataset?.uiChart === id);
+}
+
+function repaintUiCurve(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec?.curve) return;
+  // 他没拖过的参数在编译时那份 spec.values 里（场上参数 > 默认值）：两份合起来才是屏幕上这一排数。
+  const values = { ...(rec.spec.values || {}), ...(rec.state || {}) };
+  const frame = chartCurveFrame(rec.spec, values);
+  for (const block of uiCurveNodes(id)) {
+    const svg = block.querySelector?.('.ui-chart-svg');
+    if (svg) {
+      svg.innerHTML = frame.fig.inner; // 整段含 <title>，重画后读屏名跟着换
+      svg.setAttribute?.('viewBox', `0 0 ${frame.fig.w} ${frame.fig.h}`);
+      svg.setAttribute?.('width', String(frame.fig.w));
+      svg.setAttribute?.('height', String(frame.fig.h));
+      svg.setAttribute?.('aria-label', frame.aria);
+    }
+    const readouts = block.querySelectorAll?.('.ui-param-value') || [];
+    (rec.spec.params || []).forEach((p, i) => {
+      if (readouts[i]) readouts[i].textContent = String(values[p.name]);
+    });
+    // 此刻算不出来的线：一句人话写在它自己的代入位上（CSS 把空行藏掉，算得出来时这一行不存在）。
+    const works = block.querySelectorAll?.('.ui-math-work') || [];
+    (rec.spec.plots || []).forEach((plot, i) => {
+      const bad = (frame.bad || []).find((b) => b.name === plot.out);
+      if (works[i]) works[i].textContent = bad ? `这条线此刻算不出来：${bad.why}` : '';
+    });
+    const tableBody = block.querySelector?.('.ui-chart-table-body');
+    if (tableBody) tableBody.innerHTML = frame.table;
+    const sr = block.querySelector?.('.sr-only');
+    if (sr && !rec.spec.tableName) sr.innerHTML = frame.srInner; // 读屏拿到的数值跟着线一起走
+  }
+}
+
+/**
  * form（第四十四轮）：字段动了一格，只重算 compute 输出、只改写该动的那几个字，
  * **不重画整块**（整块重画会把正在输入的框换掉——敲一个字被换掉，手感当场没了；
  * 这一档的全部意义就在于"填进去，结果跟着算"）。
@@ -3423,10 +3466,20 @@ function handoffUiState(id) {
         ? `我在图解「${name}」里看过：${viewed[viewed.length - 1]}`
         : `我在图解「${name}」里还没有点开节点`;
   } else if (kind === 'chart') {
-    const snap = rec.state?.snap;
-    text = snap
-      ? `我在图表「${name}」里把「${rec.spec?.slider || ''}」滑到了 ${snap}`
-      : `我在图表「${name}」里还没有动过滑块`;
+    // 第七十八轮：算出来的曲线交回的是"他调到哪几个数"（与计算器同一句话的形状）；
+    // 快照图交回的是"他滑到哪张快照"。两档共用一个 uiKind，话不一样。
+    if (rec.spec?.curve) {
+      const parts = (rec.spec.params || []).map((p) =>
+        `${p.name}=${rec.state?.[p.name] ?? rec.spec?.values?.[p.name] ?? p.def}`);
+      text = parts.length
+        ? `我在曲线图「${name}」里调到：${parts.join('、')}`
+        : `我在曲线图「${name}」里看到的还是默认那几个数`;
+    } else {
+      const snap = rec.state?.snap;
+      text = snap
+        ? `我在图表「${name}」里把「${rec.spec?.slider || ''}」滑到了 ${snap}`
+        : `我在图表「${name}」里还没有动过滑块`;
+    }
   } else if (kind === 'explore') {
     const active = rec.state?.active;
     const viewed = Object.keys(rec.state?.viewed || {}).filter((k) => rec.state.viewed[k]);
@@ -3629,12 +3682,16 @@ function handleUiDeskEvent(evt) {
     if (!rec?.spec) return { handled: false };
     const value = Number(node.value);
     if (!Number.isFinite(value)) return { handled: false };
-    const state = { ...rec.state, [name]: value, uiKind: 'calculator' };
-    setUiValues(calcId, 'calculator', state);
-    repaintUiCalc(calcId);
+    // 同一根滑杆、同一个记号，两档共用（第七十八轮）：曲线档的 uiKind 仍是 chart，
+    // 但盘上记的是他拖过的那几个参数名——与计算器同一把尺，界面无辜，不替他判断。
+    const uiKind = rec.spec.curve ? 'chart' : 'calculator';
+    const state = { ...rec.state, [name]: value, uiKind };
+    setUiValues(calcId, uiKind, state);
+    if (uiKind === 'chart') repaintUiCurve(calcId);
+    else repaintUiCalc(calcId);
     // 同表单：起点是滑杆刚才停在的那个数（场上参数 / 默认值填进来的也在 spec.values 里）。
     forwardUiState(calcId, state, { ...(rec.spec?.values || {}), ...(rec.state || {}) });
-    return { handled: true, kind: 'calculator', id: calcId };
+    return { handled: true, kind: uiKind, id: calcId };
   }
 
   // chart（第三十二轮）：带 slider 的图。滑杆动 = 学习者切到哪张快照，宿主把当前快照
@@ -4625,7 +4682,12 @@ function renderUiStatePanel(body) {
       if (!viewed.length && !s.active) card.append(el('div', 'state-note', '· 还没点过'));
     } else if (s.uiKind === 'chart') {
       if (s.snap) card.append(el('div', 'state-note', `· 现在停在：${fit(s.snap)}`));
-      else card.append(el('div', 'state-note', '· 还没动过滑块'));
+      else {
+        // 算出来的曲线（第七十八轮）：记的是他拖过的那几个数，与计算器同一族现象。
+        const dragged = Object.entries(s).filter(([k]) => k !== 'uiKind');
+        if (dragged.length) for (const [k, v] of dragged) card.append(el('div', 'state-note', `· ${fit(k)} = ${v}`));
+        else card.append(el('div', 'state-note', '· 还没动过滑块'));
+      }
     } else if (s.uiKind === 'explore') {
       const viewed = Object.keys(s.viewed || {});
       if (viewed.length) card.append(el('div', 'state-note', `· 看过：${viewed.map(fit).join('、')}`));
@@ -6178,6 +6240,9 @@ export const __hooks = {
   hydrateUiState,
   repaintUiCalc,
   repaintUiForm,
+  // 第七十八轮：曲线图（算出来的线，滑杆现场重画）
+  repaintUiCurve,
+  uiCurveNodes,
   // 第七十二轮：图上手（可拖的点）
   repaintUiSketch,
   moveSketchHandle,

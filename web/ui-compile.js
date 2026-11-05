@@ -250,10 +250,10 @@ function readUses(fields) {
   return { names };
 }
 
-/** 只有这两档有"能被填上的默认值 / 空格子"；别的档写了 uses 是语义词写错档（不静默吞）。 */
+/** 只有这三档有"能被填上的默认值 / 空格子"；别的档写了 uses 是语义词写错档（不静默吞）。 */
 function usesGuard(fields, kind) {
   if (!pick(fields, 'uses').length) return null;
-  return { error: `uses 只配 calculator / form（${kind} 没有能被场上参数填上的默认值）` };
+  return { error: `uses 只配 calculator / form / 带 param 的曲线（${kind} 没有能被场上参数填上的默认值）` };
 }
 
 const paramNote = (text) => `<p class="ui-param-note">${escapeHtml(text)}</p>`;
@@ -919,6 +919,74 @@ function sourceHtml(source) {
  */
 const UI_IDENT = /^[A-Za-z_一-龥][\w一-龥]*$/;
 
+/** `param: 名 | 默认 [| 最小 | 最大]`，1–4 个。calculator 与「跟着参数长的曲线」共用这一把尺。 */
+function parseParamList(fields, emptyError = '没有任何 param') {
+  const params = [];
+  for (const p of pick(fields, 'param')) {
+    const parts = p.split('|').map((s) => s.trim());
+    if (parts.length < 2 || parts.length > 4) return { error: `param「${p.slice(0, 40)}」要是「名 | 默认 [| 最小 | 最大]」` };
+    const [name, def, min, max] = parts;
+    if (!UI_IDENT.test(name)) return { error: `参数名「${name}」不合法（字母/汉字起头，中间不许空格与 * + |）` };
+    const d = num(def);
+    if (d === null) return { error: `参数「${name}」的默认值不是数` };
+    const lo = min === undefined ? null : num(min);
+    const hi = max === undefined ? null : num(max);
+    if ((min !== undefined && lo === null) || (max !== undefined && hi === null)) return { error: `参数「${name}」的上下限不是数` };
+    params.push({ name, def: d, lo, hi });
+  }
+  // emptyError 传 null：这一档允许一个参数也没有（纯函数曲线，没有可拖的数）。
+  if (!params.length) return emptyError === null ? { params: [] } : { error: emptyError };
+  if (params.length > 4) return { error: '参数最多 4 个，多了没人调' };
+  return { params };
+}
+
+/**
+ * 屏幕此刻的那一排数（第六十三轮定的顺序，一处实现两处用）：**他自己拖过的 > 场上参数 > 围栏里的默认值**。
+ * 拿不到场上参数不静默：照默认值画，并在界面下面写清为什么（missHtml）。
+ */
+function resolveParamValues(id, params, bound, stored) {
+  const values = {};
+  const misses = [];
+  for (const p of params) {
+    let v = num(stored[p.name]);
+    if (v === null && bound.has(p.name)) {
+      const shared = sceneParams[p.name];
+      if (typeof shared !== 'number') {
+        misses.push({ name: p.name, why: '没有这个数' });
+      } else if ((p.lo !== null && shared < p.lo) || (p.hi !== null && shared > p.hi)) {
+        misses.push({ name: p.name, why: '超出范围' });
+      } else {
+        v = shared;
+      }
+    }
+    values[p.name] = v === null ? p.def : v;
+  }
+  const missHtml = misses.length
+    ? paramNote(misses.map((m) => (m.why === '超出范围'
+        ? `场上参数「${m.name}」= ${sceneParams[m.name]}，超了这件界面的范围，先用这里写的 ${values[m.name]}`
+        : `场上参数里还没有「${m.name}」，先用这里写的 ${values[m.name]}`)).join('；'))
+    : '';
+  noteParamMiss(id, misses);
+  return { values, missHtml };
+}
+
+/**
+ * 滑杆那三件数（范围与一格多大）：calculator 与「跟着参数长的曲线」共用这一把尺。
+ * 老规矩照旧——写的全是整数就一格一个数（人数不该拖出 1.4）。
+ * 第七十八轮补一处失手：小数参数的范围若比 6 格还短（`利率 | 0.03 | 0 | 0.15` 只落得下 0 和 0.1），
+ * 顶上那个数就够不着——两根手指的滑杆不算滑杆，往细里切到至少 6 格。
+ */
+function sliderBox(p) {
+  const lo = p.lo ?? Math.min(0, p.def);
+  const hi = p.hi ?? Math.max(p.def * 2 || 2, p.def + 1);
+  const decimal = p.def % 1 !== 0 || (p.lo !== null && p.lo % 1 !== 0) || (p.hi !== null && p.hi % 1 !== 0);
+  let step = decimal ? 0.1 : 1;
+  if (decimal) {
+    while (step > 1e-6 && (hi - lo) / step < 6) step = Number((step / 10).toFixed(10));
+  }
+  return { lo, hi, step };
+}
+
 /**
  * calculator：`param: 名 | 默认 [| 最小 | 最大]` + `formula: 输出名 = a * b + c`。
  * 公式词法只有三种 token：参数名、数、`*` 与 `+`。求值用手写分解，**不动态构造代码**——
@@ -935,21 +1003,9 @@ function compileCalculator(fields, lines, partial) {
   if (formWords(fields)) return { error: FORM_ONLY };
   if (mapWords(fields)) return { error: MAP_ONLY };
   if (figureWords(fields)) return { error: FIGURE_ONLY };
-  const params = [];
-  for (const p of pick(fields, 'param')) {
-    const parts = p.split('|').map((s) => s.trim());
-    if (parts.length < 2 || parts.length > 4) return { error: `param「${p.slice(0, 40)}」要是「名 | 默认 [| 最小 | 最大]」` };
-    const [name, def, min, max] = parts;
-    if (!UI_IDENT.test(name)) return { error: `参数名「${name}」不合法（字母/汉字起头，中间不许空格与 * + |）` };
-    const d = num(def);
-    if (d === null) return { error: `参数「${name}」的默认值不是数` };
-    const lo = min === undefined ? null : num(min);
-    const hi = max === undefined ? null : num(max);
-    if ((min !== undefined && lo === null) || (max !== undefined && hi === null)) return { error: `参数「${name}」的上下限不是数` };
-    params.push({ name, def: d, lo, hi });
-  }
-  if (!params.length) return { error: '没有任何 param' };
-  if (params.length > 4) return { error: '参数最多 4 个，多了没人调' };
+  const parsed = parseParamList(fields);
+  if (parsed.error) return { error: parsed.error };
+  const params = parsed.params;
   const outRe = /^(\S[^=]*?)\s*=\s*(.+)$/;
   const formulas = [];
   for (const f of pick(fields, 'formula')) {
@@ -974,29 +1030,9 @@ function compileCalculator(fields, lines, partial) {
       return { error: `uses 里的「${n}」不是这件计算器的参数（这件有的是：${[...paramNames].join(' / ')}）` };
     }
   }
-  const values = {};
-  const misses = [];
-  for (const p of params) {
-    let v = num(stored[p.name]);
-    if (v === null && bound.has(p.name)) {
-      const shared = sceneParams[p.name];
-      if (typeof shared !== 'number') {
-        misses.push({ name: p.name, why: '没有这个数' });
-      } else if ((p.lo !== null && shared < p.lo) || (p.hi !== null && shared > p.hi)) {
-        misses.push({ name: p.name, why: '超出范围' });
-      } else {
-        v = shared;
-      }
-    }
-    values[p.name] = v === null ? p.def : v;
-  }
   // 拿不到就用这里写的默认值，并把原因摆在界面上——静默换数比不换更糟（学习者会以为这就是约定）。
-  const missHtml = misses.length
-    ? paramNote(misses.map((m) => (m.why === '超出范围'
-        ? `场上参数「${m.name}」= ${sceneParams[m.name]}，超了这件界面的范围，先用这里写的 ${values[m.name]}`
-        : `场上参数里还没有「${m.name}」，先用这里写的 ${values[m.name]}`)).join('；'))
-    : '';
-  noteParamMiss(id, misses);
+  const resolved = resolveParamValues(id, params, bound, stored);
+  const { values, missHtml } = resolved;
   const unit = pick(fields, 'unit')[0] || '';
   const title = pick(fields, 'title')[0] || '';
   const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
@@ -1015,11 +1051,9 @@ function compileCalculator(fields, lines, partial) {
   writeUiState(id, 'calculator', { ...owned, uiKind: 'calculator' }, spec);
   const sliders = params
     .map((p) => {
-      const lo = p.lo ?? Math.min(0, p.def);
-      const hi = p.hi ?? Math.max(p.def * 2 || 2, p.def + 1);
-      const frac = p.def % 1 !== 0 || (p.hi !== null && p.hi % 1 !== 0) ? 0.1 : 1;
+      const { lo, hi, step } = sliderBox(p);
       return `<label class="ui-param"><span class="ui-param-name">${escapeHtml(p.name)}</span>` +
-        `<input type="range" min="${lo}" max="${hi}" step="${frac}" value="${values[p.name]}" ` +
+        `<input type="range" min="${lo}" max="${hi}" step="${step}" value="${values[p.name]}" ` +
         `data-ui-slider="${escapeHtml(id)}" data-ui-param="${escapeHtml(p.name)}" aria-label="${escapeHtml(p.name)}" />` +
         `<output class="ui-param-value">${values[p.name]}</output></label>`;
     })
@@ -3198,7 +3232,9 @@ function compileDeck(fields, lines, partial) {
     if (part.kind !== 'callout' && calloutWords(child.fields)) {
       return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${CALLOUT_ONLY}` };
     }
-    if (part.kind !== 'calculator' && part.kind !== 'form') {
+    // 与顶层同一把尺（第七十八轮添了带 param 的曲线）：chart 里的 uses 由 compileChart 自己判
+    // （它要知道这条曲线有没有参数），别让这里的守卫把"带 param 的曲线"一并拒掉。
+    if (part.kind !== 'calculator' && part.kind !== 'form' && part.kind !== 'chart') {
       const usesErr = usesGuard(child.fields, part.kind);
       if (usesErr) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${usesErr.error}` };
     }
@@ -3320,6 +3356,8 @@ function chartNum(n) {
 function chartDomain(type, groups) {
   let mn = Infinity, mx = -Infinity;
   for (const vals of groups) for (const v of vals) { if (v < mn) mn = v; if (v > mx) mx = v; }
+  // 一条线都没有（曲线的数在当前都算不出来）：轴照旧摆，缺口由界面里那句人话交代。
+  if (!Number.isFinite(mn) || !Number.isFinite(mx)) return { yMin: 0, yMax: 1 };
   if (type !== 'bar') {
     const span = mx - mn;
     const pad = span === 0 ? 1 : span * 0.08;
@@ -3334,7 +3372,282 @@ function chartDomain(type, groups) {
 }
 
 /**
- * chart 有两种形状，看有没有 `slider`：
+ * 一张图的几何（第七十八轮抽成一份）：`series` 的值 → SVG 内部 + 画布尺寸。
+ * 静态图在编译时用一次，算出来的曲线在编译与每次拖动参数时都用同这一份——
+ * 宿主不重写这套数学（两处实现迟早漂）。柱状图的长度就是值：纵轴必须含 0
+ * （chartDomain），否则 100/120/140 会被画成 11/80/111 px——形状在撒谎。
+ * 折线图没有"长度"这回事，仍按数据范围自适应。
+ * 布局完全由输入决定：同一组数两次编译落在同样的坐标上（流式每帧重编，
+ * 坐标跳来跳去的图没法对着问为什么）。
+ */
+export function chartFigureSvg(type, series, xLabels, aria) {
+  const n = series[0]?.vals.length || 0;
+  const { yMin, yMax } = chartDomain(type, series.map((s) => s.vals));
+  const PAD_L = 72, PAD_R = 14, PAD_T = 10, PAD_B = xLabels.length ? 26 : 12;
+  const PLOT_H = 160, GAP = 64;
+  const y = (v) => PAD_T + ((yMax - v) / (yMax - yMin)) * PLOT_H;
+  const barW = Math.min(34, (GAP * 0.66) / series.length);
+  // 柱状图把第一组让出半个组宽，别让第一条柱压在左轴上；折线图从 PAD_L 起。
+  const plotL = PAD_L + (type === 'bar' ? (barW * series.length) / 2 : 0);
+  const cx = (i) => plotL + i * GAP;
+  const w = plotL + GAP * (n - 1) + PAD_R + (type === 'bar' ? (barW * series.length) / 2 + 20 : 26);
+  const h = PAD_T + PLOT_H + PAD_B;
+  const baseY = Math.max(PAD_T, Math.min(PAD_T + PLOT_H, y(0)));
+
+  const yLabels =
+    `<text class="ui-chart-ylabel" x="${PAD_L - 8}" y="${PAD_T + 11}" text-anchor="end">${escapeHtml(chartNum(yMax))}</text>` +
+    `<text class="ui-chart-ylabel" x="${PAD_L - 8}" y="${PAD_T + PLOT_H - 4}" text-anchor="end">${escapeHtml(chartNum(yMin))}</text>`;
+  const xEls = xLabels.map((s, i) =>
+    `<text class="ui-chart-xlabel" x="${cx(i)}" y="${PAD_T + PLOT_H + 16}" text-anchor="middle">${escapeHtml(fitText(s, 6))}</text>`
+  ).join('');
+  const frameEls =
+    `<line class="ui-chart-axis" x1="${PAD_L}" y1="${PAD_T + PLOT_H}" x2="${w - PAD_R}" y2="${PAD_T + PLOT_H}"/>` +
+    `<line class="ui-chart-axis" x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${PAD_T + PLOT_H}"/>`;
+  // 有正有负时零线画在轴内：柱子的起点不能只靠"猜哪边是 0"（第五十四轮）。
+  const zeroEls = type === 'bar' && yMin < 0 && yMax > 0
+    ? `<line class="ui-chart-zero" x1="${PAD_L}" y1="${y(0)}" x2="${w - PAD_R}" y2="${y(0)}"/>`
+    : '';
+  const seriesEls = series.map((s, idx) => {
+    // 系列色只从已量过的 token 里取，类名走插值不写字面量（契约那张 class 账按源码文本扫）。
+    const cls = `ui-series-${idx}`;
+    if (type === 'bar') {
+      return s.vals.map((v, i) => {
+        const x0 = cx(i) - (barW * series.length) / 2 + idx * barW;
+        const top = Math.min(baseY, y(v));
+        return `<rect class="${cls}" x="${x0}" y="${top}" width="${barW}" height="${Math.abs(y(v) - baseY)}"/>`;
+      }).join('');
+    }
+    const pts = s.vals.map((v, i) => `${cx(i)},${y(v)}`).join(' ');
+    return `<polyline class="${cls}" points="${pts}"/>`;
+  }).join('');
+
+  return { inner: `<title>${escapeHtml(aria)}</title>${frameEls}${zeroEls}${yLabels}${xEls}${seriesEls}`, w, h };
+}
+
+/**
+ * 算出来的曲线（第七十八轮）：`axis: 名 | 起..止 [| 点数]` + 1–4 条 `formula: 线名 = 表达式`。
+ *
+ * 学的是 Intelligent UI 的"储蓄怎么长"那一手——它给的不是模型手打的 12 个数，是一条**跟着规律动的线**。
+ * 本仓此前 `chart` 的点全是模型自己打出来的数：一是它会打错（一个不满足规律的点，读的人无从起疑），
+ * 二是"连续的量"只能摆成 2–8 张手打快照。这里让**宿主做算术**：式子由老师声明，逐点的值由宿主算，
+ * 于是图上的形状就是那条规律本身——与第五十四轮"柱子不许撒谎"、第五十轮"能核对"是同一条线。
+ *
+ * 两种尺寸，看有没有 `param`：
+ * - **只有 axis + formula**：静态曲线，没有可拖的数 → 不写 id、不进状态、`handoff` / `uses` 掉回原文。
+ * - **加 param（1–4 个）**：每个参数一根滑杆，拖一下整条线重画——与 calculator 同一套参数语法、
+ *   同一个取值顺序（他自己拖过的 > 场上参数 > 围栏默认），盘上只记他自己定的那几个数。
+ *
+ * 画布尺寸只由点数与系列数决定，参数拖动不改尺寸、只改线的位置——宿主重画时换 SVG 内部与读数即可。
+ */
+const CURVE_MAX_POINTS = 24;
+const CURVE_DEFAULT_POINTS = 12;
+
+function parseCurveAxis(fields) {
+  const raw = pick(fields, 'axis');
+  if (raw.length > 1) return { error: 'axis 只写一行（一条横轴）' };
+  const parts = String(raw[0] || '').split('|').map((s) => s.trim());
+  if (parts.length < 2 || parts.length > 3) return { error: `axis「${String(raw[0] || '').slice(0, 40)}」要是「名 | 起..止 [| 点数]」` };
+  const [name, range, countRaw] = parts;
+  if (!UI_IDENT.test(name)) return { error: `横轴名「${name}」不合法（字母/汉字起头，中间不许空格与 * + |）` };
+  const m = /^(-?(?:\d+\.?\d*|\.\d+))\s*\.\.\s*(-?(?:\d+\.?\d*|\.\d+))$/.exec(range);
+  if (!m) return { error: `axis 的范围「${range}」要写成「起..止」两个数（如 1..10）` };
+  const from = Number(m[1]);
+  const to = Number(m[2]);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || !(to > from)) return { error: 'axis 的「止」必须大于「起」（从少到多摆）' };
+  let count;
+  if (countRaw !== undefined) {
+    count = Number(countRaw);
+    if (!Number.isInteger(count) || count < CHART_MIN_POINTS || count > CURVE_MAX_POINTS) {
+      return { error: `点数要是一个 ${CHART_MIN_POINTS}–${CURVE_MAX_POINTS} 的整数（画布装不下更多）` };
+    }
+  } else {
+    // 整数边界就一格一个数（0..10 是十一年，不是十二个随便取的点）；但要至少 4 格——
+    // 0..1 只画出两个点就是一条直线，看不出任何形状，那种横轴按 12 个点均分。
+    const whole = Number.isInteger(from) && Number.isInteger(to) && to - from + 1 >= 4 && to - from + 1 <= CURVE_MAX_POINTS;
+    count = whole ? to - from + 1 : CURVE_DEFAULT_POINTS;
+  }
+  const xs = [];
+  for (let i = 0; i < count; i += 1) xs.push(round3(from + ((to - from) * i) / (count - 1)));
+  return { axis: { name, from, to, count, xs } };
+}
+
+/**
+ * 一条曲线此刻的样子：把横轴的每个取值代进每条式子。
+ * 某条线在这个数上算不出来（除零 / 无实数幂 / 溢出）就**如实报名字与人话**，
+ * 不画一条偷偷少几个点的线，也不吐 NaN（与 uiOutText 同一把尺）。
+ * 编译时与宿主每次重画都走这一份——两处实现迟早漂。
+ */
+export function chartCurveValues(plots, axis, values) {
+  const rows = [];
+  const bad = [];
+  for (const p of plots) {
+    const vals = [];
+    let why = '';
+    for (const x of axis.xs) {
+      const r = evalExpr(normalizeExpr(p.expr), { ...values, [axis.name]: x });
+      if (r.err) {
+        why = exprErrText(r.err);
+        break;
+      }
+      vals.push(round3(r.v));
+    }
+    if (why) bad.push({ name: p.out, why });
+    else rows.push({ name: p.out, vals });
+  }
+  return { rows, bad };
+}
+
+function exprErrText(err) {
+  if (err === 'div0') return '除零了（除数不能是 0）';
+  if (err === 'nan') return '这个幂没有实数结果';
+  if (err === 'range') return '结果超出了范围';
+  return '算式里有不认识的写法';
+}
+
+/** 曲线的此刻样子 → 宿主换进去的那几段（SVG、读屏名、数据表、此刻算不出来的线）。
+ *  编译与每次拖动都走这一份：表、读屏名、形状必须跟屏幕上的线是同一次数学。 */
+export function chartCurveFrame(spec, values) {
+  const { rows, bad } = chartCurveValues(spec.plots, spec.axis, values);
+  const xLabels = spec.axis.xs.map((v) => chartNum(v));
+  const names = spec.plots.map((p) => p.out);
+  const typeName = spec.type === 'bar' ? '柱状图' : '折线图';
+  const drag = spec.params?.length ? `（${spec.params.map((p) => `「${p.name}」`).join('')}可拖动改变曲线）` : '';
+  const aria = `数据图：${spec.title || '算出来的曲线'}。${typeName}${spec.unit ? `（单位：${spec.unit}）` : ''}：${names.join('、')}${drag}`;
+  // 一条线都算不出来时空着画：留着轴与刻度，不拿一条 0 平线冒充数据——
+  // 缺口由图下那句"这条线此刻算不出来"交代（与第五十四轮"形状不许撒谎"同一条线）。
+  const fig = chartFigureSvg(spec.type, rows, xLabels, aria);
+  const caption = spec.unit ? `单位：${spec.unit}` : '';
+  const table = chartDataTable(rows, xLabels, caption);
+  const srCaption = `数据表：${spec.title || '算出来的曲线'}（${typeName}${spec.unit ? `，单位：${spec.unit}` : ''}，横轴是「${spec.axis.name}」）`;
+  // 只给读屏的那张表包在 .sr-only 的 div 里（表不能套表）：宿主重画时换 div 的内容。
+  const srInner = chartDataTable(rows, xLabels, srCaption);
+  return { fig, aria, rows, bad, table, srInner };
+}
+
+function compileCurveChart(fields, shared) {
+  const { type, title, handoff, unit, tableName, assumes, source } = shared;
+  if (pick(fields, 'series').length) {
+    return { error: '一条线要么是你写的数（series），要么是让宿主算的式（formula）——混着写就没有"谁算的"这句话了' };
+  }
+  if (pick(fields, 'x').length) {
+    return { error: '算出来的曲线不用 x：横轴的刻度就是 axis 那个量自己排出来的' };
+  }
+  if (!pick(fields, 'axis').length) {
+    return { error: '写了 formula 就要写 axis（横轴是哪个量、从几到几）：没有横轴，这些式子没有可代的数' };
+  }
+  const parsedAxis = parseCurveAxis(fields);
+  if (parsedAxis.error) return { error: parsedAxis.error };
+  const axis = parsedAxis.axis;
+  const parsedParams = parseParamList(fields, null);
+  if (parsedParams.error) return { error: parsedParams.error };
+  const params = parsedParams.params || [];
+  if (params.some((p) => p.name === axis.name)) {
+    return { error: `参数名与横轴名撞了（都叫「${axis.name}」）：一个数不能既是滑杆又是横轴` };
+  }
+
+  const plots = [];
+  const outRe = /^(\S[^=]*?)\s*=\s*(.+)$/;
+  for (const f of pick(fields, 'formula')) {
+    const m = outRe.exec(f.trim());
+    if (!m || !UI_IDENT.test(m[1].trim())) return { error: `formula「${f.slice(0, 40)}」不是「线名 = 表达式」` };
+    const out = m[1].trim();
+    if (out.length > CHART_NAME_MAX) return { error: `线名太长了（≤${CHART_NAME_MAX} 字）` };
+    if (plots.some((p) => p.out === out)) return { error: `两条 formula 重名「${out}」：身份是名字` };
+    if (out === axis.name || params.some((p) => p.name === out)) {
+      return { error: `线名「${out}」与横轴名或参数名撞了：一条线不能同时是一个数` };
+    }
+    const expr = compileExpr(m[2]);
+    if (!expr) return { error: `表达式「${m[2].slice(0, 60)}」里有词汇表之外的写法（只认参数名、横轴名、数、+ - * / ^ 与括号）` };
+    const known = new Set([...params.map((p) => p.name), axis.name]);
+    const unknown = [...new Set(exprRefs(expr))].filter((r) => !known.has(r));
+    if (unknown.length) {
+      return { error: `表达式引用了没声明过的「${unknown[0]}」（这条图里有的：${[...known].join(' / ')}）` };
+    }
+    plots.push({ out, expr });
+  }
+  if (!plots.length) return { error: '至少一条 formula（没式子算不出线）' };
+  if (plots.length > CHART_MAX_SERIES) return { error: `最多 ${CHART_MAX_SERIES} 条线（多了是彩虹不是图）` };
+
+  const interactive = params.length > 0;
+  const id = pick(fields, 'id')[0];
+  if (interactive && !id) return { error: '带 param 的曲线必须有 id：他拖到哪儿没有地方续' };
+  if (!interactive) {
+    if (id) return { error: '这条曲线没有可拖的参数，id 没地方续（要滑杆就写 param）' };
+    if (handoff.length) return { error: '静态曲线没有可交回的状态：handoff 只配带 param 的曲线（和交互档同一把尺）' };
+    if (pick(fields, 'uses').length) return { error: 'uses 只配带 param 的曲线（没有参数，就没有能被场上参数填上的默认值）' };
+  }
+
+  const typeName = type === 'bar' ? '柱状图' : '折线图';
+  const spec = { curve: true, type, title, unit, tableName, axis, plots, params, values: {}, assumes, source, typeName };
+  let missHtml = '';
+  let stored = {};
+  if (interactive) {
+    const uses = readUses(fields);
+    if (uses.error) return { error: uses.error };
+    const paramNames = new Set(params.map((p) => p.name));
+    for (const n of uses.names) {
+      if (!paramNames.has(n)) return { error: `uses 里的「${n}」不是这条曲线的参数（这条有的是：${[...paramNames].join(' / ')}）` };
+    }
+    stored = readUiState(id)?.state || {};
+    const resolved = resolveParamValues(id, params, new Set(uses.names), stored);
+    spec.values = resolved.values;
+    missHtml = resolved.missHtml;
+  }
+
+  const frame = chartCurveFrame(spec, spec.values);
+  if (frame.bad.length) {
+    return { error: `「${frame.bad[0].name}」这条线在当前数上算不出来：${frame.bad[0].why}（改一改 axis 的范围或 param 的默认值）` };
+  }
+
+  const cap = title
+    ? `<p class="ui-cap">${cell(title)}${unit ? `（单位：${cell(unit)}）` : ''}</p>`
+    : unit ? `<p class="ui-cap">单位：${cell(unit)}</p>` : '';
+  const sliders = params
+    .map((p) => {
+      const { lo, hi, step } = sliderBox(p);
+      return `<label class="ui-param"><span class="ui-param-name">${escapeHtml(p.name)}</span>` +
+        `<input type="range" min="${lo}" max="${hi}" step="${step}" value="${spec.values[p.name]}" ` +
+        `data-ui-slider="${escapeHtml(id)}" data-ui-param="${escapeHtml(p.name)}" aria-label="${escapeHtml(p.name)}" />` +
+        `<output class="ui-param-value">${spec.values[p.name]}</output></label>`;
+    })
+    .join('');
+  const legend =
+    `<div class="ui-legend">` +
+    plots.map((p, i) => `<span class="ui-legend-item"><span class="ui-legend-dot ui-swatch-${i}"></span>${cell(p.out)}</span>`).join('') +
+    `</div>`;
+  const svg =
+    `<svg class="ui-chart-svg" role="img" aria-label="${escapeHtml(frame.aria)}" viewBox="0 0 ${frame.fig.w} ${frame.fig.h}"` +
+    ` width="${frame.fig.w}" height="${frame.fig.h}">${frame.fig.inner}</svg>`;
+  const srTable = tableName ? '' : `<div class="sr-only">${frame.srInner}</div>`;
+  const visibleTable = tableName
+    ? `<details class="ui-chart-table"><summary class="ui-chart-table-summary">${cell(tableName)}</summary>` +
+      `<div class="ui-chart-table-body">${frame.table}</div></details>`
+    : '';
+  const math = `<div class="ui-math"><p class="ui-math-label">这条线怎么算的</p>` +
+    plots.map((p) => `<p class="ui-math-formula">${escapeHtml(p.out)} = ${escapeHtml(uiFormula(p.expr))}</p>` +
+      `<p class="ui-math-work"></p>`).join('') +
+    `</div>`;
+
+  if (interactive) {
+    // 盘上只记他自己拖过的那几个数（与计算器同一把尺）：场上参数 / 默认值填进来的不记他的账。
+    const owned = {};
+    for (const p of params) if (stored[p.name] !== undefined) owned[p.name] = spec.values[p.name];
+    writeUiState(id, 'chart', { ...owned, uiKind: 'chart' }, spec);
+  }
+
+  // 滑杆直接摆在图里（每根一行 .ui-param，与 calculator 同一种排法）：
+  // .ui-chart-controls 是快照图那一根滑杆的一行布局（名 / 杆 / 读数），套不下一排参数。
+  const body =
+    `<div class="ui-chart"${interactive ? ` data-ui-chart="${escapeHtml(id)}"` : ''}>` +
+    svg + legend + sliders +
+    srTable + visibleTable + math +
+    `${sourceHtml(source)}${assumeHtml(assumes)}` +
+    `</div>`;
+  return { html: `${cap}${body}${missHtml}${interactive && handoff ? handoffButton(id, handoff) : ''}`, shape: 'chart' };
+}
+
+/**
+ * chart 有三种形状，看写的是 `series` / `slider` / `axis + formula`：
  *
  * **静态**（第三十一轮，学 IUI 旗舰用例「把复杂概念画出来」）：`series: 名 = 数值,数值,…`
  * （1–4 条，每条 2–40 个点）+ 可选 `x: 标签,…`（数量与点数对齐）+ 可选 `type: bar | line`
@@ -3347,6 +3660,13 @@ function chartDomain(type, groups) {
  * （2–8 条，同一张图的不同情形）+ `id:`（滑到哪张快照要有地方续）+ 可选 `handoff`。
  * 滑杆一拖，图换成另一张快照——快照是**正在教的对象**的数据情形（样本量=5 与样本量=30 的
  * 分布），不是学习者的学情（Invariant 4 那道线照旧：进度 / 对错 / 掌握度不画进任何一档）。
+ *
+ * **算出来的曲线**（第七十八轮，学 IUI 官方演示里"曲线跟着数走"那一手）：`axis: 名 | 起..止 [| 点数]`
+ * + `formula: 线名 = 表达式`（1–4 条）+ 可选 `param`（1–4 个，每个一根滑杆）。点不再是模型手打的数，
+ * 而是宿主把横轴逐点代进式子算出来的——图上那条形状就是那条规律本身。写了 `param` 就要 `id`
+ * （他拖到哪儿要有地方续），取值顺序与盘上记账与 calculator 完全同一把尺：他自己拖过的 > 场上参数 >
+ * 围栏默认，盘上只记他自己定的那几个数。数学只有一份（`chartCurveFrame`）：编译摆第一帧与每次拖动
+ * 重画、数据表、读屏名都走它。
  *
  * 布局是**确定的**：同一份输入两次编译长得一模一样（流式每帧重编，坐标跳来跳去的图没法
  * 对着问为什么）。交互档的几何**编译时一次算好**，整张快照的 SVG 与读屏名都存进 spec——
@@ -3374,11 +3694,24 @@ function compileChart(fields) {
   if (unit.length > CHART_UNIT_MAX) return { error: `单位太长了（≤${CHART_UNIT_MAX} 字）` };
   const tableName = pick(fields, 'table')[0]?.trim() || '';
   if (tableName.length > CHART_TABLE_NAME_MAX) return { error: `表名太长了（≤${CHART_TABLE_NAME_MAX} 字）` };
+  const curveWords = pick(fields, 'axis').length > 0 || pick(fields, 'formula').length > 0;
   if (pick(fields, 'slider').length) {
+    if (curveWords) {
+      return { error: '带 slider 的 chart 摆的是你手打的快照；要让宿主照式子算线就写 axis + formula——两套口径别混在一张图里' };
+    }
+    if (pick(fields, 'param').length || pick(fields, 'uses').length) {
+      return { error: 'slider 快照没有能被填上的参数：param / uses 只配带 axis 的曲线' };
+    }
     return compileInteractiveChart(fields, { type, title, handoff, unit, tableName, assumes: meta.assumes, source: src.source });
   }
+  if (curveWords) {
+    return compileCurveChart(fields, { type, title, handoff, unit, tableName, assumes: meta.assumes, source: src.source });
+  }
+  if (pick(fields, 'param').length || pick(fields, 'uses').length) {
+    return { error: '手打数据的 chart 没有可填的参数：要让滑杆动曲线就写 axis + formula' };
+  }
   if (handoff.length) {
-    return { error: '静态 chart 没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart）' };
+    return { error: '静态 chart 没有可交回的状态：handoff 只配交互档（checklist / calculator / diagram / 带 slider 的 chart / 带 param 的曲线）' };
   }
 
   const series = [];
@@ -3419,53 +3752,12 @@ function compileChart(fields) {
     ? `<p class="ui-cap">${cell(title)}${unit ? `（单位：${cell(unit)}）` : ''}</p>`
     : unit ? `<p class="ui-cap">单位：${cell(unit)}</p>` : '';
 
-  // 几何完全由输入决定（与 diagram 同一把尺）：同样的 series/x 永远落在同样的坐标上。
-  // 柱状图的长度就是值：纵轴必须含 0（chartDomain），否则 100/120/140 会被画成
-  // 11/80/111 px——形状在撒谎。折线图没有"长度"这回事，仍按数据范围自适应。
-  const { yMin, yMax } = chartDomain(type, series.map((s) => s.vals));
-  const PAD_L = 72, PAD_R = 14, PAD_T = 10, PAD_B = xLabels.length ? 26 : 12;
-  const PLOT_H = 160, GAP = 64;
-  const y = (v) => PAD_T + ((yMax - v) / (yMax - yMin)) * PLOT_H;
-  const barW = Math.min(34, (GAP * 0.66) / series.length);
-  // 柱状图把第一组让出半个组宽，别让第一条柱压在左轴上；折线图从 PAD_L 起。
-  const plotL = PAD_L + (type === 'bar' ? (barW * series.length) / 2 : 0);
-  const cx = (i) => plotL + i * GAP;
-  const svgW = plotL + GAP * (n - 1) + PAD_R + (type === 'bar' ? (barW * series.length) / 2 + 20 : 26);
-  const svgH = PAD_T + PLOT_H + PAD_B;
-  const baseY = Math.max(PAD_T, Math.min(PAD_T + PLOT_H, y(0)));
-
   const typeName = type === 'bar' ? '柱状图' : '折线图';
   // 读屏名只放"是什么、有哪些系列"：aria 是一句话的标题，不是数据倾倒的地方；
   // 逐点数值由下面那张 .sr-only 数据表承担（第五十二轮）。单位是轴的口径
   // （第五十四轮），一句话标题里就该有，否则"140"不知道是元还是公斤。
   const aria = `数据图：${title || '数据的形状'}。${typeName}${unit ? `（单位：${unit}）` : ''}：${series.map((s) => s.name).join('、')}`;
-
-  const yLabels =
-    `<text class="ui-chart-ylabel" x="${PAD_L - 8}" y="${PAD_T + 11}" text-anchor="end">${escapeHtml(chartNum(yMax))}</text>` +
-    `<text class="ui-chart-ylabel" x="${PAD_L - 8}" y="${PAD_T + PLOT_H - 4}" text-anchor="end">${escapeHtml(chartNum(yMin))}</text>`;
-  const xEls = xLabels.map((s, i) =>
-    `<text class="ui-chart-xlabel" x="${cx(i)}" y="${PAD_T + PLOT_H + 16}" text-anchor="middle">${escapeHtml(fitText(s, 6))}</text>`
-  ).join('');
-  const frameEls =
-    `<line class="ui-chart-axis" x1="${PAD_L}" y1="${PAD_T + PLOT_H}" x2="${svgW - PAD_R}" y2="${PAD_T + PLOT_H}"/>` +
-    `<line class="ui-chart-axis" x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${PAD_T + PLOT_H}"/>`;
-  // 有正有负时零线画在轴内：柱子的起点不能只靠"猜哪边是 0"（第五十四轮）。
-  const zeroEls = type === 'bar' && yMin < 0 && yMax > 0
-    ? `<line class="ui-chart-zero" x1="${PAD_L}" y1="${y(0)}" x2="${svgW - PAD_R}" y2="${y(0)}"/>`
-    : '';
-
-  const seriesEls = series.map((s, idx) => {
-    const cls = `ui-series-${idx}`;
-    if (type === 'bar') {
-      return s.vals.map((v, i) => {
-        const x0 = cx(i) - (barW * series.length) / 2 + idx * barW;
-        const top = Math.min(baseY, y(v));
-        return `<rect class="${cls}" x="${x0}" y="${top}" width="${barW}" height="${Math.abs(y(v) - baseY)}"/>`;
-      }).join('');
-    }
-    const pts = s.vals.map((v, i) => `${cx(i)},${y(v)}`).join(' ');
-    return `<polyline class="${cls}" points="${pts}"/>`;
-  }).join('');
+  const fig = chartFigureSvg(type, series, xLabels, aria);
 
   const legend =
     `<div class="ui-legend">` +
@@ -3473,8 +3765,8 @@ function compileChart(fields) {
     `</div>`;
 
   const body =
-    `<svg class="ui-chart-svg" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
-    `<title>${escapeHtml(aria)}</title>${frameEls}${zeroEls}${yLabels}${xEls}${seriesEls}</svg>${legend}`;
+    `<svg class="ui-chart-svg" role="img" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${fig.w} ${fig.h}" width="${fig.w}" height="${fig.h}">` +
+    `${fig.inner}</svg>${legend}`;
   // 数值不能只活在像素里：静态图没有写 table 时，读屏的逐点数据由宿主补一张隐藏表；
   // 写了 table 就换一张可见的数据表（第五十四轮把静态图也纳入 table），
   // 同一份数据只出现一次（与交互档同一把尺）。
@@ -3906,8 +4198,9 @@ function compileUiBlockInner(lines, partial) {
     if (metaErr) return fail(metaErr);
     if (kind !== 'sketch' && sketchWords(parsed.fields)) return fail(SKETCH_ONLY);
     if (kind !== 'callout' && calloutWords(parsed.fields)) return fail(CALLOUT_ONLY);
-    // uses 只配 calculator / form（第六十三轮）：只有这两档有能被场上参数填上的默认值 / 空格子。
-    if (kind !== 'calculator' && kind !== 'form') {
+    // uses 配 calculator / form / 带 param 的曲线（第六十三轮立的那两档，第七十八轮添了曲线）：
+    // 只有这几档有"能被场上参数填上的默认值 / 空格子"，各档内部再校验名字对不对得上。
+    if (kind !== 'calculator' && kind !== 'form' && kind !== 'chart') {
       const usesErr = usesGuard(parsed.fields, kind);
       if (usesErr) return fail(usesErr.error);
     }

@@ -1528,10 +1528,12 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   check('参数没接上那句说明有样式（不是裸文本），且与降级同一族存在感',
     /\.ui-param-note\s*\{/.test(cssSrc63));
 
-  // 文档侧：模型读得到的三条（只配哪两档 / 写入通道 / 读得到 ui_param_missing）
-  check('APP_ADAPTER 说清 uses 只配 calculator / form',
+  // 文档侧：模型读得到的三条（只配哪几档 / 写入通道 / 读得到 ui_param_missing）
+  check('APP_ADAPTER 说清 uses 只配 calculator / form / 带 param 的曲线',
     promptSrc63.includes('能写 \\`uses\\`') &&
-      (promptSrc63.includes('uses 只配 calculator / form') || promptSrc63.includes('\\`calculator\\` / \\`form\\` 能写')));
+      promptSrc63.includes('\\`calculator\\` / \\`form\\` / 带 \\`param\\` 的曲线 \\`chart\\` 的围栏里写 \\`uses'));
+  check('编译器拒 uses 的话与文档同三档（文档改了守卫没改 = 模型照文档写就掉回原文）',
+    uiSrc63.includes('uses 只配 calculator / form / 带 param 的曲线'));
   check('APP_ADAPTER 点名 run_scene 的 params 动作与整体替换',
     promptSrc63.includes("action: 'params'") && promptSrc63.includes('整体替换'));
   check('APP_ADAPTER 把解析顺序、只收数、不回写三条都讲了',
@@ -1779,6 +1781,44 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   check('update_todo_list 注脚不撒谎（没有「右侧页签」，完成度照报）',
     !/右侧页签/.test(agentSrc77) && /done\}\/\$\{this\.todos\.length\} 已完成/.test(agentSrc77),
     '注脚撒谎或完成度丢了');
+}
+
+// ── 第七十八轮：chart 长出第三种形状（axis + formula 算出来的曲线）。
+//    此前图上的点全是模型手打的数：它打错一个点，读的人无从起疑；连续的量也只能摆成
+//    2–8 张手打快照。这一轮把算术交给宿主，于是"文档教的那一形"必须与"编译器认的那一形"
+//    同口径——教了不认（模型照文档写就掉回原文）与认了不教（有文档没写的出口）都算漂移。
+{
+  const promptSrc78 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+  const uiSrc78 = fs.readFileSync(path.join(app, 'web', 'ui-compile.js'), 'utf8');
+  const hostSrc78 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+  const readmeSrc78 = fs.readFileSync(path.join(app, 'README.md'), 'utf8');
+  // ① 文档教得出这一形的三件字段（不读文档模型就不知道自己可以这么写）
+  check('APP_ADAPTER 教得出曲线的字段形状（axis 的范围写法与 formula 的线名 = 式子）',
+    promptSrc78.includes('axis: 量名 \\| 起..止') && promptSrc78.includes('formula: 线名 = 表达式'),
+    'APP_ADAPTER 的 chart 行没把这一形写全');
+  check('APP_ADAPTER 说的是三种形状（series / snap 快照 / 算出的曲线），并劝退手打规律数',
+    promptSrc78.includes('它有三种形状') && promptSrc78.includes('就别手打那些数'), 'chart 的形状账与文档不一致');
+  check('README 的 chart 行列出三种形状与各自记的状态（文档随代码长）',
+    readmeSrc78.includes('三种形状') && readmeSrc78.includes('axis') && readmeSrc78.includes('formula'),
+    'README 6.2 的 chart 行没跟上');
+  // ② 编译器认的与拒的，与文档同口径
+  check('编译器认识 axis + formula 这一形（parseCurveAxis / compileCurveChart 都在）',
+    /function parseCurveAxis\(/.test(uiSrc78) && /function compileCurveChart\(/.test(uiSrc78),
+    '曲线实现不见了');
+  check('混形状都拒（series×formula、slider×axis 各有一句人话）',
+    uiSrc78.includes('混着写就没有"谁算的"这句话了') && uiSrc78.includes('两套口径别混在一张图里'),
+    '混形状的拒绝话变了：文档说的与编译器拒的不是同一件事');
+  check('算不出来不硬画：一句人话报线名，不画缺点的线也不吐 NaN',
+    uiSrc78.includes('这条线在当前数上算不出来') && uiSrc78.includes('这条线此刻算不出来'),
+    '诚实退路的话不在了');
+  // ③ 数学只有一份：编译与每次拖动共用同一逐点代入（两处实现迟早漂）
+  check('宿主重画用编译器导出的那一份数学（app.js 不养第二套求值）',
+    hostSrc78.includes('chartCurveFrame') && !/function evalExpr|function exprTokens/.test(hostSrc78),
+    'app.js 里有第二份求值，或没接上导出的那一份');
+  // ④ 滑杆那一把尺仍是同一套记号（没为曲线新造 data-*）
+  check('曲线复用 data-ui-slider / data-ui-param（宿主不新认一条通道）',
+    /data-ui-slider="\$\{escapeHtml\(id\)\}" data-ui-param="\$\{escapeHtml\(p\.name\)\}"/.test(uiSrc78),
+    '曲线的滑杆记号与 calculator 不再是同一套');
 }
 
 console.log(`\n${'─'.repeat(52)}`);
