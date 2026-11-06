@@ -28,6 +28,10 @@ import {
   markFreeSlot,
   markPlace,
   MARK_MAX_DEFAULT,
+  // 文字版（第八十轮）：那份文字只有一份，住在编译器里。宿主摊开与抄走读的是同一个口，
+  // 长法也借编译器那一只手——两处各写一遍迟早漂。
+  uiTakeaway,
+  uiTakeawayHtml,
 } from './ui-compile.js';
 
 // ─────────────────────────────────────────────── 基础工具
@@ -3306,6 +3310,8 @@ function repaintUiSketch(id) {
       row.textContent = ` = ${uiOutText(fm.expr, vals)}`;
     }
   }
+  // 摊开着的文字版跟着这一帧重算（第八十轮）：拖过的点不许留在旧的那堆字里。
+  refreshAltText(id);
 }
 
 /**
@@ -3465,6 +3471,8 @@ function repaintUiMark(id) {
   for (const out of [...(document.querySelectorAll?.('.ui-mark-readout') || [])]) {
     if (out.dataset?.uiMarkReadout === id) out.textContent = text;
   }
+  // 摊开着的文字版跟着这一帧重算（第八十轮）：刚落下与刚掉掉的记号都要在里面。
+  refreshAltText(id);
 }
 
 /**
@@ -3715,6 +3723,81 @@ function handoffUiState(id) {
   return true;
 }
 
+// ── 文字版 + 抄走（第八十轮）：画出来的那一族的同一份文字，两个出口 ──────────
+/**
+ * 摊开与否只由这一批节点的 class 决定：合着时按 .sr-only 那一套裁着（读屏读得到），
+ * 点开就把同一批节点摊在屏幕上。宿主不另写一份文字，也不搬家——那样两份迟早漂开。
+ * 找法与 .ui-sketch-readout 同一手：按 class 捞，按 data 认（桩与浏览器语义一致）。
+ */
+function altFoldNodes(handle) {
+  return [...(document.querySelectorAll?.('.ui-alt') || [])].filter((n) => n.dataset?.uiAlt === handle);
+}
+
+function altToggleNodes(handle) {
+  return [...(document.querySelectorAll?.('.ui-alt-toggle') || [])]
+    .filter((n) => n.dataset?.uiAltToggle === handle);
+}
+
+/**
+ * 摊开 / 合上一件界面的文字版。返回 false = 界面上没有这一件（重画把它换掉了），
+ * 调用方据此说"没摊开"，不假装按下去有反应。
+ */
+function setAltOpen(handle, open) {
+  const folds = altFoldNodes(handle);
+  if (!folds.length) return false;
+  for (const fold of folds) fold.classList.toggle('is-open', open);
+  for (const btn of altToggleNodes(handle)) {
+    btn.setAttribute?.('aria-expanded', open ? 'true' : 'false');
+    btn.textContent = open ? '收起文字版' : '文字版';
+  }
+  return true;
+}
+
+function altIsOpen(handle) {
+  return altFoldNodes(handle).some((fold) => fold.classList.contains('is-open'));
+}
+
+/**
+ * 摊开着的文字版跟着此刻的状态重算：sketch 拖过、mark 落过、callout 点开过之后，
+ * 界面不许停在旧的那堆字上——抄走读的是现在，摊开的也必须是现在。
+ */
+function refreshAltText(handle) {
+  for (const fold of altFoldNodes(handle)) {
+    if (!fold.classList.contains('is-open')) continue;
+    fold.innerHTML = uiTakeawayHtml(handle);
+  }
+}
+
+/**
+ * 抄走：交出去的就是这件界面此刻的那几行，摊开看到什么就抄走什么。
+ * 剪贴板打不到（非安全上下文 / 用户没给权限）不是失败到底——把文字摊开、说清楚，
+ * 让学习者自己选中复制；这一档的目标是"内容不锁在图里"，不是"必须走剪贴板"。
+ */
+async function copyAltText(handle) {
+  const lines = uiTakeaway(handle);
+  const failed = (why) => {
+    const shown = setAltOpen(handle, true);
+    toast(shown ? `${why}，文字已经摊开，选中即可复制` : `${why}，这一件界面也不在屏幕上了`, true);
+    return false;
+  };
+  if (!lines.length) {
+    // 认不出这件界面（刚被改版换掉）：不假装抄走了什么，照实说。
+    const shown = setAltOpen(handle, true);
+    toast(shown ? '这一件界面的文字已经摊开，选中即可复制' : '这件界面刚刚被换掉了，没有可抄的文字', true);
+    return false;
+  }
+  const clip = globalThis.navigator?.clipboard;
+  if (typeof clip?.writeText !== 'function') return failed('这个页面用不了剪贴板');
+  try {
+    await clip.writeText(lines.join('\n'));
+    toast('已抄走这几行，贴到别处还是它');
+    announce('已抄走这几行');
+    return true;
+  } catch {
+    return failed('剪贴板没打到');
+  }
+}
+
 // input 是拖动中的每一帧，change / click / keydown 是落定。经过只认落定那一下。
 let uiSettling = true;
 
@@ -3733,6 +3816,22 @@ function handleUiDeskEvent(evt) {
   if (handoffId) {
     const ok = handoffUiState(handoffId);
     return ok ? { handled: true, kind: 'handoff', id: handoffId } : { handled: false };
+  }
+
+  // 文字版 / 抄走（第八十轮）：画出来的那一族把同一份文字摊开、交回剪贴板。
+  // 两个都是真 <button>，键盘天然可走；只认这两枚 data，不认档位。
+  // 排在 mark 之前：它们是按钮上的按一下，不该被"点在按钮上顺手标了一处"抢走。
+  const altHandle = node.dataset?.uiAltToggle;
+  if (altHandle !== undefined) {
+    const open = !altIsOpen(altHandle);
+    const ok = setAltOpen(altHandle, open);
+    if (ok) announce(open ? '文字版摊开了' : '文字版合上了');
+    return ok ? { handled: true, kind: 'alt-toggle', id: altHandle, open } : { handled: false };
+  }
+  const copyHandle = node.dataset?.uiCopy;
+  if (copyHandle !== undefined) {
+    const done = copyAltText(copyHandle);
+    return { handled: true, kind: 'alt-copy', id: copyHandle, done };
   }
 
   // mark（第七十九轮）：点图上落一处、点记号掉一处。放在 handoff 之后——递回那句话
@@ -4323,6 +4422,8 @@ function repaintUiCallout(id) {
       }
     }
   }
+  // 摊开着的文字版跟着这一帧重算（第八十轮）：此刻正看着哪一块，文字版里也得有。
+  refreshAltText(id);
 }
 
 /**
@@ -6468,6 +6569,11 @@ export const __hooks = {
   removeUiMark,
   handleUiMarkClick,
   uiPointOf,
+  // 第八十轮：文字版 + 抄走（画出来的那一族的同一份文字，两个出口）
+  setAltOpen,
+  altIsOpen,
+  refreshAltText,
+  copyAltText,
   textBlock,
   // 配置备份（第十四轮）：设置面板里的导出/导入设置块
   renderConfig,

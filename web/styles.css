@@ -927,6 +927,29 @@ html, body {
 .ui-handoff:hover { color: var(--ink); border-color: var(--ink-2); }
 .ui-handoff:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* 文字版 + 抄走（第八十轮）：画出来的那一族的同一份文字，两个出口。
+   未点开时按 .sr-only 那一套裁着——读屏照旧读得到，只是不占屏幕（第五十二轮立的
+   "读屏要跟着状态走"不许退成 display:none）。点开就摊在该档下面，抄走读的是同一批节点。
+   底色仍只借量过的 --surface-2，不引新配色。 */
+.ui-takeaway { position: relative; margin: 2px 0 1em; }
+.ui-takeaway-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.ui-alt-toggle, .ui-alt-copy {
+  padding: 5px 12px; background: var(--surface-2); color: var(--ink-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  font-size: 12.5px; cursor: pointer;
+}
+.ui-alt-toggle:hover, .ui-alt-copy:hover { color: var(--ink); border-color: var(--ink-2); }
+.ui-alt-toggle:focus-visible, .ui-alt-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-alt {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+.ui-alt.is-open {
+  position: static; width: auto; height: auto; margin: 8px 0 0; overflow: visible;
+  clip-path: none; white-space: normal;
+}
+.ui-alt-line { margin: 0 0 3px; color: var(--ink-2); font-size: 12.5px; line-height: 1.55; }
+
 /* suggest（第三十轮）：回答末尾的"往哪走"分支条，学 IUI 的 tappable suggestion chips，
    但点一下只填进输入框、不自动发。底色仍只借 --surface-2（那条"底色全用量过的 surface-2"
    的账不许破），hover 只换文字与描边，不引新背景、不新花十六进制。 */

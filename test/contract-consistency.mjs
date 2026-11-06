@@ -1226,7 +1226,7 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   // 比的是"有哪几种"，不是"各写了几处"：同一个记号在两个档里都写一次是常事（data-ui-name
   // 先由 form 写、第四十七轮 map 的点也写）——名字对得上就行，多一种没人读的才该红。
   check('编译器一共只写这几个 data-*（多一个就是多一条没人读的记号，契约测试会把它认成断线）',
-    [...new Set(emittedAttrs)].sort().join(',') === 'ui-arrange,ui-arrange-bin,ui-arrange-item,ui-arrange-move,ui-ask-opt,ui-ask-skip,ui-ask-submit,ui-bucket,ui-calc,ui-callout,ui-callout-mark,ui-chart,ui-chart-snap,ui-check,ui-diagram,ui-dir,ui-explore,ui-explore-tab,ui-field,ui-form,ui-game,ui-game-try,ui-handle,ui-handoff,ui-item,ui-map,ui-map-stop,ui-mark,ui-mark-add,ui-mark-cross,ui-mark-holder,ui-mark-layer,ui-mark-readout,ui-mark-slot,ui-name,ui-node,ui-param,ui-sketch,ui-sketch-formula,ui-sketch-link,ui-sketch-readout,ui-slider,ui-suggest,ui-tab-name,ui-try-name,ui-walk,ui-walk-next,ui-walk-prev',
+    [...new Set(emittedAttrs)].sort().join(',') === 'ui-alt,ui-alt-toggle,ui-arrange,ui-arrange-bin,ui-arrange-item,ui-arrange-move,ui-ask-opt,ui-ask-skip,ui-ask-submit,ui-bucket,ui-calc,ui-callout,ui-callout-mark,ui-chart,ui-chart-snap,ui-check,ui-copy,ui-diagram,ui-dir,ui-explore,ui-explore-tab,ui-field,ui-form,ui-game,ui-game-try,ui-handle,ui-handoff,ui-item,ui-map,ui-map-stop,ui-mark,ui-mark-add,ui-mark-cross,ui-mark-holder,ui-mark-layer,ui-mark-readout,ui-mark-slot,ui-name,ui-node,ui-param,ui-sketch,ui-sketch-formula,ui-sketch-link,ui-sketch-readout,ui-slider,ui-suggest,ui-tab-name,ui-try-name,ui-walk,ui-walk-next,ui-walk-prev',
     [...new Set(emittedAttrs)].sort().join(','));
   for (const attr of new Set(emittedAttrs)) {
     const key = attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
@@ -1857,6 +1857,107 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   check('曲线复用 data-ui-slider / data-ui-param（宿主不新认一条通道）',
     /data-ui-slider="\$\{escapeHtml\(id\)\}" data-ui-param="\$\{escapeHtml\(p\.name\)\}"/.test(uiSrc78),
     '曲线的滑杆记号与 calculator 不再是同一套');
+}
+
+
+// ── 第八十轮：文字版 + 抄走（画出来的那一族的一份文字，两个出口）。
+//    IUI 的外部批评有两条落在这间屋子里：内容被关在生成出来的组件里（抄不走、带不走），
+//    无障碍那份替代文字只有读屏拿得到（明眼人看不见也选不中）。这一轮把那份文字升成
+//    人人都能用的出口。这一族最容易坏的方式是"只改了一处"：少一档登记自己的文字，
+//    那一档的图就照旧锁在像素里；宿主自己拼一遍字，两份迟早跟图对不上。
+//    以下契约把这些对照钉死——名单、话术、样式、提示四处必须说同一件事。
+{
+  const uiSrc80 = fs.readFileSync(path.join(app, 'web', 'ui-compile.js'), 'utf8');
+  const hostSrc80 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+  const stylesSrc80 = fs.readFileSync(path.join(app, 'web', 'styles.css'), 'utf8');
+  const promptSrc80 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+  const readmeSrc80 = fs.readFileSync(path.join(app, 'README.md'), 'utf8');
+
+  /** 从源码里抠出一档编译函数的函数体（到下一个顶层 `function ` 为止）。 */
+  const fnBody80 = (name) => {
+    const at = uiSrc80.indexOf(`function ${name}(`);
+    if (at < 0) return null;
+    const next = uiSrc80.indexOf('\nfunction ', at + 1);
+    return uiSrc80.slice(at, next < 0 ? uiSrc80.length : next);
+  };
+
+  const listLit80 = (name) => {
+    const m = new RegExp(`export const ${name} = \\[([^\\]]*)\\]`).exec(uiSrc80);
+    return m ? [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]) : null;
+  };
+  const drawn = listLit80('UI_DRAWN');
+  const kinds80 = listLit80('UI_KINDS');
+
+  // ① 名单：这一族是谁、为什么是这几个
+  check('能解析出画出来的那一族的名单（解析不出来就别装作测过了）',
+    Boolean(drawn && drawn.length > 0), `UI_DRAWN=${drawn && drawn.join(',')}`);
+  check('名单里每一档都在封闭词表里（名单不是第二套词汇）',
+    (drawn || []).every((k) => (kinds80 || []).includes(k)),
+    (drawn || []).filter((k) => !(kinds80 || []).includes(k)).join(','));
+  check('名单点是那六档：diagram / map / figure / sketch / callout / mark',
+    (drawn || []).slice().sort().join(',') === 'callout,diagram,figure,map,mark,sketch', (drawn || []).join(','));
+  check('chart 不在这一族里：它的数据出口本来就是那张看得见的表（缺口写在 README 已知边界）',
+    !(drawn || []).includes('chart') && readmeSrc80.includes('chart') &&
+      /文字版/.test(readmeSrc80) && /已知边界/.test(readmeSrc80), 'chart 的账没对上');
+
+  // ② 每一档都必须交出alt：少一档 = 那一档的图照旧锁在像素里
+  for (const kind of drawn || []) {
+    const body = fnBody80('compile' + kind[0].toUpperCase() + kind.slice(1));
+    check(`「${kind}」这一档登记了自己的文字（alt 交出行数组）`,
+      Boolean(body) && /alt: \{/.test(body) && /lines:/.test(body),
+      body ? body.slice(0, 80) : '找不到这一档的编译函数');
+    check(`「${kind}」不再另写一份 .sr-only（一份文字只长一处）`,
+      Boolean(body) && !/class="sr-only"/.test(body), `${kind} 里还留着第二份文字`);
+  }
+  check('会动的哪几档把文字交给"此刻"（live 生成器：缓存的那份会停在旧位置）',
+    /live: \(\) => sketchAlt\(readUiState\(id\)/.test(uiSrc80) &&
+      /live: \(\) => markTextLines\(markSlotsFrom\(readUiState\(id\)/.test(uiSrc80) &&
+      /live: \(\) => \{\n/.test(uiSrc80), 'sketch / mark / callout 少了一枚 live');
+  check('文字版的长法只有一处（altLinesHtml 一处定义，编译与宿主共用）',
+    (uiSrc80.match(/function altLinesHtml/g) || []).length === 1 &&
+      /export function uiTakeawayHtml\(handle\)/.test(uiSrc80) &&
+      !/ui-alt-line/.test(hostSrc80), '宿主在拼第二遍字');
+
+  // ③ 接线：按钮带 handle、宿主读得到、抄走与摊开同一只出口
+  check('编译器把 handle 写进按钮（宿主不必去 DOM 上找自己长出来的东西）',
+    /data-ui-alt-toggle="\$\{h\}"/.test(uiSrc80) && /data-ui-copy="\$\{h\}"/.test(uiSrc80) &&
+      /data-ui-alt="\$\{h\}"/.test(uiSrc80), '三枚记号少了一枚');
+  for (const [attr, key] of [['ui-alt-toggle', 'uiAltToggle'], ['ui-copy', 'uiCopy'], ['ui-alt', 'uiAlt']]) {
+    check(`宿主按 dataset.${key} 读 data-${attr}`,
+      new RegExp('dataset\\??\\.' + key).test(hostSrc80), `app.js 里找不到 dataset.${key}`);
+  }
+  check('抄走与摊开读同一个口（两份出口一份文字，抄走的必须是他刚看见的）',
+    /uiTakeaway\(handle\)/.test(hostSrc80) && /uiTakeawayHtml\(handle\)/.test(hostSrc80) &&
+      hostSrc80.includes('.join(\'\\n\')'), '宿主没走编译器那一份');
+  check('剪贴板打不到有退路：摊开那句人话在界面上说得出口（不静默失败）',
+    hostSrc80.includes('文字已经摊开，选中即可复制') && /toast\([^)]*, true\)/.test(hostSrc80),
+    '抄不走的那一路没话说');
+  check('画出来的那一族每次落定都刷摊开的那一份（sketch / mark / callout 三处）',
+    (hostSrc80.match(/refreshAltText\(id\);/g) || []).length === 3,
+    `刷新点=${(hostSrc80.match(/refreshAltText\(id\);/g) || []).length} 处`);
+
+  // ④ 样式：合着时读屏读得到，不许退成 display:none
+  check('合着的文字版是裁掉的、不是 display:none（读屏那份不能跟着一起没）',
+    /\.ui-alt\s*\{[^}]*clip-path:\s*inset\(50%\)/.test(stylesSrc80) &&
+      !/\.ui-alt\s*\{[^}]*display:\s*none/.test(stylesSrc80), 'styles.css 里 .ui-alt 的形状不对');
+  check('点开是同一批节点（.is-open 放回排版，不新长一份字）',
+    /\.ui-alt\.is-open\s*\{[^}]*clip-path:\s*none/.test(stylesSrc80), 'styles.css 里没有 .ui-alt.is-open');
+  check('两枚按钮走键盘可见（focus-visible 那一条描边在）',
+    /\.ui-alt-toggle:focus-visible, \.ui-alt-copy:focus-visible/.test(stylesSrc80), '按钮没有焦点样式');
+
+  // ⑤ 提示与 README 说的是同一件事（教了才可能写对；写了不教=偷偷多了一条出口）
+  check('提示第二十二条说的是这一族的文字版（硬规矩排到 22）',
+    /^22\. \*\*/m.test(promptSrc80) && promptSrc80.includes('二十二条硬规矩') &&
+      promptSrc80.includes('文字版') && promptSrc80.includes('抄走'), '硬规矩没排到 22，或这一条没教');
+  check('提示劝退"正文再复述一遍图"（与算式那条分工同一把尺）',
+    promptSrc80.includes('不要把同一张图再散文复述一遍'), '提示里没有这条分工');
+  check('提示要求这份文字单独也读得通（它会被抄出这个应用）',
+    promptSrc80.includes('单独也读得通') && promptSrc80.includes('抄出这个应用'), '提示没说要写给应用外面的人看');
+  check('README 的 6.4 写了这两个出口（文档随代码长）',
+    readmeSrc80.includes('文字版') && readmeSrc80.includes('抄走') && readmeSrc80.includes('UI_DRAWN'),
+    'README 里找不到这一轮');
+  check('README 的已知边界记下 chart 还没接上（缺口要写在明处）',
+    /## 10\. 已知边界[\s\S]*?chart[\s\S]*?文字版/.test(readmeSrc80), '已知边界里没这条');
 }
 
 console.log(`\n${'─'.repeat(52)}`);

@@ -50,6 +50,21 @@ export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'met
  */
 export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map', 'arrange', 'sketch', 'callout', 'mark'];
 
+/**
+ * 画出来的那一族（第八十轮）：这一族的内容活在像素与编号里——SVG 的节点框、折线、
+ * 圆点，屏幕上看得见的只是几个短标签（还会被 fitText 截断），没点开的那一块干脆不在
+ * 眼前。宿主本来为读屏另写过一份文字替代，可它锁在 .sr-only 里：读屏拿得到，
+ * 明眼人既看不见也选不中，想抄进自己的笔记只能重打一遍。
+ *
+ * 这一轮把那份文字升成**人人都能用**：常驻界面下面，摊得开（同一批字，不会长两个版本）、
+ * 也一键抄走。名单是契约测试的抓手——这一族每一档都必须交出 alt，少一档就红；
+ * 与"词表封闭"同一脾气：纪律靠对照活着，不靠散文自觉。
+ *
+ * chart 不在名单里，不是忘了它：它的数据出口本来就是 `table:` 那张看得见的表
+ * （第五十四轮立的），这一轮不去动它，缺口记在 README「已知边界」。
+ */
+export const UI_DRAWN = ['diagram', 'map', 'figure', 'sketch', 'callout', 'mark'];
+
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
 const MAX_TEXT = 240;
@@ -100,6 +115,61 @@ function handoffButton(id, label) {
   );
 }
 
+/**
+ * 文字版 + 抄走（第八十轮）：一份 alt 的两个出口，长在画出来的那几档下面。
+ *
+ *  · 「文字版」是**同一批节点**换一种可见法：默认按读屏那份的样式裁着（读屏照旧读得到），
+ *    点开就摊在屏幕上给明眼人读。不是"隐藏一份 + 再写一份"——那样两份迟早漂开
+ *    （与 chart 的 `table:` 同一把尺：一份数据，两种表示）。
+ *  · 「抄走」交给剪贴板的是同一个生成器此刻算出的那几行，摊开的是什么就抄走什么。
+ *
+ * 按钮带着 handle，宿主不必去 DOM 上找自己长出来的东西（DOM 桩不认 data-*，
+ * 那条路在测试里是假的——编译器自己上报降级用的就是同一个理由）。
+ */
+function takeawaySlot(handle, lines) {
+  const h = escapeHtml(String(handle));
+  return (
+    `<div class="ui-takeaway">` +
+    `<p class="ui-takeaway-bar">` +
+    `<button type="button" class="ui-alt-toggle" data-ui-alt-toggle="${h}" aria-expanded="false">文字版</button>` +
+    `<button type="button" class="ui-alt-copy" data-ui-copy="${h}">抄走</button>` +
+    `</p>` +
+    `<div class="ui-alt" data-ui-alt="${h}">` +
+    altLinesHtml(lines) +
+    `</div>` +
+    `</div>`
+  );
+}
+
+/** 那几行的长法只有一处：宿主刷新摊开的那一份时借同一只手，不另写一遍（两处各写一遍迟早漂）。 */
+function altLinesHtml(lines) {
+  return (lines || []).map((line) => `<p class="ui-alt-line">${escapeHtml(line)}</p>`).join('');
+}
+
+/**
+ * 画出来的那一族的两个出口接在一起：登记这份文字的生成器，并把摊开的那一小条长出来。
+ *
+ * · pending 时不接：还在流里的图，文字版跟着下一帧一起到，不摆一枚按了没反应的按钮。
+ * · 只读编译（服务端认围栏）不登记：读一段历史不该往浏览器这本账里塞东西，
+ *   而且生成器闭包读的是浏览器才有的状态账。
+ * · handle 优先用 id（跨改版、跨刷新都认它），静态那一族（figure）没有 id，用编译键。
+ * · 这本账有上限：id 是复用的（改版不新增键），编译键不是——同一段图每改一次就换一个键，
+ *   不设上限就等于每改一遍留一份。挤掉最久没动过的那一个（与 ui-trace / ui-ledger 同一把尺）。
+ */
+const UI_ALT_MAX = 400;
+
+function drawnTakeaway(r, key) {
+  if (!r.alt || r.pending) return '';
+  const handle = String(r.alt.id || key);
+  const lines = r.alt.lines || [];
+  if (!lines.length) return '';
+  if (stateWrites) {
+    uiAlts.set(handle, r.alt.live || (() => lines));
+    while (uiAlts.size > UI_ALT_MAX) uiAlts.delete(uiAlts.keys().next().value);
+  }
+  return takeawaySlot(handle, lines);
+}
+
 // ── 状态侧存：DOM 会被流式重画，状态不能住在 DOM 里 ──────────────────────
 /**
  * id → { kind, state, spec }。
@@ -137,6 +207,7 @@ export function setUiValues(id, kind, state) {
 
 export function resetUiState() {
   uiState.clear();
+  uiAlts.clear();
 }
 
 /**
@@ -147,6 +218,44 @@ export function resetUiState() {
  */
 export function uiStateIds() {
   return [...uiState.keys()];
+}
+
+// ── 文字版（第八十轮）：画出来的那一族交出的那份文字，摊得开也抄得走 ──────────
+/**
+ * handle → () => 行数组。
+ *
+ * 为什么不直接缓存那份行数组：sketch 与 mark 的内容有一部分是**学习者此刻摆上去的**，
+ * 拖点与落记号走的是宿主就地重画（不重新编译围栏）。缓存的那份会在他拖完之后
+ * 停在旧位置上——抄走一堆跟他眼前不一致的字，比不给他更糟。所以存的是**生成器**：
+ * 抄的那一刻现算，读的是这本状态账里的现在。
+ *
+ * handle 用 id（有状态的档，跨改版跨刷新都认它），静态那一族（figure）没有 id，
+ * 用编译键——同一份围栏同一份场上参数算同一个键，与它是不是"同一件界面"同一把尺。
+ */
+const uiAlts = new Map();
+
+/** 这件界面此刻的文字版。认不出 handle 就交回空数组（调用方据此退回摊开，不假装抄走了）。 */
+export function uiTakeaway(handle) {
+  const live = uiAlts.get(String(handle ?? ''));
+  if (!live) return [];
+  try {
+    return live() || [];
+  } catch {
+    return [];
+  }
+}
+
+/** 此刻登记了哪些 handle（与 uiStateIds 同一理由：多进来一个才是这一族真正要防的形状）。 */
+export function uiTakeawayIds() {
+  return [...uiAlts.keys()];
+}
+
+/**
+ * 摊开那一份要换字时用的 HTML：长法与编译时同一只手（altLinesHtml），
+ * 宿主不必知道每一行怎么拼——两处各写一遍迟早漂。
+ */
+export function uiTakeawayHtml(handle) {
+  return altLinesHtml(uiTakeaway(handle));
 }
 
 // ── 渲染档：第五十七轮起没有「只要文字」开关，IUI 默认全开。
@@ -465,19 +574,19 @@ function mapDir(x, y) {
 }
 
 /**
- * map 的读屏文字替代：SVG 里的圆点与折线是像素，读屏只能听到一句"示意地图"。
- * 这一段把"图上有哪些点、各在图框的哪个方位、那句话是什么、路线怎么走"写成句子；
- * 点仍然是可聚焦的按钮（role=group 让它们各自可达），文字替代负责补全结构。
+ * map 的文字版（第八十轮接手那份只给读屏的替代）：SVG 里的圆点与折线是像素，读屏本来
+ * 只能听到一句"示意地图"。这一段把"图上有哪些点、各在图框的哪个方位、那句话是什么、
+ * 路线怎么走"写成句子——同一批字，读屏读它，明眼人点开也读它，抄走抄它。
+ * 每个点的那句话在屏幕上只有点开那个点才露出来，所以这份文字版给的是**全部**，
+ * 不是"他此刻看见的那一句"。
  */
-function mapTextAlt(stops, route) {
+function mapAltLines(stops, route) {
   const points = stops
     .map((s) => `${s.name}（图框的${mapDir(s.x, s.y)}${s.note ? `，${s.note}` : ''}）`)
     .join('；');
-  const line = route.length ? `<p class="sr-only">路线：${escapeHtml(route.join(' → '))}。</p>` : '';
-  return (
-    `<p class="sr-only">图上的点：${escapeHtml(points)}。方向指在图框里的位置，不按比例。</p>` +
-    line
-  );
+  const lines = [`图上的点：${points}。方向指在图框里的位置，不按比例。`];
+  if (route.length) lines.push(`路线：${route.join(' → ')}。`);
+  return lines;
 }
 
 /**
@@ -647,16 +756,20 @@ function compileMap(fields, lines, partial) {
     : `<p class="ui-map-pane-hint">点一个点，看它在哪儿；位置是示意的，不按比例</p>`;
   // 读屏名里刻意不放点的个数：结构数量不是学情指标，但连 aria 里也不出现数字（同 diagram）。
   // 第五十二轮改口：真正要守的是"数值化的学情指标不进界面"，不是"数据里的数字不许进读屏"。
-  // 地图的点名、方位、那句话与路线是这张图的内容，读屏必须拿得到（见 mapTextAlt）。
+  // 地图的点名、方位、那句话与路线是这张图的内容，读屏必须拿得到（见 mapAltLines）——
+  // 第八十轮起那份文字不再只给读屏：它摊得开，也抄得走。
   const aria = (title ? `示意地图：${title}` : '示意地图：点与点之间的相对位置') + '（不按比例）';
   const body =
     `<div class="ui-map" data-ui-map="${escapeHtml(id)}">` +
-    mapTextAlt(stops, route) +
     `<svg class="ui-map-canvas" role="group" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${MAP_W} ${MAP_H}" width="${MAP_W}" height="${MAP_H}">` +
     `<title>${escapeHtml(aria)}</title>${mapInner(stops, route, active, id, true)}</svg>` +
     `<div class="ui-map-pane" aria-live="polite">${pane}</div>` +
     `</div>`;
-  return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'map' };
+  return {
+    html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`,
+    shape: 'map',
+    alt: { id, lines: mapAltLines(stops, route) },
+  };
 }
 
 /** map 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game / walk / form 同一把尺）。 */
@@ -1531,18 +1644,16 @@ function fitText(s, maxChars) {
 }
 
 /**
- * diagram 的读屏文字替代（第五十二轮）：SVG 的 <title> 只报"这是什么"，节点矩形与
- * 连线对读屏仍是像素。role="group" 让每个可聚焦节点各自可达；这一段再把整张图的
- * 结构用两句人话补全（有哪些节点、谁指向谁）。不写数量、不写坐标——数量不是这张
- * 图的信息，数字只在"正在教的数据"里出现（chart 的逐点数据表）。
+ * diagram 的文字版（第八十轮接手第五十二轮那份读屏替代）：SVG 的 <title> 只报"这是什么"，
+ * 节点矩形与连线对读屏仍是像素。这一段把整张图的结构写成两行话（有哪些节点、各是哪一句、
+ * 谁指向谁、边上那句是什么），并且**一次两用**：读屏读它，明眼人点开也读它，抄走抄它。
+ * 屏幕上被 fitText 截短的节点名与边标签，在这里都是全文——截断只是为了塞进框，不是内容少了一截。
+ * 不写数量、不写坐标：数量不是这张图的信息，数字只在"正在教的数据"里出现（chart 的数据表）。
  */
-function diagramTextAlt(nodes, edges) {
+function diagramAltLines(nodes, edges) {
   const nodeBits = nodes.map((n) => (n.note ? `${n.name}（${n.note}）` : n.name));
   const edgeBits = edges.map((e) => `${e.src} → ${e.dst}${e.label ? `（${e.label}）` : ''}`);
-  return (
-    `<p class="sr-only">图里的节点：${escapeHtml(nodeBits.join('、'))}。</p>` +
-    `<p class="sr-only">图里的连线：${escapeHtml(edgeBits.join('；'))}。</p>`
-  );
+  return [`图里的节点：${nodeBits.join('、')}。`, `图里的连线：${edgeBits.join('；')}。`];
 }
 
 /**
@@ -1709,16 +1820,19 @@ function compileDiagram(fields) {
     })
     .join('');
 
-  // 读屏名只报"这是什么"，不塞节点/边的数量：数量不是这张图的信息，人话留给下面的
-  // 文字替代（diagramTextAlt）。data-ui-diagram 是这一整块的归属 id：宿主点击时靠它
-  // 知道"点的是哪张图"，重画时靠它把高亮续回来。
+  // 读屏名只报"这是什么"，不塞节点/边的数量：数量不是这张图的信息，人话在文字版里
+  // （diagramAltLines，第八十轮起它同时是明眼人摊开得的那份）。data-ui-diagram 是这一
+  // 整块的归属 id：宿主点击时靠它知道"点的是哪张图"，重画时靠它把高亮续回来。
   const aria = title ? `关系图解：${title}` : '关系图解：节点与连线表示概念或步骤之间的关系';
   const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
   const body =
-    diagramTextAlt(nodes, edges) +
     `<svg class="ui-diagram" data-ui-diagram="${escapeHtml(id)}" role="group" aria-label="${escapeHtml(aria)}" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">` +
     `<title>${escapeHtml(aria)}</title>${marker}${edgeEls}${nodeEls}</svg>`;
-  return { html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`, shape: 'diagram' };
+  return {
+    html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`,
+    shape: 'diagram',
+    alt: { id, lines: diagramAltLines(nodes, edges) },
+  };
 }
 
 // ── 自由图解 ────────────────────────────────────────────────────────────
@@ -2139,7 +2253,25 @@ function parseFigureScene(fields, partial, kindName, { requireShape = true } = {
   if (!alt && !partial) {
     return { error: '没有 alt：写一句"这张图让人看到什么"——写不出来，就说明这张图还不该画' };
   }
-  return { W, H, title, alt, shapes, labels, arrows, rawFrame };
+  return { W, H, title, alt, shapes, labels, arrows, rawFrame, parts: [...names] };
+}
+
+/**
+ * 画出来的那张图的文字版（第八十轮）：形状的名字本来只活在 <title> 的悬停里，图上的
+ * 字在 SVG 里会被 fitText 截短，箭头那句话只有眼睛扫得到——读屏拿到的从来只有一句 alt。
+ * 这里交的是**全文**：那句"这张图让人看到什么" + 构件叫什么 + 图上写的字 + 箭头指着什么。
+ * 坐标不进这份文字：像素不是内容（第五十二轮那把尺），构件的名字与图上那句话才是。
+ * 这份行数组一次两用——摊开得、读得到、抄得走，不存在第二份会跟它漂开的文字。
+ */
+function figureAltLines(scene) {
+  const lines = [];
+  if (scene.title) lines.push(`图题：${scene.title}`);
+  lines.push(`这张图让人看到什么：${scene.alt}`);
+  if (scene.parts?.length) lines.push(`画了：${scene.parts.join('、')}`);
+  if (scene.labels?.length) lines.push(`图上写的字：${scene.labels.map((l) => l.text).join('、')}`);
+  const arrowLabels = (scene.arrows || []).map((a) => a.label).filter(Boolean);
+  if (arrowLabels.length) lines.push(`箭头指着：${arrowLabels.join('、')}`);
+  return lines;
 }
 
 function compileFigure(fields, lines, partial) {
@@ -2179,7 +2311,14 @@ function compileFigure(fields, lines, partial) {
     `<path class="ui-fig-arrow-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>` +
     shapes.join('') + arrowEls + labelEls +
     `</svg>`;
-  return { html: `${cap}${svg}`, shape: 'figure', pending: partial || undefined };
+  // figure 没有 id（静态图没有"学习者做过什么"可记），文字版挂在编译键上：
+  // 同一份围栏、同一份场上参数、同一个"长完没长完"= 同一件界面（第六十五轮那把尺）。
+  return {
+    html: `${cap}${svg}`,
+    shape: 'figure',
+    pending: partial || undefined,
+    alt: { id: null, lines: figureAltLines(scene) },
+  };
 }
 
 /** 类型的开放形状不填色（折线围起来的"里面"不是内容的一部分）。 */
@@ -2438,11 +2577,44 @@ function compileSketch(fields, lines, partial) {
     `<p class="ui-sketch-readout" data-ui-sketch-readout="${escapeHtml(id)}" aria-live="polite">${escapeHtml(readout)}</p>` +
     `${formulaEls}` +
     `<p class="ui-sketch-hint">拖动圆点改位置；聚焦后方向键微调（Shift 走大步）。这里只记你摆的样子，不判对错</p>`;
+  // 文字版 = 图形那一份（图题 / alt / 画了 / 图上写的字 / 箭头指着）+ 他摆的点 + 连线 + 量。
+  // 后三行跟着他走：拖点与键盘微调是宿主就地重画，不重新编译围栏，所以登记的是生成器
+  // ——抄走的那一刻现算，读的是这本账的现在，不会停在旧位置上骗他。
+  const altBase = figureAltLines(scene);
+  const sketchAlt = (stateNow) => [...altBase, ...sketchAltLines(spec, stateNow)];
   return {
     html: `${cap}${svg}${out}${handoff ? handoffButton(id, handoff) : ''}`,
     shape: 'sketch',
     pending: partial || undefined,
+    alt: { id, lines: sketchAlt(state), live: () => sketchAlt(readUiState(id)?.state || {}) },
   };
+}
+
+/**
+ * sketch 里那三行**跟着手走**的文字：点现在摆在哪、连线怎么连、那条量此刻算出多少。
+ * 坐标照屏幕上的读数抄——这一档图上本来就写着「甲 160,90」（第七十二轮立的），
+ * 读屏看得见、明眼人也看得见，抄走该是同一串，不必再分一种口径。
+ * 声明值与他摆的值在同一格里：没拖过的点写的是围栏里那个位置，不写"他没动过"。
+ */
+function sketchAltLines(spec, state) {
+  const lines = [];
+  const vals = {};
+  const where = [];
+  for (const h of spec.handles || []) {
+    const saved = figPoint(state?.[h.name]);
+    const p = saved && figInFrame(saved.x, saved.y, spec.W, spec.H) ? saved : figPoint(h.point);
+    if (!p) continue;
+    vals[`${h.name}.x`] = p.x;
+    vals[`${h.name}.y`] = p.y;
+    where.push(`${h.name} = ${figNum(p.x)},${figNum(p.y)}${h.hint ? `（${h.hint}）` : ''}`);
+  }
+  if (where.length) lines.push(`他摆的点：${where.join('；')}。`);
+  const links = (spec.links || []).map((l) => `${l.a} — ${l.b}${l.label ? `（${l.label}）` : ''}`);
+  if (links.length) lines.push(`连着：${links.join('；')}。`);
+  for (const f of spec.formulas || []) {
+    lines.push(`${f.out} = ${uiFormula(f.expr)} = ${uiOutText(f.expr, vals)}`);
+  }
+  return lines;
 }
 
 /** sketch 的专属词写在别的档 = 语义词写错档：不许静默吞（与 figure / stop / node 同一把尺）。 */
@@ -2593,7 +2765,6 @@ function compileCallout(fields, lines, partial) {
     `</svg>`;
   const body =
     `<div class="ui-callout" data-ui-callout="${escapeHtml(id)}">` +
-    `<p class="sr-only">图上的标注：${escapeHtml(list)}。点编号可以逐条看。</p>` +
     svg +
     `<div class="ui-callout-pane" aria-live="polite">${pane}</div>` +
     `</div>`;
@@ -2601,6 +2772,19 @@ function compileCallout(fields, lines, partial) {
     html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`,
     shape: 'callout',
     pending: partial || undefined,
+    alt: {
+      id,
+      lines: [...figureAltLines(scene), `图上的标注：${list}。点编号可以逐条看。`],
+      live: () => {
+        const now = readUiState(id)?.state || {};
+        const on = spec.parts.some((p) => p.name === now.active) ? now.active : null;
+        const seen = spec.parts.filter((p) => now.viewed?.[p.name]).map((p) => p.name);
+        const tail = [`图上的标注：${list}。点编号可以逐条看。`];
+        if (on) tail.push(`此刻正看着：${on}。`);
+        if (seen.length) tail.push(`已经点开过：${seen.join('、')}。`);
+        return [...figureAltLines(scene), ...tail];
+      },
+    },
   };
 }
 
@@ -2812,12 +2996,17 @@ function compileMark(fields, lines, partial) {
     `<g class="ui-mark-layer" data-ui-mark-layer="${escapeHtml(id)}">${markLayerSvg(id, slots, W, H)}</g>` +
     markCrossSvg(id, W / 2, H / 2, W, H) +
     `</svg>`;
-  // 读屏拿得到的结构替代：要指什么 + 键盘怎么走。此刻标在哪几处由下面那条 aria-live
-  // 读数播报（写在这里会在每次落定后变陈旧——第五十二轮立的那条"读屏要跟着状态走"）。
+  // 读屏拿得到的结构替代：要指什么 + 键盘怎么走 + 此刻标在哪几处。
+  // 这一份同时是"文字版"与"抄走"的正文——第三处文字不再存在（第八十轮）。
+  const markTextLines = (sl) => [
+    ...figureAltLines(scene),
+    `要你指：${ask}`,
+    `用键盘：${keys}`,
+    markReadoutText(sl, W, H),
+  ];
   const body =
     `<div class="ui-mark" data-ui-mark-holder="${escapeHtml(id)}">` +
     `<p class="ui-mark-ask">${cell(ask)}</p>` +
-    `<p class="sr-only">这张图要你指一处。${escapeHtml(ask)}。用键盘：${escapeHtml(keys)}。</p>` +
     svg +
     `<p class="ui-mark-hint">点图上任意处放一个记号，点记号掉它；聚焦后方向键移光标，Enter 标上。这里只记你指的地方，不判对错</p>` +
     `<p class="ui-mark-readout" data-ui-mark-readout="${escapeHtml(id)}" aria-live="polite">${escapeHtml(markReadoutText(slots, W, H))}</p>` +
@@ -2827,6 +3016,11 @@ function compileMark(fields, lines, partial) {
     html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`,
     shape: 'mark',
     pending: partial || undefined,
+    alt: {
+      id,
+      lines: markTextLines(slots),
+      live: () => markTextLines(markSlotsFrom(readUiState(id)?.state || {}, W, H, max).slots),
+    },
   };
 }
 
@@ -3478,7 +3672,7 @@ function compileDeck(fields, lines, partial) {
         fence: ['kind: ' + part.kind, ...part.body].join('\n'),
       });
     }
-    blocks.push(`<div class="ui-deck-part">${r.html}</div>`);
+    blocks.push(`<div class="ui-deck-part">${r.html}${drawnTakeaway(r, uiKey(['kind: ' + part.kind, ...part.body], partial))}</div>`);
   }
   // 并排 vs 堆叠是编译器层的事，宿主不需要知道"这一块在不在并排里"（与 deck 本身同一手）。
   // 两个容器 class 都以字面量写进源码：契约那条"编译器吐的 class 都要有样式"靠这份
@@ -4452,7 +4646,8 @@ function compileUiBlockInner(lines, partial) {
       : id && UI_STATEFUL.includes(kind)
         ? [{ id, kind, title: pick(parsed.fields, 'title')[0] || '', fence: lines.join('\n') }]
         : [];
-    return { html: r.html, shape: r.shape, pending: r.pending || undefined, key, definitions };
+    // 第八十轮：画出来的那一族在下面接一份文字版（摊得开、抄得走）。
+    return { html: `${r.html}${drawnTakeaway(r, key)}`, shape: r.shape, pending: r.pending || undefined, key, definitions };
   } catch {
     return fail('编译时没兜住，原文照旧');
   }

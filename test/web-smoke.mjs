@@ -4560,9 +4560,9 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     /<svg[^>]*>[\s\S]{0,60}<title>关系图解：光合作用的两阶段<\/title>/.test(dg), dg.slice(0, 220));
   check('读屏名只是一句标题，不塞节点/边的数量（数量不是这张图的信息）',
     !/[0-9]/.test(/aria-label="[^"]*"/.exec(dg)?.[0] || ''), dg.slice(0, 160));
-  check('图外有一份读屏结构清单（节点与连线都写成句子，不是只活在像素里）',
-    dg.includes('<p class="sr-only">图里的节点：光反应（在类囊体膜上）、暗反应、卡尔文循环。</p>') &&
-    dg.includes('<p class="sr-only">图里的连线：光反应 → 暗反应（提供 ATP）；暗反应 → 卡尔文循环。</p>'),
+  check('图外有一份文字版（节点与连线都写成句子，摊得开也抄得走）',
+    dg.includes('<p class="ui-alt-line">图里的节点：光反应（在类囊体膜上）、暗反应、卡尔文循环。</p>') &&
+    dg.includes('<p class="ui-alt-line">图里的连线：光反应 → 暗反应（提供 ATP）；暗反应 → 卡尔文循环。</p>'),
     dg.slice(0, 600));
   check('同一份输入两次编译长得一模一样（流式每帧重编，坐标不许跳）',
     compile40(dgLines).html === dg, '');
@@ -4632,8 +4632,8 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     dgEvil.includes('&lt;img') && !/<img/.test(dgEvil), dgEvil.slice(0, 200));
   check('属性位也转义（title / aria / data 里的引号挤不出事件处理器）',
     !/" onclick=/.test(dgEvil) && dgEvil.includes('&quot;'), dgEvil.slice(0, 200));
-  check('文字替代也走转义（结构清单不是绕过 XSS 的后门）',
-    dgEvil.includes('图里的节点：&lt;img') && (dgEvil.match(/class="sr-only"/g) || []).length === 2, dgEvil.slice(0, 300));
+  check('文字版也走转义（那几行不是绕过 XSS 的后门）',
+    dgEvil.includes('图里的节点：&lt;img') && (dgEvil.match(/class="ui-alt-line"/g) || []).length === 2, dgEvil.slice(0, 300));
 
   // 6) 渲染器接线：diagram 走同一条 ```ui 围栏路，别的围栏不受影响
   const dgRendered = md40.renderMarkdown('先看图：\n\n```ui\nkind: diagram\nid: dg4\nnode: 甲\nnode: 乙\nedge: 甲 -> 乙\n```\n\n再解释', { partial: true });
@@ -6360,9 +6360,9 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     c52.includes('class="ui-cap"') && c52.includes('class="ui-handoff" data-ui-handoff="g318"'), c52.slice(-300));
   check('读屏名里说清"不按比例"（示意的框不能读成真地图）',
     c52.includes('aria-label="示意地图：318 国道东段（不按比例）"'), c52.slice(0, 400));
-  check('图外有一份读屏文字替代（点、方位、那句话、路线都写成句子）',
-    c52.includes('<p class="sr-only">图上的点：成都（图框的西南部，起点，平原上的菜市场）；康定（图框的中部，折多山从这里开始）；林芝（图框的东部，三月桃花）；拉萨（图框的东北部，终点）。方向指在图框里的位置，不按比例。</p>') &&
-    c52.includes('<p class="sr-only">路线：成都 → 康定 → 林芝 → 拉萨。</p>'), c52.slice(0, 900));
+  check('图外有一份文字版（点、方位、那句话、路线都写成句子）',
+    c52.includes('<p class="ui-alt-line">图上的点：成都（图框的西南部，起点，平原上的菜市场）；康定（图框的中部，折多山从这里开始）；林芝（图框的东部，三月桃花）；拉萨（图框的东北部，终点）。方向指在图框里的位置，不按比例。</p>') &&
+    c52.includes('<p class="ui-alt-line">路线：成都 → 康定 → 林芝 → 拉萨。</p>'), c52.slice(0, 900));
   check('编译输出没有判分词，学习者也不看得见原始坐标（Invariant 4：位置不进学情）',
     !/score|percent|mastery|correct|incorrect/.test(c52) && !c52.includes('38,62'), c52.slice(0, 400));
   check('spec 里点与路线都存下了（点击时要取现成的那份，不重解析围栏）',
@@ -7625,8 +7625,11 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('figure 不写 id（静态图没有要在界面上留下的状态）',
     deg58(['kind: figure', 'alt: x', 'id: f1', 'shape: a | rect | 0,0,10,10']).includes('不写 id'),
     deg58(['kind: figure', 'alt: x', 'id: f1', 'shape: a | rect | 0,0,10,10']));
-  check('编译出的 DOM 里一个 data-ui-* 都没有（状态这条线根本没接到这一档）',
-    !/data-ui-/.test(h58));
+  // 文字版那三枚是"这份图的读法"，不是状态线：figure 到现在也没有一枚能把学习者动作存下来的 data。
+  check('除文字版那三枚，编译出的 DOM 里一个 data-ui-* 都没有（状态这条线根本没接到这一档）',
+    [...h58.matchAll(/data-(ui-[a-z-]+)=/g)].map((m) => m[1])
+      .filter((a) => !['ui-alt', 'ui-alt-toggle', 'ui-copy'].includes(a)).length === 0,
+    [...new Set([...h58.matchAll(/data-(ui-[a-z-]+)=/g)].map((m) => m[1]))].join(','));
   check('figure 不在 UI_STATEFUL 里（静态形状没有"他做过什么"这回事）',
     !ui58.UI_STATEFUL.includes('figure'));
 
@@ -8277,8 +8280,8 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     c62.includes('aria-label="第 1 处「车架」：承受骑手的重量（点开看）"'), c62.slice(700, 1500));
   check('面板开局给一句中性引导（还没点过，不替他声称看过）',
     c62.includes('<p class="ui-callout-pane-hint">点图上的编号，看那一块是什么</p>'), c62.slice(-500));
-  check('图外有一份读屏文字替代（第几处、名字、那句话都写成句子）',
-    c62.includes('<p class="sr-only">图上的标注：第 1 处 车架（承受骑手的重量）；第 2 处 车轮（与地面接触）。点编号可以逐条看。</p>'),
+  check('图外有一份文字版（第几处、名字、那句话都写成句子）',
+    c62.includes('<p class="ui-alt-line">图上的标注：第 1 处 车架（承受骑手的重量）；第 2 处 车轮（与地面接触）。点编号可以逐条看。</p>'),
     c62.slice(0, 600));
   check('title 帽 + handoff 按钮（沿交互档的既有出口）',
     c62.includes('<p class="ui-cap">七速自行车</p>') && c62.includes('class="ui-handoff" data-ui-handoff="c73"'), c62.slice(-400));
@@ -8911,8 +8914,10 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
       c66.includes('viewBox="0 0 320 180"'), c66.slice(0, 500));
   check('ask 是界面上第一句话（没有它这一档不成立）',
     c66.includes('<p class="ui-mark-ask">升力主要从哪一面来</p>'), c66.slice(0, 400));
-  check('读屏拿到这张图要你指一处，并知道键盘怎么走',
-    c66.includes('<p class="sr-only">这张图要你指一处。升力主要从哪一面来。用键盘：聚焦这张图后方向键移动光标（Shift 走大步），Enter 标上；标好的记号可聚焦，Enter 掉它。</p>'),
+  check('文字版里写清要指哪一处、键盘怎么走，也带上此刻标在哪几处',
+    c66.includes('<p class="ui-alt-line">要你指：升力主要从哪一面来</p>') &&
+      c66.includes('<p class="ui-alt-line">用键盘：聚焦这张图后方向键移动光标（Shift 走大步），Enter 标上；标好的记号可聚焦，Enter 掉它</p>') &&
+      c66.includes('<p class="ui-alt-line">现在还没有标上记号</p>'),
     c66.slice(0, 900));
   check('形状 / 标签 / 箭头照 figure 的词法长出来（这一档不新写一套几何）',
     c66.includes('<polygon class="ui-fig-shape is-solid" points="40,140 140,140 175,92 70,92">') &&
@@ -9202,6 +9207,268 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   globalThis.fetch = realFetch66;
   ui66.resetUiState();
   check('这一节无异常', errors.length === errsBefore66, errors.slice(errsBefore66).join(' | '));
+}
+
+// ─── 67. 文字版 + 抄走：画出来的那一族的文字不再锁在图里（第八十轮，学 Intelligent UI 那条外部批评）。
+// IUI 把内容交给生成出来的组件，外部的批评有两条：答案被关在富组件里，抄不走也带不走；
+// 无障碍那份替代文字只有读屏拿得到，明眼人看不见也选不中。这一轮把同一份文字做成
+// **人人都能用的两个出口**：常驻在图下面、点开摊开（同一批节点换可见法，不长第二份），
+// 一键抄走（交给剪贴板的是同一个生成器此刻算的那几行）。名单 UI_DRAWN 由契约测试逼着，
+// 少一档登记自己的文字就红——纪律靠对照活着，不靠散文自觉。
+{
+  console.log('\n67. 文字版 + 抄走（画出来的那一族：一份文字，两个出口）');
+  const errsBefore67 = errors.length;
+  const ui67 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const {
+    state: st67, handleUiDeskEvent: handle67,
+    setAltOpen: setAlt67, altIsOpen: altOpen67, refreshAltText: refreshAlt67, copyAltText: copyAlt67,
+    repaintUiMark: repaintMark67, repaintUiSketch: repaintSketch67,
+    placeUiMark: placeMark67,
+  } = appModule.__hooks;
+  const compile67 = (lines, partial) => ui67.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const cssText67 = fs.readFileSync(path.join(webDir, 'styles.css'), 'utf8');
+  const host67 = fs.readFileSync(path.join(webDir, 'app.js'), 'utf8');
+  ui67.resetUiState();
+
+  // 六档各一份能编出来的最小围栏（与前面几节同一批例子，认得出才算真的接上了）
+  const fixtures67 = {
+    diagram: ['kind: diagram', 'id: t67d', 'node: 光反应 | 在类囊体膜上', 'node: 暗反应', 'edge: 光反应 -> 暗反应 | 提供 ATP'],
+    map: ['kind: map', 'id: t67m', 'stop: 成都 | 15,80 | 起点', 'stop: 康定 | 40,45', 'route: 成都 > 康定'],
+    figure: ['kind: figure', 'alt: 一个矩形与一条对角线', 'shape: 甲 | rect | 10,10,60,40', 'label: 底边 | 40,60'],
+    sketch: ['kind: sketch', 'id: t67s', 'alt: 一条能拖的底边', 'handle: 甲 | 40,140 | 左端', 'handle: 乙 | 280,140', 'connect: 甲 > 乙 | 底边'],
+    callout: ['kind: callout', 'id: t67c', 'alt: 两个部件', 'shape: 车架 | rect | 40,60,180,30', 'callout: 变速器 | 100,90 | 换挡'],
+    mark: ['kind: mark', 'id: t67k', 'alt: 一处要指的地方', 'ask: 升力从哪一面来', 'shape: 机翼 | rect | 40,60,120,40'],
+  };
+  const got67 = {};
+  for (const [kind, lines] of Object.entries(fixtures67)) {
+    const r = compile67(lines, false);
+    got67[kind] = r;
+    check(`${kind}：下面长出一条文字版（两枚按钮 + 至少一行字）`,
+      !r.degraded && r.html.includes('class="ui-takeaway"') &&
+        /data-ui-alt-toggle="[^"]+"/.test(r.html) && /data-ui-copy="[^"]+"/.test(r.html) &&
+        r.html.includes('class="ui-alt-line"'),
+      (r.degraded || r.html.slice(-320)));
+    const handle = /data-ui-alt-toggle="([^"]+)"/.exec(r.html)?.[1];
+    check(`${kind}：抄走读的就是摊开的那几行（一份文字，两个出口）`,
+      ui67.uiTakeaway(handle).length > 0 &&
+        ui67.uiTakeaway(handle).every((line) => r.html.includes(`<p class="ui-alt-line">${line.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}</p>`)),
+      `${handle} → ${JSON.stringify(ui67.uiTakeaway(handle))}`);
+  }
+  check('名单里的每一档都真的登记了文字（少一档 = 契约测试该红的那一件事）',
+    ui67.UI_DRAWN.every((k) => Object.keys(fixtures67).includes(k)) &&
+      new Set(ui67.UI_DRAWN).size === 6,
+    ui67.UI_DRAWN.join(','));
+  check('handle 的口径：有 id 的档认 id，静态的 figure 认编译键',
+    /data-ui-alt-toggle="t67s"/.test(got67.sketch.html) &&
+      /data-ui-alt-toggle="ui-[0-9a-z-]+"/.test(got67.figure.html) &&
+      got67.figure.html.includes(`data-ui-alt-toggle="${got67.figure.key}"`),
+    got67.figure.html.slice(-260));
+  check('画出来的六档不再各自写一份 .sr-only（同一句话不长两处）',
+    Object.values(fixtures67).every((lines) => !/class="sr-only"/.test(compile67(lines, false).html)), '');
+  check('chart 那份 .sr-only 数据表照旧在（它的数据出口是 table: 那张看得见的表，这一轮不去动它）',
+    compile67(['kind: chart', 'series: 收入 = 1,2', 'series: 支出 = 2,3'], false).html.includes('class="sr-only"'), '');
+  check('非画出来的档不长了（对照表本来全文在屏幕上，抄选中即可）',
+    !compile67(['kind: compare', 'row: 甲 | 乙'], false).html.includes('ui-takeaway') &&
+      !compile67(['kind: checklist', 'id: t67l', 'item: 甲'], false).html.includes('ui-takeaway'), '');
+  ui67.resetUiState();
+  const ro67 = ui67.compileUiBlockRead(fixtures67.sketch);
+  check('只读编译（服务端认围栏那一手）不往这本账里登记：读一段历史不该改界面上的文字',
+    ro67.html.includes('ui-takeaway') && ui67.uiTakeawayIds().length === 0 &&
+      ui67.uiTakeaway('t67s').length === 0, ui67.uiTakeawayIds().join(','));
+
+  // 1) 摊开 / 合上：同一批节点换可见法，读屏那一份不搬家、不重写
+  // 节点照编译器那一份形状搭（class + data 两样都要有：宿主按 class 捞、按 data 认）。
+  const built67 = [];
+  const mkAlt67 = (handle, lines) => {
+    const wrap = doc.createElement('div'); wrap.className = 'ui-takeaway';
+    const bar = doc.createElement('p'); bar.className = 'ui-takeaway-bar';
+    const toggle = doc.createElement('button'); toggle.className = 'ui-alt-toggle';
+    toggle.dataset.uiAltToggle = handle;
+    toggle.textContent = '文字版';
+    toggle.setAttribute('aria-expanded', 'false');
+    const fold = doc.createElement('div'); fold.className = 'ui-alt'; fold.dataset.uiAlt = handle;
+    fold.innerHTML = lines.map((l) => `<p class="ui-alt-line">${l}</p>`).join('');
+    bar.append(toggle);
+    wrap.append(bar, fold);
+    domRoot.append(wrap);
+    built67.push(wrap);
+    return { wrap, fold, toggle };
+  };
+  const serveAlt67 = (handle, lines) => {
+    for (const old67 of built67.splice(0)) old67.remove();
+    return mkAlt67(handle, lines);
+  };
+
+  const a67 = serveAlt67('t67s', ['旧的那行']);
+  check('默认是合上的（界面上先看见图，字在那儿但不占地方）',
+    !a67.fold.classList.contains('is-open') && altOpen67('t67s') === false, a67.fold.className);
+  const r67t = handle67({ type: 'click', target: a67.toggle });
+  check('点「文字版」被接住：同一批节点摊开，不新长一份字',
+    r67t.handled === true && r67t.kind === 'alt-toggle' && r67t.open === true &&
+      a67.fold.classList.contains('is-open') && a67.fold.innerHTML === '<p class="ui-alt-line">旧的那行</p>',
+    JSON.stringify(r67t) + ' / ' + a67.fold.innerHTML);
+  check('按钮上那句话跟着换，aria-expanded 说清按下去是哪一个方向',
+    a67.toggle.getAttribute('aria-expanded') === 'true' && a67.toggle.textContent === '收起文字版',
+    `${a67.toggle.getAttribute('aria-expanded')} / ${a67.toggle.textContent}`);
+  handle67({ type: 'click', target: a67.toggle });
+  check('再点就合上：读屏那份还在原处（没搬走、没删掉）',
+    !a67.fold.classList.contains('is-open') && a67.toggle.getAttribute('aria-expanded') === 'false' &&
+      a67.toggle.textContent === '文字版' && a67.fold.parentNode === a67.wrap,
+    a67.toggle.getAttribute('aria-expanded'));
+
+  // 2) 跟状态一起活：拖过的点、落下的记号，摊开的文字里必须是现在这一刻
+  compile67(fixtures67.sketch, false);
+  compile67(fixtures67.mark, false);
+  const a67s = serveAlt67('t67s', ['占位']);
+  setAlt67('t67s', true);
+  repaintSketch67('t67s');
+  check('sketch 拖点之后摊开的那几行跟着改（不许停在编译那一刻的旧坐标）',
+    a67s.fold.innerHTML.includes('甲 = 40,140') && !a67s.fold.innerHTML.includes('占位'),
+    a67s.fold.innerHTML);
+  compile67(['kind: sketch', 'id: t67s', 'alt: 一条能拖的底边', 'handle: 甲 | 40,140 | 左端', 'handle: 乙 | 280,140'], false);
+  ui67.setUiValues('t67s', 'sketch', { uiKind: 'sketch', 甲: '96,63', 乙: '280,140' });
+  repaintSketch67('t67s');
+  check('续回来的新位置写进摊开的那一份（现算，不是缓存）',
+    ui67.uiTakeaway('t67s').some((l) => l.includes('甲 = 96,63')) &&
+      a67s.fold.innerHTML.includes('甲 = 96,63'), a67s.fold.innerHTML);
+  const moved67 = ui67.uiTakeaway('t67s').join('\n');
+  check('合着的时候不动它（没人在看，不必每帧重排一次字）',
+    setAlt67('t67s', false) === true && (() => {
+      a67s.fold.innerHTML = '<p class="ui-alt-line">别的手打的字</p>';
+      refreshAlt67('t67s');
+      return a67s.fold.innerHTML === '<p class="ui-alt-line">别的手打的字</p>';
+    })() && ui67.uiTakeaway('t67s').join('\n') === moved67, a67s.fold.innerHTML);
+
+  const a67k = serveAlt67('t67k', ['占位']);
+  setAlt67('t67k', true);
+  placeMark67('t67k', 20, 30);
+  check('落一处记号之后摊开的文字带上此刻标在哪几处（只报方位，不报像素）',
+    a67k.fold.innerHTML.includes('现在标在：第 1 处在图框的') &&
+      !/现在标在：[^\n]*\d+,\d+/.test(a67k.fold.innerHTML), a67k.fold.innerHTML);
+  const allText67 = ['t67d', 't67m', 't67s', 't67c', 't67k']
+    .map((h) => ui67.uiTakeaway(h).join('\n')).join('\n') +
+    Object.values(fixtures67)
+      .map((lines) => {
+        const r = compile67(lines, false);
+        return ui67.uiTakeaway(/data-ui-copy="([^"]+)"/.exec(r.html)?.[1]).join('\n');
+      }).join('\n');
+  check('这一族交出的文字里没有数值化的学情指标（Invariant 4 量到这一份：抄出去的话也不许带分数）',
+    allText67.length > 200 && !/完成|正确率|得分|分数|掌握|进度|level|percent|score|mastery|accuracy/.test(allText67),
+    allText67.slice(0, 200));
+
+  // 3) 抄走：交出去的就是摊开看到的那几行
+  const written67 = [];
+  const okWrite67 = { writeText: async (t) => { written67.push(t); } };
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: okWrite67 } });
+  doc.getElementById('toasts').innerHTML = '';
+  const copied67 = await copyAlt67('t67s');
+  const said67 = () => {
+    const kids67 = [...(doc.getElementById('toasts').children || [])];
+    return kids67[kids67.length - 1];
+  };
+  check('抄走把此刻的那几行交给剪贴板（与摊开的那一份一字不差）',
+    copied67 === true && written67.length === 1 && written67[0] === ui67.uiTakeaway('t67s').join('\n'),
+    String(written67[0]).slice(0, 200));
+  check('抄走给一句确认，并且念给读屏（不响不吭声地办完）',
+    said67()?.textContent === '已抄走这几行，贴到别处还是它' && said67()?.className === 'toast' &&
+      doc.getElementById('announcer').textContent === '已抄走这几行',
+    `${said67()?.textContent} / ${said67()?.className}`);
+  const r67c = handle67({ type: 'click', target: { dataset: { uiCopy: 't67k' } } });
+  await r67c.done;
+  check('「抄走」这枚按钮由委托接住（真按钮，键盘同权）',
+    r67c.handled === true && r67c.kind === 'alt-copy' && r67c.id === 't67k' &&
+      written67.length === 2 && written67[1] === ui67.uiTakeaway('t67k').join('\n'),
+    JSON.stringify(r67c));
+
+  // 4) 剪贴板打不到不是失败到底：摊开、说清楚，让他自己选中复制
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { clipboard: { writeText: async () => { throw new Error('不允许'); } } },
+  });
+  compile67(fixtures67.diagram, false);
+  doc.getElementById('toasts').innerHTML = '';
+  const a67f = serveAlt67('t67d', ['图里的节点：甲。']);
+  const failed67 = await copyAlt67('t67d');
+  check('剪贴板被挡住：文字当场摊开，那句解释说的是人话而不是"出错了"',
+    failed67 === false && a67f.fold.classList.contains('is-open') &&
+      said67()?.textContent === '剪贴板没打到，文字已经摊开，选中即可复制' &&
+      said67()?.className === 'toast bad',
+    `${said67()?.textContent} / ${a67f.fold.className}`);
+  const none67 = await copyAlt67('界面上没有这一件');
+  check('认不出这件界面：交回空，不假装抄走了什么',
+    none67 === false && ui67.uiTakeaway('界面上没有这一件').length === 0, String(none67));
+  // 非安全上下文（http:// LAN 访问）根本没有 navigator.clipboard：不许"await undefined"就当成功
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {} });
+  doc.getElementById('toasts').innerHTML = '';
+  const a67n = serveAlt67('t67s', ['他摆的点：甲 = 40,140。']);
+  const noClip67 = await copyAlt67('t67s');
+  check('这个页面用不了剪贴板时不谎称抄走了：照样把文字摊开，说的是这一句',
+    noClip67 === false && a67n.fold.classList.contains('is-open') &&
+      said67()?.className === 'toast bad' &&
+      said67()?.textContent === '这个页面用不了剪贴板，文字已经摊开，选中即可复制',
+    `${said67()?.textContent} / ${a67n.fold.className}`);
+
+  // 5) 流里那一帧不摆按了没反应的按钮
+  const p67 = compile67(['kind: diagram', 'id: t67p', 'node: 甲', 'node:'], true);
+  check('还没写完的图没有文字版（界面随生成渐进，出口等落定那一起）',
+    p67.pending === true && !p67.html.includes('ui-takeaway'), p67.html.slice(0, 200));
+  const d67 = compile67(['kind: diagram', 'node: 甲'], false);
+  check('编不出来的那一档照旧掉回原文，也不长文字版',
+    Boolean(d67.degraded) && !d67.html.includes('ui-takeaway'), d67.degraded);
+
+  // 6) deck 里的画出来的块各带自己那份（同一件界面不该共用一份文字）
+  const dk67 = compile67(['kind: deck', 'title: 两看图',
+    'part: figure', '  alt: 甲图', '  shape: 甲 | rect | 10,10,40,30',
+    'part: figure', '  alt: 乙图', '  shape: 乙 | rect | 10,10,40,30'], false);
+  check('deck 的每个 part 各长一份文字版（各拿自己的编译键，不共用）',
+    !dk67.degraded && (dk67.html.match(/class="ui-takeaway"/g) || []).length === 2 &&
+      (dk67.html.match(/data-ui-copy="(ui-[^"]+)"/g) || []).length === 2,
+    (dk67.html.match(/class="ui-takeaway"/g) || []).length + ' / ' + (dk67.degraded || ''));
+  const dkIds67 = [...dk67.html.matchAll(/data-ui-alt-toggle="([^"]+)"/g)].map((m) => m[1]);
+  check('这两份都登记在册，抄得到（handle 不是拼出来的假键）',
+    dkIds67.every((h) => ui67.uiTakeaway(h).length > 0), dkIds67.join(','));
+
+  // 7) 那几行里的标签与引号进不了可执行位置（文字版是新出口，转义不许是漏网的那一处）
+  const evil67 = compile67(['kind: diagram', 'id: evil67', 'node: <img src=x onerror=alert(1)>',
+    'node: 乙', 'edge: <img src=x onerror=alert(1)> -> 乙 | \" onclick=alert(2)'], false);
+  check('文字版那几行走同一只手转义（活标签与属性位都挤不出事件处理器）',
+    evil67.html.includes('图里的节点：&lt;img') && !/<img/.test(evil67.html) && !/" onclick=/.test(evil67.html),
+    (evil67.degraded || evil67.html).slice(0, 300));
+  check('按钮上那枚 handle 也转义（id 是模型写的，属性位同样跑得出去）',
+    /data-ui-alt-toggle="evil67"/.test(evil67.html), evil67.html.slice(-260));
+  const inj67 = compile67(['kind: figure', 'alt: 一 <script>alert(1)</script> 张图', 'shape: 甲 | rect | 10,10,40,30'], false);
+  check('静态图那份文字里的尖括号照旧是字（handle 用的是编译键，不是模型写的原文）',
+    !/<script/.test(inj67.html) && inj67.html.includes('这张图让人看到什么：一 &lt;script&gt;alert(1)&lt;/script&gt; 张图'),
+    inj67.html.slice(-320));
+
+  // 8) 这本账有上限：静态图每改一版换一个编译键，不设上限就等于每改一遍留一份
+  ui67.resetUiState();
+  for (let i = 0; i < 420; i += 1) {
+    compile67(['kind: figure', `alt: 第 ${i} 版`, 'shape: 甲 | rect | 10,10,40,30'], false);
+  }
+  check('登记的文字版有上限（最久没动的那一份挤出去，不攒过期节点）',
+    ui67.uiTakeawayIds().length === 400 && ui67.uiTakeawayIds()[0] !== compile67(fixtures67.figure, false).key,
+    `在册=${ui67.uiTakeawayIds().length}`);
+  ui67.resetUiState();
+
+  // 9) 样式这一侧：合着时按读屏那套裁着，不许 display:none（那会把读屏也一起关掉）
+  check('合着的文字版用 clip 裁着、不是 display:none（读屏照旧读得到）',
+    /\.ui-alt\s*\{[^}]*clip-path:\s*inset\(50%\)/.test(cssText67) &&
+      !/\.ui-alt\s*\{[^}]*display:\s*none/.test(cssText67), '');
+  check('点开是同一批节点换个可见法（.is-open 把裁掉的那几行放回排版）',
+    /\.ui-alt\.is-open\s*\{[^}]*position:\s*static/.test(cssText67) &&
+      /\.ui-alt\.is-open\s*\{[^}]*clip-path:\s*none/.test(cssText67), '');
+  check('两枚按钮的底色仍只借量过的 --surface-2（这一轮不引新配色）',
+    /\.ui-alt-toggle, \.ui-alt-copy \{\s*padding:[^}]*background: var\(--surface-2\)/.test(cssText67), '');
+  check('宿主不自己数行、不自己拼字：那份文字只住在编译器（两处各写一遍迟早漂）',
+    /import \{[^}]*uiTakeaway[^}]*\} from '\.\/ui-compile\.js'/s.test(host67) &&
+      !/function altLinesHtml|class="ui-alt-line"/.test(host67) &&
+      (fs.readFileSync(path.join(webDir, 'ui-compile.js'), 'utf8').match(/function altLinesHtml/g) || []).length === 1, '');
+
+  for (const gone67 of built67.splice(0)) gone67.remove();
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: undefined });
+  ui67.resetUiState();
+  check('这一节无异常', errors.length === errsBefore67, errors.slice(errsBefore67).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
