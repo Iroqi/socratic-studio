@@ -1010,7 +1010,7 @@ export function assertConfigBackup() {
   const blockers = configBackupBlockers();
   if (!blockers.length) return;
   throw new BackupBlockedError(
-    `配置的数据有缺口，备份会交出一份兜过底的假包：${blockers.join('、')}。先用「体检数据」定位并取证下载原件，修好再备份。`,
+    `配置的数据有缺口，备份会交出一份兜过底的假包：${blockers.join('、')}。先做一次数据体检（GET /api/health）定位、把原件取证修好，再备份。`,
     blockers,
   );
 }
@@ -1027,7 +1027,7 @@ export function exportNotebook(id) {
   const blockers = backupBlockers(id);
   if (blockers.length) {
     throw new BackupBlockedError(
-      `这本学习的数据有缺口，导出会丢掉它们：${blockers.join('、')}。先用「体检数据」定位并取证下载原件，修好再备份。`,
+      `这本学习的数据有缺口，导出会丢掉它们：${blockers.join('、')}。先做一次数据体检（GET /api/health）定位、把原件取证修好，再备份。`,
       blockers,
     );
   }

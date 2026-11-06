@@ -380,7 +380,7 @@ export function buildTools() {
     {
       name: TOOL_NAMES.PROPOSE_PATCH,
       description:
-        '把教学里发现的 Graph 反馈记下来（GRAPH FEEDBACK），触发条件见 runtime.md §2.10。应用会先对当前 Graph 空跑一遍，合不上的直接退回给你错误、不留待确认卡。confidence=high 当场合并；medium/low 落成右栏「待你确认的结构改动」，学习者点「接受」才写入。',
+        '把教学里发现的 Graph 反馈记下来（GRAPH FEEDBACK），触发条件见 runtime.md §2.10。应用会先对当前 Graph 空跑一遍，合不上的直接退回给你错误、不留待确认卡。confidence=high 当场合并；medium/low 落成台面顶部「待你确认的结构改动」，学习者点「接受」才写入。',
       parameters: Type.Object({ patch: PATCH_OP }),
     },
     {
@@ -404,7 +404,7 @@ export function buildTools() {
     {
       name: TOOL_NAMES.UPDATE_TODO,
       description:
-        '更新本回合的待办清单（右侧「讲解顺序」那一节顶部会实时显示这条进度条）。一个回合通常不止一步——建 Graph、出探针、讲解、练习、复盘——用它让学习者看见你现在到哪儿了。status: pending | in_progress | completed。每次调用整体替换，不是局部追加。',
+        '更新本回合的待办清单。一个回合通常不止一步——建 Graph、出探针、讲解、练习、复盘——用它给自己排步骤、维持组织线。待办不画进界面：学习者看到的是讲解与对话，别让他去界面上找待办。status: pending | in_progress | completed。每次调用整体替换，不是局部追加。',
       parameters: Type.Object({
         todos: Type.Array(
           Type.Object({
@@ -420,7 +420,7 @@ export function buildTools() {
       description:
         '派一个分身去单独做一件事，**你阻塞到它做完**，然后把它的结论交回给你。适合查证、起草、试算这类一次性的活。分身碰不到学习状态、也不会向学习者提问。',
       parameters: Type.Object({
-        title: Type.Optional(Type.String({ description: '这件事叫什么，显示在任务面板上' })),
+        title: Type.Optional(Type.String({ description: '这件事叫什么，显示在台面现状条的「后台任务」里' })),
         instructions: Type.String({ description: '要分身做的事，写清楚要它交出什么' }),
       }),
     },
@@ -429,7 +429,7 @@ export function buildTools() {
       description:
         '把一件耗时的事挂到后台，**立刻返回不等待**，你可以继续本回合。之后用 read_background_task / list_background_tasks 收结果，用 stop_background_task 停掉。适合整理长篇素材、预生成题目这类学习者不必现场等的事。',
       parameters: Type.Object({
-        title: Type.Optional(Type.String({ description: '这个任务叫什么，显示在任务面板上' })),
+        title: Type.Optional(Type.String({ description: '这个任务叫什么，显示在台面现状条的「后台任务」里' })),
         instructions: Type.String({ description: '要后台做什么，写清楚要它交出什么' }),
       }),
     },

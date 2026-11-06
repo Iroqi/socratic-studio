@@ -108,7 +108,7 @@ const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(
 function blockedBackupToast(err, prefix) {
   const blockers = Array.isArray(err.data?.blockers) ? err.data.blockers : [];
   if (!blockers.length) return false;
-  toast(`${prefix}：${blockers.slice(0, 3).join('、')}${blockers.length > 3 ? '…' : ''}。先点「体检数据」取证修好，再备份。`, true);
+  toast(`${prefix}：${blockers.slice(0, 3).join('、')}${blockers.length > 3 ? '…' : ''}。先做一次数据体检（GET /api/health）定位、取证修好，再备份。`, true);
   return true;
 }
 
@@ -178,7 +178,6 @@ const state = {
   pendingAttachments: [],
   pendingFiles: [], // 还没建会话时选中的文件（草稿态）：住在浏览器里，发第一条消息才补传
   turn: null, // { flow, blocks: [{text,node}|{node}], controller } —— flow = 老师当前那一拍的内容流
-  panelTab: 'learn',
   tasks: [],
   taskSource: null, // 当前会话的后台任务 SSE，切会话必须先关
   camera: null, // 取景中的概念 { conceptId }
@@ -1489,7 +1488,7 @@ function completeArtifactPlaceholder(artifact, taskId) {
 }
 
 /**
- * 道具落进讲到它的那一拍。没有 html 的不算（落盘制品在右栏「素材」那一页列着）。
+ * 道具落进讲到它的那一拍。没有 html 的不算（落盘制品在台面现状条的「全部制品」里列着）。
  * 同一件只画一次：刷新回放与 SSE 实播可能撞车。
  * 两道闸门都认账，不认印象：
  * - 学习者扔掉的（manifest 上有 retiredAt）不上台——1b 那句"历史归历史，工作集已经不要它了"；
@@ -2541,7 +2540,7 @@ function handleTurnEvent(evt) {
       }
       break;
     case 'patch':
-      toast(`模型提出了一条概念结构改动（${evt.patch.confidence} 置信度），在右侧可确认`);
+      toast(`模型提出了一条概念结构改动（${evt.patch.confidence} 置信度），在台面顶部可确认`);
       if (state.notebook) {
         state.notebook.patches = state.notebook.patches || { patches: [] };
         state.notebook.patches.patches.push(evt.patch);
@@ -4900,7 +4899,7 @@ window.addEventListener('message', (event) => {
   }
 });
 
-// ─────────────────────────────────────────────── 右栏：学习（一页到底）/ 素材
+// ─────────────────────────────────────────────── 台面现状条（这一局的现状）
 
 /**
  * 台面顶部的现状条（第三十九轮起，右栏并入会话界面）：待确认的结构改动（GATE 入口）置顶，
@@ -5094,7 +5093,7 @@ function pendingPatches() {
 }
 
 
-/** 右栏唯一有副作用的入口：合并页里必须排在最上面。 */
+/** 现状条里唯一有副作用的入口：必须排在最上面。 */
 function renderPatchCard(p) {
   const card = el('div', `patch-card${p.applied ? ' applied' : ''}`);
   card.append(el('div', 'patch-target', `${p.operation} · ${p.target}`));

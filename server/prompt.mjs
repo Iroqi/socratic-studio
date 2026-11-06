@@ -406,7 +406,7 @@ session 长度上限按 meta.learner_profile.pace 执行（runtime.md 的 pace �
 
 /**
  * 回马枪候选：同一份候选只有一处实现（store.mjs 的 retestCandidates，数据层），
- * prompt 快照与前端右栏续学卡都从它取——两种出口不会长出不同的事实。
+ * prompt 快照从它取——数据只有一处实现，不另长一份事实。
  * 证据记录里没有时间戳（`agent.mjs` 归一化时就没这个字段），所以间隔只能按回合算：
  * 这一轮读到候选、下一轮重测，本身就隔着至少一次完整回合。别把它当成"隔了几天"的间隔重复。
  */
@@ -512,10 +512,11 @@ export function renderStateSnapshot(notebook) {
   }
 
   // 本轮待办只是 UI 便签，供你知道"学习者眼前正显示着哪几步"。
+  // 本轮待办是模型自己的组织线，不进界面；快照只让它知道"排到哪了"，不许写成人话让学习者去找。
   const todos = notebook.todos || [];
   if (todos.length) {
     const done = todos.filter((t) => t.status === 'completed').length;
-    lines.push(`\n本轮待办（学习者右侧可见，${done}/${todos.length} 已完成）：`);
+    lines.push(`\n本轮待办（组织线，不画进界面——学习者看到的是讲解与对话。已完成 ${done}/${todos.length}）：`);
     for (const t of todos) {
       const mark = t.status === 'completed' ? '[x]' : t.status === 'in_progress' ? '[>]' : '[ ]';
       lines.push(`- ${mark} ${t.content}`);

@@ -1100,16 +1100,16 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
 
   // 5) 受阻文案在界面只有一份骨架（两扇门各有各的前缀，共用同一段话）
   const toastFn24 = /function blockedBackupToast\([\s\S]*?\n\}/.exec(webSrc24)?.[0] || '';
-  check('念清单收成一处 blockedBackupToast（清单读结构化字段、最多三条、指向体检）',
+  check('念清单收成一处 blockedBackupToast（清单读结构化字段、最多三条、指向数据体检）',
     (webSrc24.match(/function blockedBackupToast\(/g) || []).length === 1
     && /Array\.isArray\(err\.data\?\.blockers\)/.test(toastFn24)
     && /blockers\.slice\(0, 3\)/.test(toastFn24)
-    && /先点「体检数据」取证修好，再备份/.test(toastFn24),
+    && toastFn24.includes('先做一次数据体检（GET /api/health）定位、取证修好，再备份'),
     `定义 ${(webSrc24.match(/function blockedBackupToast\(/g) || []).length} 处`);
   check('这句话的骨架全仓只有一份（两扇门调它，不各自抄一遍模板）',
-    (webSrc24.match(/先点「体检数据」取证修好，再备份/g) || []).length === 1
+    webSrc24.split('先做一次数据体检（GET /api/health）定位、取证修好，再备份').length - 1 === 1
     && /blockedBackupToast\(err, '没能备份设置'\)/.test(webSrc24),
-    `骨架 ${(webSrc24.match(/先点「体检数据」取证修好，再备份/g) || []).length} 处`);
+    '骨架不是一处');
   check('配置导出的错误体真的被读出来（HTTP 状态码不是给学习者看的清单）',
     /const err = new Error\(data\?\.error \|\| `HTTP \$\{res\.status\}`\)/.test(webSrc24)
     && /err\.data = data;/.test(webSrc24),
@@ -1958,6 +1958,49 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
     'README 里找不到这一轮');
   check('README 的已知边界记下 chart 还没接上（缺口要写在明处）',
     /## 10\. 已知边界[\s\S]*?chart[\s\S]*?文字版/.test(readmeSrc80), '已知边界里没这条');
+}
+
+// ── 第八十一轮：说明书对着空气讲话——右栏与面板时代的话一次清完。
+//    第三十九轮右栏砍除、第七十七轮待办渲染删除之后，仍有说明书指着它们：工具 schema
+//    描述（模型唯一的说明书）说着「右栏」「右侧讲解顺序进度条」，系统提示每回合注入
+//    「学习者右侧可见」，讲稿槽指引说「放右侧栏」，学习者 toast 说「在右侧可确认」，
+//    备份错误让去点一个不存在的「体检数据」按钮。界面没了、话还照旧界面说：模型信了
+//    会跟学习者说"看右边"，学习者信了会去找不到。面板时代的死样式（.panel-head 一族、
+//    概念卡、目标卡、续学卡、概念结构图、体检结果）也一并清出场。以下把"说明书指向
+//    真实界面"钉成契约，并把真实入口写成正向锚点。
+{
+  const promptSrc81 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+  const storeSrc81 = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8');
+  const cssSrc81 = fs.readFileSync(path.join(app, 'web', 'styles.css'), 'utf8');
+
+  // ① 模型侧说明书不指向已拆除的右栏 / 页签 / 进度条
+  check('工具说明书里没有「右栏 / 右侧 / 页签 / 进度条」（模型不许被告知去找不存在的东西）',
+    !/右栏|右侧|页签|进度条/.test(agentSrc), 'agent.mjs 还在指右栏或进度条');
+
+  // ② 系统提示不再说"学习者右侧可见"，并写明待办不进界面
+  check('待办快照写明「不画进界面」，不再说「右侧可见」',
+    promptSrc81.includes('不画进界面') && !promptSrc81.includes('右侧可见'),
+    'prompt 的快照还在骗模型"学习者看得到待办"');
+
+  // ③ 讲稿槽指引不指向右栏（制品说明书同样是模型读的）
+  check('讲稿槽指引不再说「放右侧栏」（制品说明书也不许指着空气）',
+    !/右侧栏/.test(artifactSrc), '讲稿槽还在说放右侧栏');
+
+  // ④ 学习者可见文案不指向不存在的右侧与按钮
+  check('学习者可见文案没有「在右侧」与「体检数据」按钮承诺',
+    !/在右侧/.test(hostSrc) && !/「体检数据」/.test(hostSrc) && !/「体检数据」/.test(storeSrc81),
+    '文案还在指不存在的入口');
+
+  // ⑤ 面板时代的死样式清场（零引用的类名不许回流）
+  check('样式表没有面板时代死类（panel-head / 概念卡 / 目标卡 / 续学卡 / 结构图 / 体检结果）',
+    !/\.panel-head|\.panel-tabs|\.panel-body|\.tab-badge|\.concept-name|\.concept-head|\.state-word|\.goal-card|\.retest-card|\.concept-graph|\.graph-node|\.graph-edge|\.health-result|\.backup-hint/.test(cssSrc81)
+      && !/^\.concept[ ,.{]/m.test(cssSrc81) && !/^\.tab[ ,.{]/m.test(cssSrc81) && !/^\.panel[ ,.{]/m.test(cssSrc81),
+    '面板时代样式回流了');
+
+  // ⑥ 图反馈与待办工具描述指向真实入口（正向锚点，防止改回空口承诺）
+  check('图反馈描述指向台面顶部，待办描述写明不画进界面',
+    agentSrc.includes('落成台面顶部「待你确认的结构改动」') && agentSrc.includes('待办不画进界面'),
+    '工具描述又指回旧界面');
 }
 
 console.log(`\n${'─'.repeat(52)}`);

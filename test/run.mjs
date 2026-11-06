@@ -1156,7 +1156,7 @@ const promptWithTodos = buildSystemPrompt({
     { id: 'b', content: '出探针', status: 'in_progress' },
   ],
 });
-check('待办快照进 prompt', promptWithTodos.includes('本轮待办（学习者右侧可见，1/2 已完成）'));
+check('待办快照进 prompt', promptWithTodos.includes('本轮待办（组织线，不画进界面——学习者看到的是讲解与对话。已完成 1/2）'));
 check('待办条目进 prompt', promptWithTodos.includes('[>] 出探针'));
 
 // 注意：不改用整份 prompt 匹配——规则原文里本来就写着这些禁令词（Invariant 4 的违规指纹）。
