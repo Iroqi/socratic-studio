@@ -23,7 +23,7 @@ import { escapeHtml } from './escape.js';
 import { renderInline } from './inline.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'figure', 'sketch', 'callout', 'mark', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
+export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'figure', 'sketch', 'callout', 'mark', 'pin', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -47,8 +47,9 @@ export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'met
  * sketch 第七十二轮："每个点拖到哪"就是状态（几何能亲手改，按 id 续着）。
  * callout 第七十三轮："点开过图上的哪几块"就是状态（编号落在部件上，点一个看那一块）。
  * mark 第七十九轮："他在图上指了哪几处"就是状态（记号由学习者自己落，槽位号是身份）。
+ * pin 第八十二轮："哪个位置放上了哪个名字"就是状态（图上的语义由学习者填，词表是模型给的）。
  */
-export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map', 'arrange', 'sketch', 'callout', 'mark'];
+export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map', 'arrange', 'sketch', 'callout', 'mark', 'pin'];
 
 /**
  * 画出来的那一族（第八十轮）：这一族的内容活在像素与编号里——SVG 的节点框、折线、
@@ -63,7 +64,7 @@ export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart
  * chart 不在名单里，不是忘了它：它的数据出口本来就是 `table:` 那张看得见的表
  * （第五十四轮立的），这一轮不去动它，缺口记在 README「已知边界」。
  */
-export const UI_DRAWN = ['diagram', 'map', 'figure', 'sketch', 'callout', 'mark'];
+export const UI_DRAWN = ['diagram', 'map', 'figure', 'sketch', 'callout', 'mark', 'pin'];
 
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
@@ -3028,7 +3029,328 @@ function compileMark(fields, lines, partial) {
 function markWords(fields) {
   return pick(fields, 'ask').length > 0 || pick(fields, 'max').length > 0;
 }
-const MARK_ONLY = 'ask / max 只配带 id 的 mark（让学习者在图上自己落记号，别的档没有"指一处"这回事）';
+const MARK_ONLY = 'ask / max 只配带 id 的 mark 与 pin（图上要他动手做的那一件事，别的档没有"指一处 / 标什么"这回事）';
+
+// ── 图上贴名（第八十二轮，学 Intelligent UI 的 "editable graphs" 那一面） ──
+/**
+ * pin（第八十二轮）：**图上的名字由学习者放**——第七十二轮的 sketch 让他改几何，
+ * 第七十九轮的 mark 让他指位置，但一张图上"这一块叫什么"从来只有两个来源：模型写死的
+ * label（figure / callout），或者模型根本不知道他会怎么认。缺的动词是**给位置配语义**：
+ * 「这三个空里哪个是线粒体」——位置由模型画，词由模型给，**哪一个词落在哪一个位置由他放**。
+ *
+ * 学的形状：Intelligent UI 公开的那批界面里，图不是"看一眼就完"的插画而是**可以填进去**的
+ * 一张纸（editable graphics）。第七十二轮把几何交给他之后，剩下的半句是语义：词表封闭、
+ * 位置封闭，中间那个映射开放——这仍是一条封闭词汇表里的形状，不是让模型放开场答题键。
+ *
+ * 四条边界，与 Invariant 4 同一条尺：
+ *   ① **没有答案键**：围栏里不存在"哪位该放哪个词"这一项，界面只记"他此刻怎么放"；
+ *   ② 一个词只落在一处（放第二处就是把它从第一处拿走），界面上不出现"放了几 / 共几"这类完成度；
+ *   ③ 词与位置都是身份：词是原文、名字是名字，坐标由宿主重新生成，都不进可见的读数；
+ *   ④ 至少两个位置、词不少于位——只有一处要挑的是题（`question` 收答、阻塞、判分），别用这一档装。
+ *
+ * 为什么单开一档而不是给 callout 加一层可编辑的标签：callout 的静态是它的契约（编号是模型写的、
+ * 点开只换一句话、状态是"看过哪"）；同一 id 既"什么也没做过"又"改过内容"，那两件界面就被
+ * 混成一件了。**同一 id 不换档**那条规矩在这儿同样要站得住。
+ */
+const PIN_FIELDS = new Set([...FIGURE_FIELDS, 'id', 'handoff', 'ask', 'pin', 'term']);
+const PIN_MIN_PINS = 2;
+const PIN_MAX_PINS = 8;
+const PIN_MAX_TERMS = 10;
+const PIN_NAME_MAX = 12;
+const PIN_TERM_MAX = 16;
+const PIN_HINT_MAX = 40;
+const PIN_ASK_MAX = 60;
+const PIN_R = 10;
+/** 名字那一行在圆心下方多远：空位也得让人看出它是个位置，不是一个装饰点。 */
+const PIN_NAME_ROW = 22;
+const PIN_KEYS = 'Tab 走到一个词按 Enter 拿在手里，Tab 走到一处位置按 Enter 放下；在已贴好的词上按 Enter 拿回手里';
+/** 词池那一排的组名：读屏先听到「这里是一排由你贴上去的名字」，再逐枚听词牌。 */
+const PIN_POOL_LABEL = '词池：这些名字由你贴到图上的位置上';
+
+/**
+ * 此刻这份状态在"这一版围栏"上读成什么样：位、词、映射三样都以围栏为口径——
+ * 改版删掉的位置与词不再摆上来，但**不静默**（下面补一句为什么，经过与盘上的记录一条不少）。
+ * 编译摆第一帧与宿主每次重画共用这一个函数（两处各写一遍，早晚有一边悄悄把旧映射吞了）。
+ */
+export function pinView(state, spec) {
+  const pins = spec?.pins || [];
+  const terms = spec?.terms || [];
+  const known = new Set(terms);
+  const at = new Map();
+  const placed = [];
+  let dropped = 0;
+  for (const p of pins) {
+    const raw = state?.[p.name];
+    if (raw === undefined || raw === null || raw === '') continue;
+    if (!known.has(raw) || at.has(raw)) { dropped += 1; continue; }
+    at.set(raw, p.name);
+    placed.push({ name: p.name, x: p.x, y: p.y, hint: p.hint, term: raw });
+  }
+  // `at` 是"词 → 位置"（词池那一排要知道自己现在在哪儿），空位反过来按位置算：
+  // 两处别拿错钥匙——at 里存的是词，不是位置名。
+  const filled = new Set(placed.map((p) => p.name));
+  const empty = pins.filter((p) => !filled.has(p.name));
+  const pool = terms.filter((t) => !at.has(t));
+  return { placed, empty, pool, at, dropped };
+}
+
+/** 一位一个槽：空位与放好的走同一段画法（宿主重画那一帧必须与编译的第一帧一字不差）。 */
+export function pinSlots(spec, view) {
+  const on = new Map((view?.placed || []).map((p) => [p.name, p.term]));
+  return (spec?.pins || []).map((p) => ({ ...p, term: on.get(p.name) || null }));
+}
+
+/** 一处位置该说的话：编译摆第一帧与宿主每次重画共用这一句（两处各写一遍迟早漂）。 */
+export function pinSlotAria(name, hint, term) {
+  const said = term ? `现在放着「${term}」（按 Enter 把它拿回词池）` : '这里还空着（先点一个词再按 Enter 放下）';
+  return `${name}：${hint || '图上一处位置'}。${said}`;
+}
+
+/** 一枚词牌该说的话：放上去的词不假装还能点。 */
+export function pinTermAria(term, on) {
+  return on
+    ? `「${term}」已经放在「${on}」上，要点那个位置才拿回来`
+    : `「${term}」还在词池里，点了就拿在手里`;
+}
+
+/** 槽位层的那一段 SVG：环是位置，名字在环下面一行，词贴在环旁边（左右由它离哪边近决定）。 */
+export function pinSlotEls(id, slots, W, H) {
+  return slots
+    .map((s) => {
+      const filled = Boolean(s.term);
+      const toLeft = s.x > W / 2;
+      const wx = toLeft ? s.x - (PIN_R + 6) : s.x + (PIN_R + 6);
+      const room = toLeft ? wx : W - wx;
+      const maxChars = Math.max(3, Math.floor(room / 12));
+      const shown = fitText(s.term || '', maxChars);
+      return (
+        `<g class="ui-pin-slot${filled ? ' ui-pin-slot-filled' : ''}" ` +
+        `data-ui-pin-slot="${escapeHtml(id)}" data-ui-name="${escapeHtml(s.name)}" ` +
+        `tabindex="0" role="button" aria-label="${escapeHtml(pinSlotAria(s.name, s.hint, s.term))}">` +
+        `<title>${escapeHtml(`${s.name}：${s.term || '空着'}`)}</title>` +
+        `<circle class="ui-pin-ring" cx="${figNum(s.x)}" cy="${figNum(s.y)}" r="${PIN_R}"/>` +
+        `<text class="ui-pin-name" x="${figNum(s.x)}" y="${figNum(s.y + PIN_NAME_ROW)}" text-anchor="middle">` +
+        `${escapeHtml(fitText(s.name, PIN_NAME_MAX))}</text>` +
+        (filled
+          ? `<text class="ui-pin-word" x="${figNum(wx)}" y="${figNum(s.y)}" text-anchor="${toLeft ? 'end' : 'start'}" ` +
+            `dominant-baseline="middle">${escapeHtml(shown)}</text>`
+          : '') +
+        `</g>`
+      );
+    })
+    .join('');
+}
+
+/**
+ * 词池那一排：放上去的词不消失，改标"已在 甲"——他现在怎么分的，池子里也看得见。
+ * 放上去的那一枚**不 disable**：禁用的按钮在读屏里等于这个词不存在，而他恰恰需要知道
+ * "这个词现在在哪个位置"。它照旧可聚焦、照旧有 aria-label，点它不拿起来，只说它在哪儿。
+ * 「已在」那一格永远长着（空着时 :empty 不占位）：宿主重画只改字不增删节点，
+ * 焦点与手里拿着的那枚词不会被这一刷甩掉。
+ */
+export function pinPoolEls(id, terms, view) {
+  return terms
+    .map((t) => {
+      const on = view.at.get(t) || null;
+      return (
+        `<button type="button" class="ui-pin-term${on ? ' is-placed' : ''}" ` +
+        `data-ui-pin-term="${escapeHtml(id)}" data-ui-item="${escapeHtml(t)}" aria-pressed="false" ` +
+        `aria-label="${escapeHtml(pinTermAria(t, on))}">` +
+        `<span class="ui-pin-term-word">${escapeHtml(t)}</span>` +
+        `<span class="ui-pin-term-on">${on ? `已在 ${escapeHtml(on)}` : ''}</span>` +
+        `</button>`
+      );
+    })
+    .join('');
+}
+
+/** 此刻怎么分的：只报位置与词，不报"几个 / 共几个"——那是完成度，不是他放的内容。 */
+export function pinReadoutText(view) {
+  if (!view.placed.length) return '现在还没有名字放上去';
+  return `现在放着：${view.placed.map((p) => `${p.name} = ${p.term}`).join('、')}`;
+}
+
+function compilePin(fields, lines, partial) {
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（数值逐项查是 chart 的形状）' };
+  if (pick(fields, 'node').length || pick(fields, 'edge').length) {
+    return { error: 'node / edge 是 diagram 的字段：谁连着谁用 diagram，把名字放到图上用 pin' };
+  }
+  if (pick(fields, 'stop').length || pick(fields, 'route').length) {
+    return { error: 'stop / route 是 map 的字段：谁在哪儿用 map，把名字放到图上用 pin' };
+  }
+  if (pick(fields, 'max').length) {
+    return { error: 'max 是 mark 的上限：pin 容几处位置就是几行 pin，不用另写一个数' };
+  }
+  if (pick(fields, 'handle').length || pick(fields, 'connect').length) {
+    return { error: 'handle / connect 是 sketch 的字段：要他挪动位置用 sketch，要他把名字放上去用 pin' };
+  }
+  if (pick(fields, 'callout').length) {
+    return { error: 'callout 是那一档的名字：部件点开看说明用 callout，把名字贴到位置上用 pin' };
+  }
+  const stray = fields.filter(([k]) => !PIN_FIELDS.has(k)).map(([k]) => k);
+  if (stray.length) {
+    return { error: `「${stray[0]}」不是 pin 的字段（pin 只认 id / alt / ask / pin / term / frame / shape / label / arrow / title / handoff）` };
+  }
+  const ids = pick(fields, 'id');
+  if (ids.length > 1) return { error: 'id 写了两遍' };
+  const id = (ids[0] || '').trim();
+  if (!id) {
+    if (!partial) return { error: '这张贴名图没有 id：他把哪个词放到哪个位置没地方续' };
+    return { html: skeleton('正在把这张贴名图长出来…'), pending: true };
+  }
+  // ask 是这一档的门槛（与 mark 同一条 completeness 编码）：没有要标的事，
+  // 词与空位就只是一场连线游戏。流里那一行还没到不算写坏，终态缺它是硬错。
+  const rawAsk = pick(fields, 'ask');
+  if (rawAsk.length > 1) return { error: 'ask 只写一行（要他把什么标到什么上，一句话）' };
+  const ask = (rawAsk[0] || '').trim();
+  if (!ask) {
+    if (!partial) return { error: '这张贴名图没写 ask：让学习者把名字放到位置上，得先说要贴的是什么（没有要贴的事，词表就只是一排按钮）' };
+    return { html: skeleton('正在把这张贴名图长出来…'), pending: true };
+  }
+  if (ask.length > PIN_ASK_MAX) return { error: `ask 太长了（≤${PIN_ASK_MAX} 字）：那是一句要人标的话，不是一段讲解` };
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
+
+  const scene = parseFigureScene(fields, partial, 'pin');
+  if (scene.error) return { error: scene.error };
+  if (scene.pending) return { html: skeleton('正在把这张贴名图长出来…'), pending: true };
+  const { W, H, title, alt, shapes, labels, arrows } = scene;
+  const soft = (why) => (partial ? null : { error: why });
+
+  // 词池：词是身份（纯文本、不重复、别太长），不是可写的内容——放上去的只能从这里挑。
+  const terms = [];
+  const seenTerms = new Set();
+  for (const raw of pick(fields, 'term')) {
+    const t = String(raw).trim();
+    if (!t) { const e = soft('有一个 term 是空的'); if (e) return e; continue; }
+    if (t.length > PIN_TERM_MAX) {
+      const e = soft(`词「${t.slice(0, 12)}…」太长了（≤${PIN_TERM_MAX} 字：那是贴在图上一个位置的名字，不是一句话）`);
+      if (e) return e;
+      continue;
+    }
+    if (seenTerms.has(t)) { const e = soft(`「${t}」写了两遍：词的身份就是它的原文`); if (e) return e; continue; }
+    if (terms.length >= PIN_MAX_TERMS) {
+      const e = soft(`词太多了（最多 ${PIN_MAX_TERMS} 个：一张图挑几个名字，多了就是选择题）`);
+      if (e) return e;
+      continue;
+    }
+    seenTerms.add(t);
+    terms.push(t);
+  }
+  if (!terms.length) {
+    const e = soft('词池是空的：pin 至少要有两个词给他挑（只有一个词就不存在"放哪个"这件事）');
+    if (e) return e;
+    return { html: skeleton('正在把这张贴名图长出来…'), pending: true };
+  }
+
+  // 位置：与 callout 共用一套口径（名字是身份、坐标落在 frame 里、两个位置不许叠在一起）。
+  const pins = [];
+  const names = new Set();
+  const spots = new Set();
+  for (const raw of pick(fields, 'pin')) {
+    const seg = String(raw).split('|').map((s) => s.trim());
+    if (seg.length < 2 || seg.length > 3) {
+      const e = soft(`pin「${String(raw).slice(0, 32)}」要写成「名字 | x,y」或「名字 | x,y | 一句话」`);
+      if (e) return e;
+      continue;
+    }
+    const [name, pos, hint = ''] = seg;
+    if (!name) { const e = soft('有一处位置的名字是空的'); if (e) return e; continue; }
+    if (name.length > PIN_NAME_MAX) { const e = soft(`位置的名字「${name}」太长了（≤${PIN_NAME_MAX} 字）`); if (e) return e; continue; }
+    if (!UI_IDENT.test(name)) { const e = soft(`位置的名字「${name}」不合法（字母 / 汉字起头，中间不许空格与标点）`); if (e) return e; continue; }
+    if (names.has(name)) { const e = soft(`「${name}」写了两遍：位置的身份是名字`); if (e) return e; continue; }
+    if (hint.length > PIN_HINT_MAX) { const e = soft(`pin「${name}」的那句话太长了（≤${PIN_HINT_MAX} 字）`); if (e) return e; continue; }
+    const p = figPoint(pos);
+    if (!p || !figInFrame(p.x - PIN_R, p.y - PIN_R, W, H) || !figInFrame(p.x + PIN_R, p.y + PIN_R + PIN_NAME_ROW, W, H)) {
+      const e = soft(`pin「${name}」的位置「${pos}」在图框里放不下（frame 是 ${W}x${H}，环与下面那行名字都要留得下）`);
+      if (e) return e;
+      continue;
+    }
+    const spot = `${figNum(p.x)},${figNum(p.y)}`;
+    if (spots.has(spot)) { const e = soft(`「${name}」和别的位置落在同一个点上：两个空叠在一起就分不出放的是哪一个`); if (e) return e; continue; }
+    if (pins.length >= PIN_MAX_PINS) {
+      const e = soft(`位置太多了（最多 ${PIN_MAX_PINS} 处：一张图标清楚一件事）`);
+      if (e) return e;
+      continue;
+    }
+    names.add(name);
+    spots.add(spot);
+    pins.push({ name, x: p.x, y: p.y, hint });
+  }
+  if (!pins.length) {
+    const e = soft('一处位置都没有：pin 至少要留一个空位给他填名字');
+    if (e) return e;
+    return { html: skeleton('正在把这张贴名图长出来…'), pending: true };
+  }
+  if (pins.length < PIN_MIN_PINS) {
+    const e = soft('只有一处位置就别用 pin：一处要挑的是 question 的形状（它会阻塞、会把作答交回老师手里）');
+    if (e) return e;
+    return { html: skeleton('正在把这张贴名图长出来…'), pending: true };
+  }
+  // 词不少于位：少一个词就有一个位置永远放不上名字——那是界面自己说不上话（completeness）。
+  if (terms.length < pins.length) {
+    const e = soft(`词比位置少（${pins.length} 处位置、${terms.length} 个词）：有位置永远放不上名字，删掉一处 pin 或补一个 term`);
+    if (e) return e;
+  }
+
+  const spec = { W, H, title, alt, ask, pins, terms };
+  const view = pinView(readUiState(id)?.state || {}, spec);
+  const state = { uiKind: 'pin' };
+  for (const p of view.placed) state[p.name] = p.term;
+  writeUiState(id, 'pin', state, spec);
+
+  const slots = pinSlots(spec, view);
+  const markerId = `ui-pin-arrow-${hashText(`${id}\n${alt}\n${ask}\n${pins.map((p) => p.name).join(',')}`)}`;
+  const arrowEls = figureArrowEls(arrows, markerId);
+  const labelEls = labels.map((l) => figureLabelEl(l.text, l.x, l.y, l.align, W)).join('');
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const aria = alt || '这张贴名图还在长';
+  const svg =
+    `<svg class="ui-pin-canvas" role="group" aria-label="${escapeHtml(`${aria}（图上有 ${pins.length} 处位置，把词池里的名字放到位置上）`)}" ` +
+    `viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">` +
+    `<title>${escapeHtml(aria)}</title>` +
+    `<defs><marker id="${markerId}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+    `<path class="ui-fig-arrow-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>` +
+    shapes.join('') + arrowEls + labelEls +
+    `<g class="ui-pin-layer" data-ui-pin-layer="${escapeHtml(id)}">${pinSlotEls(id, slots, W, H)}</g>` +
+    `</svg>`;
+  const pool = `<div class="ui-pin-pool" role="group" aria-label="${escapeHtml(PIN_POOL_LABEL)}">${pinPoolEls(id, terms, view)}</div>`;
+  // 读屏拿得到的结构替代：要标什么 + 能用的词 + 键盘怎么走 + 此刻怎么放的 + 还剩哪些位置。
+  // 这一份同时是"文字版"与"抄走"的正文——第三处文字不再存在（与第八十轮同一把尺）。
+  const pinTextLines = (v) => [
+    ...figureAltLines(scene),
+    `要贴的是：${ask}`,
+    `可以用的名字：${terms.join('、')}`,
+    v.pool.length ? `词池里还留着：${v.pool.join('、')}` : '词都放上去了',
+    `用键盘：${PIN_KEYS}`,
+    pinReadoutText(v),
+    v.empty.length ? `还空着的位置：${v.empty.map((p) => p.name).join('、')}` : '每个位置都有名字了',
+  ];
+  const body =
+    `<div class="ui-pinblock" data-ui-pin="${escapeHtml(id)}">` +
+    `<p class="ui-pin-ask">${cell(ask)}</p>` +
+    svg + pool +
+    `<p class="ui-pin-hint">点一个词拿在手里，再点一处位置就贴上去；点那一处位置把它拿回词池。这里只记你怎么放，不判对错</p>` +
+    `<p class="ui-pin-readout" data-ui-pin-readout="${escapeHtml(id)}" aria-live="polite">${escapeHtml(pinReadoutText(view))}</p>` +
+    (view.dropped ? paramNote(`这一版词表或位置装不下 ${view.dropped} 条旧映射，没有摆上来`) : '') +
+    `</div>`;
+  return {
+    html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`,
+    shape: 'pin',
+    pending: partial || undefined,
+    alt: {
+      id,
+      lines: pinTextLines(view),
+      live: () => pinTextLines(pinView(readUiState(id)?.state || {}, spec)),
+    },
+  };
+}
+
+/** pin 的专属词写在别的档 = 语义词写错档：不许静默吞（与 callout / handle / ask 同一把尺）。 */
+function pinWords(fields) {
+  return pick(fields, 'pin').length > 0 || pick(fields, 'term').length > 0;
+}
+const PIN_ONLY = 'pin / term 只配带 id 的 pin（把名字贴到图上的位置，别的档没有"他放上去的词"这回事）';
 
 // ── 分段探索 ─────────────────────────────────────────────────────────────
 /**
@@ -3653,8 +3975,11 @@ function compileDeck(fields, lines, partial) {
     if (part.kind !== 'callout' && calloutWords(child.fields)) {
       return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${CALLOUT_ONLY}` };
     }
-    if (part.kind !== 'mark' && markWords(child.fields)) {
+    if (part.kind !== 'mark' && part.kind !== 'pin' && markWords(child.fields)) {
       return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${MARK_ONLY}` };
+    }
+    if (part.kind !== 'pin' && pinWords(child.fields)) {
+      return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${PIN_ONLY}` };
     }
     // 与顶层同一把尺（第七十八轮添了带 param 的曲线）：chart 里的 uses 由 compileChart 自己判
     // （它要知道这条曲线有没有参数），别让这里的守卫把"带 param 的曲线"一并拒掉。
@@ -4552,7 +4877,7 @@ function compileQuestion(fields) {
 /** question 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
 const QUESTION_FIELDS = new Set(['id', 'question', 'header', 'option', 'multiSelect', 'allowText', 'conceptId']);
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, figure: compileFigure, sketch: compileSketch, callout: compileCallout, mark: compileMark, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, figure: compileFigure, sketch: compileSketch, callout: compileCallout, mark: compileMark, pin: compilePin, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
 
 /**
  * 稳定键（第六十五轮，学 Intelligent UI 的 "native, streamable components" 那一手）：
@@ -4622,7 +4947,8 @@ function compileUiBlockInner(lines, partial) {
     if (metaErr) return fail(metaErr);
     if (kind !== 'sketch' && sketchWords(parsed.fields)) return fail(SKETCH_ONLY);
     if (kind !== 'callout' && calloutWords(parsed.fields)) return fail(CALLOUT_ONLY);
-    if (kind !== 'mark' && markWords(parsed.fields)) return fail(MARK_ONLY);
+    if (kind !== 'mark' && kind !== 'pin' && markWords(parsed.fields)) return fail(MARK_ONLY);
+    if (kind !== 'pin' && pinWords(parsed.fields)) return fail(PIN_ONLY);
     // uses 配 calculator / form / 带 param 的曲线（第六十三轮立的那两档，第七十八轮添了曲线）：
     // 只有这几档有"能被场上参数填上的默认值 / 空格子"，各档内部再校验名字对不对得上。
     if (kind !== 'calculator' && kind !== 'form' && kind !== 'chart') {

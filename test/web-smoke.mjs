@@ -7951,7 +7951,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   check('流里还没有 handle：先摆占位（一个点都没有）',
     p61b.pending === true && p61b.html.includes('ui-skeleton'), p61b.html.slice(0, 300));
   const p61c = compile61(['kind: sketch', 'id: a', 'handle: A | 10,10'], true);
-  check('流里还没有 alt：图先长出来，读屏名先用一句中性的话顶着',
+  check('流里还没有 alt：位置与词都齐就先长出来，读屏名用一句中性的话顶着',
     p61c.pending === true && !p61c.degraded && p61c.html.includes('aria-label="这张草图还在长"') &&
     p61c.html.includes('data-ui-handle="A"'), String(p61c.degraded || p61c.html).slice(0, 400));
   check('同样的内容闭合后（终态）缺 alt 是硬错',
@@ -9230,7 +9230,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const host67 = fs.readFileSync(path.join(webDir, 'app.js'), 'utf8');
   ui67.resetUiState();
 
-  // 六档各一份能编出来的最小围栏（与前面几节同一批例子，认得出才算真的接上了）
+  // 七档各一份能编出来的最小围栏（与前面几节同一批例子，认得出才算真的接上了）
   const fixtures67 = {
     diagram: ['kind: diagram', 'id: t67d', 'node: 光反应 | 在类囊体膜上', 'node: 暗反应', 'edge: 光反应 -> 暗反应 | 提供 ATP'],
     map: ['kind: map', 'id: t67m', 'stop: 成都 | 15,80 | 起点', 'stop: 康定 | 40,45', 'route: 成都 > 康定'],
@@ -9238,6 +9238,9 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     sketch: ['kind: sketch', 'id: t67s', 'alt: 一条能拖的底边', 'handle: 甲 | 40,140 | 左端', 'handle: 乙 | 280,140', 'connect: 甲 > 乙 | 底边'],
     callout: ['kind: callout', 'id: t67c', 'alt: 两个部件', 'shape: 车架 | rect | 40,60,180,30', 'callout: 变速器 | 100,90 | 换挡'],
     mark: ['kind: mark', 'id: t67k', 'alt: 一处要指的地方', 'ask: 升力从哪一面来', 'shape: 机翼 | rect | 40,60,120,40'],
+    pin: ['kind: pin', 'id: t67p', 'alt: 细胞图上两处空位', 'ask: 把名字贴到该贴的位置',
+      'shape: 膜 | rect | 20,20,280,120', 'pin: 甲 | 80,60', 'pin: 乙 | 220,100',
+      'term: 线粒体', 'term: 细胞核'],
   };
   const got67 = {};
   for (const [kind, lines] of Object.entries(fixtures67)) {
@@ -9256,14 +9259,14 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   }
   check('名单里的每一档都真的登记了文字（少一档 = 契约测试该红的那一件事）',
     ui67.UI_DRAWN.every((k) => Object.keys(fixtures67).includes(k)) &&
-      new Set(ui67.UI_DRAWN).size === 6,
+      new Set(ui67.UI_DRAWN).size === 7,
     ui67.UI_DRAWN.join(','));
   check('handle 的口径：有 id 的档认 id，静态的 figure 认编译键',
     /data-ui-alt-toggle="t67s"/.test(got67.sketch.html) &&
       /data-ui-alt-toggle="ui-[0-9a-z-]+"/.test(got67.figure.html) &&
       got67.figure.html.includes(`data-ui-alt-toggle="${got67.figure.key}"`),
     got67.figure.html.slice(-260));
-  check('画出来的六档不再各自写一份 .sr-only（同一句话不长两处）',
+  check('画出来的七档不再各自写一份 .sr-only（同一句话不长两处）',
     Object.values(fixtures67).every((lines) => !/class="sr-only"/.test(compile67(lines, false).html)), '');
   check('chart 那份 .sr-only 数据表照旧在（它的数据出口是 table: 那张看得见的表，这一轮不去动它）',
     compile67(['kind: chart', 'series: 收入 = 1,2', 'series: 支出 = 2,3'], false).html.includes('class="sr-only"'), '');
@@ -9469,6 +9472,364 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: undefined });
   ui67.resetUiState();
   check('这一节无异常', errors.length === errsBefore67, errors.slice(errsBefore67).join(' | '));
+}
+
+// ─── 68. pin：图上的名字由学习者贴（第八十二轮，学 Intelligent UI 的「可编辑图表」那一手）。
+// mark 把笔递过去（他在图上指一处），sketch 让他挪现成的点，callout 让他点开模型标好的编号——
+// 三档里"图上写的是什么"始终由模型定。而"这个位置该叫什么叫不上来"恰恰是最常卡住学习者的一刻：
+// 词他多半认得，就是没法在图上把它落到位置上。这一档补的是那一个动词：词表由模型给、位置由模型给，
+// **哪个词落在哪个位置由他放**。词是封闭的一排按钮（没有自由输入、没有答案键），
+// 状态记的只是"现在怎么分的"，配得对不对仍在对话里判。
+{
+  console.log('\n68. pin（名字由学习者贴到图上的位置：词是封闭的一排、没有答案键、没有完成度）');
+  const errsBefore68 = errors.length;
+  const ui68 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const {
+    state: st68, handleUiDeskEvent: handle68, handleUiDeskKey: key68, renderDeskState: renderPanel68,
+    uiPinFrame: frame68, uiPinHeldTerm: held68, setUiPinHeld: hold68,
+    pickUiPinTerm: pick68, handleUiPinClick: pinClick68,
+  } = appModule.__hooks;
+  const compile68 = (lines, partial) => ui68.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const deg68 = (lines) => ui68.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  const ann68 = () => doc.getElementById('announcer');
+  const input68 = doc.getElementById('input');
+  const boxBefore68 = input68.value;
+  ui68.resetUiState();
+
+  const cell = ['kind: pin', 'id: pn82', 'title: 给细胞贴名', 'alt: 细胞膜包着的两处空位',
+    'ask: 哪个位置是线粒体、哪个是细胞核', 'frame: 320x180',
+    'shape: 细胞 | rect | 20,20,280,120', 'pin: 甲 | 80,60 | 供能的地方', 'pin: 乙 | 220,100',
+    'term: 线粒体', 'term: 细胞核', 'term: 细胞膜', 'handoff: 把我贴好的带回对话'];
+  const c68 = compile68(cell).html;
+
+  // 1) 编译：figure 的几何 + 他放的那几枚词 + 门槛那句话
+  check('编译成一块能贴的图：ui-pinblock 带 data-ui-pin，ask 是界面上第一句话',
+    c68.includes('<div class="ui-pinblock" data-ui-pin="pn82">') &&
+      c68.includes('<p class="ui-pin-ask">哪个位置是线粒体、哪个是细胞核</p>'),
+    c68.slice(0, 300));
+  check('整张图是 role=group，读屏名里说清有几处位置、要做什么（结构性描述，不是完成度）',
+    c68.includes('<svg class="ui-pin-canvas" role="group" aria-label="细胞膜包着的两处空位（图上有 2 处位置，把词池里的名字放到位置上）"') &&
+      c68.includes('viewBox="0 0 320 180"'), c68.slice(0, 500));
+  check('一处位置是一个可聚焦的 role=button：环 + 下面那行位置名，aria 说清这里空着、怎么走下一步',
+    c68.includes('<g class="ui-pin-slot" data-ui-pin-slot="pn82" data-ui-name="甲" tabindex="0" role="button" aria-label="甲：供能的地方。这里还空着（先点一个词再按 Enter 放下）">') &&
+      c68.includes('<circle class="ui-pin-ring" cx="80" cy="60" r="10"/>') &&
+      c68.includes('<text class="ui-pin-name" x="80" y="82"'), c68.slice(600, 1600));
+  check('词池是一排真 <button>：aria-pressed 报拿没拿在手里，「已在」那一格永远长着（空着时 :empty 不占位）',
+    c68.includes('<button type="button" class="ui-pin-term" data-ui-pin-term="pn82" data-ui-item="线粒体" aria-pressed="false" aria-label="「线粒体」还在词池里，点了就拿在手里">') &&
+      c68.includes('<span class="ui-pin-term-word">线粒体</span><span class="ui-pin-term-on"></span>'),
+    c68.slice(1400, 2400));
+  check('读数条按 id 落一处、aria-live=polite，第一句就说还没有名字放上去',
+    c68.includes('<p class="ui-pin-readout" data-ui-pin-readout="pn82" aria-live="polite">现在还没有名字放上去</p>'),
+    c68.slice(-900));
+  check('文字版里写清要贴什么、能用的词、键盘怎么走、此刻怎么分的、还空着哪几处',
+    c68.includes('<p class="ui-alt-line">要贴的是：哪个位置是线粒体、哪个是细胞核</p>') &&
+      c68.includes('<p class="ui-alt-line">可以用的名字：线粒体、细胞核、细胞膜</p>') &&
+      c68.includes('<p class="ui-alt-line">词池里还留着：线粒体、细胞核、细胞膜</p>') &&
+      c68.includes('<p class="ui-alt-line">用键盘：Tab 走到一个词按 Enter 拿在手里') &&
+      c68.includes('<p class="ui-alt-line">还空着的位置：甲、乙</p>'),
+    c68.slice(-1400));
+  check('这一档不再另写一份 .sr-only（同一句话不长两处，与第八十轮同一把尺）',
+    !c68.includes('class="sr-only"') && c68.includes('class="ui-takeaway"'), '');
+  check('界面上没有百分比 / 分数 / 完成度（Invariant 4 的指纹扫不到这一档）',
+    !/%|得分|分数|掌握|正确率/.test(c68) && !/共 \$\{|\/ \$\{/.test(c68), '');
+  check('答案键写进围栏也不认（pin 的字段表里没有"该放哪个"这一项）',
+    deg68([...cell, 'answer: 甲=线粒体']).includes('不是 pin 的字段'), '');
+
+  // 2) 降级：每条都点名为什么不行
+  ui68.resetUiState();
+  check('没有 id：掉回原文并点名（他把哪个词放到哪个位置没地方续）',
+    deg68(['kind: pin', 'alt: x', 'ask: 一句', 'shape: 甲 | rect | 10,10,60,40', 'pin: 甲 | 30,40', 'pin: 乙 | 45,45', 'term: 一', 'term: 二']).includes('这张贴名图没有 id'), '');
+  check('没有 ask：掉回原文并点名（没有要贴的事，词表就只是一排按钮）',
+    deg68(['kind: pin', 'id: p1', 'alt: x', 'shape: 甲 | rect | 10,10,60,40', 'pin: 甲 | 30,40', 'pin: 乙 | 45,45', 'term: 一', 'term: 二']).includes('没写 ask'), '');
+  check('ask 太长 / 写两行：各点名一次（那是一句要人贴的话，不是一段讲解）',
+    deg68(['kind: pin', 'id: p1', 'alt: x', 'ask: ' + '一'.repeat(61), 'shape: 甲 | rect | 10,10,60,40', 'pin: 甲 | 30,40', 'pin: 乙 | 45,45', 'term: 一', 'term: 二']).includes('ask 太长了') &&
+      deg68(['kind: pin', 'id: p1', 'alt: x', 'ask: 一句', 'ask: 另一句', 'shape: 甲 | rect | 10,10,60,40', 'pin: 甲 | 30,40', 'pin: 乙 | 45,45', 'term: 一', 'term: 二']).includes('ask 只写一行'), '');
+  check('没有 alt / 一个 shape 都没有：掉回原文并点名（没有图可贴）',
+    deg68(['kind: pin', 'id: p1', 'ask: 一句', 'shape: 甲 | rect | 10,10,60,40', 'pin: 甲 | 30,40', 'pin: 乙 | 45,45', 'term: 一', 'term: 二']).includes('没有 alt') &&
+      deg68(['kind: pin', 'id: p1', 'alt: x', 'ask: 一句', 'pin: 甲 | 30,40', 'pin: 乙 | 45,45', 'term: 一', 'term: 二']).includes('一个 shape 都没有'), '');
+  check('词比位置少：掉回原文并点名（总有一处永远贴不上名字）',
+    deg68(['kind: pin', 'id: p1', 'alt: x', 'ask: 一句', 'shape: 甲 | rect | 10,10,60,40', 'pin: 甲 | 30,40', 'pin: 乙 | 45,45', 'term: 一个词']).includes('词比位置少'), '');
+  check('只有一处位置：被劝回 question（一处就不存在"怎么配"这件事）',
+    deg68(['kind: pin', 'id: p1', 'alt: x', 'ask: 一句', 'shape: 甲 | rect | 10,10,60,40', 'pin: 甲 | 30,40', 'term: 一词', 'term: 二词']).includes('只有一处位置就别用 pin'), '');
+  check('词写重复 / 太长：各点名一次（词的身份就是它的原文）',
+    deg68([...cell, 'term: 线粒体']).includes('」写了两遍') &&
+      deg68([...cell, 'term: ' + '一'.repeat(17)]).includes('太长了'), '');
+  check('位置名重复 / 不合法 / 落在图框外：各点名一次',
+    deg68([...cell, 'pin: 甲 | 45,45']).includes('」写了两遍') &&
+      deg68([...cell, 'pin: 名 字 | 45,45']).includes('不合法') &&
+      deg68([...cell, 'pin: 丙 | 300,170']).includes('在图框里放不下'), '');
+  check('两处位置叠在同一个点上：点名（两个空叠在一起就分不出放的是哪一个）',
+    deg68(['kind: pin', 'id: p1', 'alt: x', 'ask: 一句', 'shape: 甲 | rect | 10,10,60,40', 'pin: 甲 | 30,40', 'pin: 乙 | 30,40', 'term: 一', 'term: 二']).includes('落在同一个点上'), '');
+  check('越界：九处位置、十一个词都被拦下并说清上限',
+    deg68(['kind: pin', 'id: p1', 'alt: x', 'ask: 一句', 'shape: 细 | rect | 10,10,20,20',
+      'pin: 甲 | 30,40', 'pin: 乙 | 45,45', 'pin: 丙 | 50,50', 'pin: 丁 | 55,55', 'pin: 戊 | 60,60',
+      'pin: 己 | 65,65', 'pin: 庚 | 70,70', 'pin: 辛 | 75,75', 'pin: 壬 | 80,80',
+      'term: 一', 'term: 二']).includes('位置太多了') &&
+      deg68(['kind: pin', 'id: p1', 'alt: x', 'ask: 一句', 'shape: 细 | rect | 10,10,60,50',
+        'pin: 甲 | 30,40', 'pin: 乙 | 45,45', 'pin: 丙 | 50,50', 'pin: 丁 | 55,55', 'pin: 戊 | 60,60',
+        'pin: 己 | 65,65', 'pin: 庚 | 70,70', 'pin: 辛 | 75,75',
+        'term: 一', 'term: 二', 'term: 三', 'term: 四', 'term: 五', 'term: 六', 'term: 七', 'term: 八', 'term: 九', 'term: 十', 'term: 十一']).includes('词太多了'), '');
+  check('max 写进 pin：点名 mark（pin 容几处就是几行 pin，不用另写一个数）',
+    deg68([...cell, 'max: 3']).includes('max 是 mark 的上限'), '');
+  check('handle / node / stop / callout / table 写进 pin：各点名自己那一档',
+    deg68([...cell, 'handle: 甲 | 20,20']).includes('只配 sketch') &&
+      deg68([...cell, 'node: 甲']).includes('diagram 的字段') &&
+      deg68([...cell, 'stop: 甲 | 1,2']).includes('map 的字段') &&
+      deg68([...cell, 'callout: 甲 | 40,30 | 一句']).includes('只配带 id 的 callout') &&
+      deg68([...cell, 'table: 表']).includes('table 只配 chart'), '');
+  check('pin / term 写进别的档被点名（语义词写错档不静默吞，与 ask / handle 同一把尺）',
+    deg68(['kind: figure', 'alt: x', 'shape: 甲 | rect | 10,10,60,40', 'pin: 甲 | 30,40', 'term: 词']).includes('只配带 id 的 pin') &&
+      deg68(['kind: checklist', 'id: c1', 'item: 甲', 'term: 词']).includes('只配带 id 的 pin'), '');
+  check('ask 写进 pin 之外仍是那句老话：mark 与 pin 共用这一道门槛',
+    deg68(['kind: figure', 'alt: x', 'shape: 甲 | rect | 10,10,60,40', 'ask: 指一处']).includes('只配带 id 的 mark') &&
+      deg68(['kind: compare', 'row: 甲 | 乙', 'row: 丙 | 丁', 'ask: 贴一处']).includes('只配带 id 的 mark'), '');
+  check('pin 写进 deck 的别的子块：整块被点名（顶层放宽了，子块那道镜像守卫也得跟上）',
+    deg68(['kind: deck', 'title: 图', 'part: steps', '  step: 一', '  term: 词',
+      'part: checklist', '  item: 甲']).includes('只配带 id 的 pin'), '');
+  check('pin 自己可以拼进 deck（十八档里的一员：他贴的词照旧记进那一份状态）',
+    !compile68(['kind: deck', 'title: 细胞', 'part: pin', '  id: pn82b', '  alt: 两处空位',
+      '  ask: 各是什么', '  shape: 细胞 | rect | 20,20,280,120', '  pin: 甲 | 80,60', '  pin: 乙 | 220,100',
+      '  term: 线粒体', '  term: 细胞核', 'part: steps', '  step: 再看一遍']).degraded &&
+      ui68.readUiState('pn82b')?.state?.uiKind === 'pin', '');
+  check('handoff 超 24 字：掉回原文并点名',
+    deg68(cell.map((l) => (l.startsWith('handoff:') ? 'handoff: ' + '发'.repeat(25) : l))).includes('24'), '');
+
+  // 3) 流式：长到一半先摆占位，半行的词与位置先不长
+  ui68.resetUiState();
+  const p68a = compile68(['kind: pin', 'alt: x', 'shape: 甲 | rect | 10,10,60,40'], true);
+  check('流里还没有 id：先摆占位（贴好的词没地方续）',
+    p68a.pending === true && p68a.html.includes('ui-skeleton'), p68a.html.slice(0, 200));
+  const p68b = compile68(['kind: pin', 'id: p1', 'alt: x', 'shape: 甲 | rect | 10,10,60,40'], true);
+  check('流里还没有 ask：先摆占位（要贴什么还没写完，不算写坏）',
+    p68b.pending === true && p68b.html.includes('ui-skeleton'), p68b.html.slice(0, 200));
+  const p68c = compile68(['kind: pin', 'id: p1', 'ask: 一句', 'shape: 甲 | rect | 10,10,60,40',
+    'pin: 甲 | 30,40', 'pin: 乙 | 45,45', 'term: 一词', 'term: 二词'], true);
+  check('流里还没有 alt：图先长出来，读屏名先用一句中性的话顶着',
+    p68c.pending === true && !p68c.degraded && p68c.html.includes('aria-label="这张贴名图还在长'),
+    String(p68c.degraded || p68c.html).slice(0, 300));
+  const p68e = compile68(['kind: pin', 'id: p3', 'alt: x', 'ask: 一句', 'shape: 甲 | rect | 10,10,60,40', 'pin: 甲 | 30,40', 'term:'], true);
+  check('流里词与位置还没写完：先摆占位（贴好的没地方续，摆一排空按钮更糟）',
+    p68e.pending === true && p68e.html.includes('ui-skeleton'), p68e.html.slice(0, 200));
+  const p68d = compile68(['kind: pin', 'id: p2', 'alt: x', 'ask: 一句', 'shape: 甲 | rect | 10,10,60,40', 'pin: 甲 | 30,40', 'pin:', 'term: 一词'], true);
+  check('流里那一行只写了「term:」：这一行先不长，已写出的位置与词照常上台（流里的宽容，不是判失败）',
+    !p68d.degraded && p68d.pending === true, String(p68d.degraded || p68d.html).slice(0, 200));
+
+  // 4) 宿主接线：拿一个词 → 放到一处 → 点那一处拿回来（判分一个字都不发生）
+  ui68.resetUiState();
+  st68.notebook = sampleNotebook();
+  st68.uiReported?.clear?.();
+  const posts68 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const bodies68 = [];
+  const realFetch68 = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (/\/artifact-message$/.test(url)) {
+      try { bodies68.push(JSON.parse(opts.body)); } catch {}
+    }
+    return realFetch68(url, opts);
+  };
+  compile68(cell);
+
+  const mkChip = (term, placed) => {
+    const b = doc.createElement('button'); b.className = 'ui-pin-term';
+    b.dataset.uiPinTerm = 'pn82'; b.dataset.uiItem = term;
+    b.setAttribute('aria-pressed', 'false');
+    const w = doc.createElement('span'); w.className = 'ui-pin-term-word'; w.textContent = term;
+    const on = doc.createElement('span'); on.className = 'ui-pin-term-on'; on.textContent = placed || '';
+    b.append(w, on);
+    return b;
+  };
+  const block68 = doc.createElement('div'); block68.className = 'ui-pinblock'; block68.dataset.uiPin = 'pn82';
+  const svg68 = doc.createElement('svg'); svg68.className = 'ui-pin-canvas';
+  const layer68 = doc.createElement('g'); layer68.className = 'ui-pin-layer'; layer68.dataset.uiPinLayer = 'pn82';
+  const chipA68 = mkChip('线粒体'); const chipB68 = mkChip('细胞核'); const chipC68 = mkChip('细胞膜');
+  const pool68 = doc.createElement('div'); pool68.className = 'ui-pin-pool'; pool68.append(chipA68, chipB68, chipC68);
+  const out68 = doc.createElement('p'); out68.className = 'ui-pin-readout'; out68.dataset.uiPinReadout = 'pn82';
+  out68.textContent = '现在还没有名字放上去';
+  const outOther68 = doc.createElement('p'); outOther68.className = 'ui-pin-readout';
+  outOther68.dataset.uiPinReadout = '别的图'; outOther68.textContent = '不动';
+  svg68.append(layer68);
+  block68.append(svg68, pool68, out68);
+  domRoot.append(block68, outOther68);
+
+  const beforePick68 = posts68();
+  const r68pick = handle68({ type: 'click', target: chipA68 });
+  check('点一个词 = 拿在手里：不是一步，不报回、不写状态（取景不是落定的选择）',
+    r68pick.handled === true && r68pick.kind === 'pin' && r68pick.action === 'pick' &&
+      r68pick.held === '线粒体' && posts68() === beforePick68 &&
+      Object.keys(ui68.readUiState('pn82').state).join(',') === 'uiKind' && held68('pn82') === '线粒体',
+    JSON.stringify(r68pick));
+  check('拿在手里的这一枚在词牌上标出来（aria-pressed=true），别的枚不动',
+    chipA68.getAttribute('aria-pressed') === 'true' && chipB68.getAttribute('aria-pressed') === 'false',
+    chipA68.getAttribute('aria-pressed') + ' / ' + chipB68.getAttribute('aria-pressed'));
+
+  const beforePlace68 = posts68();
+  const slotA68 = doc.createElement('g'); slotA68.className = 'ui-pin-slot';
+  slotA68.dataset.uiPinSlot = 'pn82'; slotA68.dataset.uiName = '甲';
+  const r68place = handle68({ type: 'click', target: slotA68 });
+  check('点一处位置 = 把手里那枚贴上去：状态写「甲 = 线粒体」',
+    r68place.handled === true && r68place.action === 'place' && r68place.name === '甲' &&
+      ui68.readUiState('pn82').state['甲'] === '线粒体', JSON.stringify(r68place));
+  check('贴上去才报回一次，经过记的是「甲 从空到 线粒体」（记的是他放的内容，不是对错）',
+    posts68() === beforePlace68 + 1 && bodies68[bodies68.length - 1]?.trace?.length === 1 &&
+      bodies68[bodies68.length - 1].trace[0].k === '甲' &&
+      bodies68[bodies68.length - 1].trace[0].from === null &&
+      bodies68[bodies68.length - 1].trace[0].to === '线粒体',
+    JSON.stringify(bodies68[bodies68.length - 1]?.trace));
+  check('就地重画：槽位层换上填好的那一枚、读数跟着走、别的图不动',
+    layer68._innerHTML.includes('ui-pin-slot-filled') && layer68._innerHTML.includes('线粒体') &&
+      out68.textContent === '现在放着：甲 = 线粒体' && outOther68.textContent === '不动',
+    layer68._innerHTML + ' / ' + out68.textContent);
+  check('词牌就地改字不增删节点：这一枚标成已放上、「已在 甲」写进那一格、手里的词放下了',
+    chipA68.classList.contains('is-placed') &&
+      chipA68.querySelector('.ui-pin-term-on').textContent === '已在 甲' &&
+      chipA68.getAttribute('aria-pressed') === 'false' && held68('pn82') === null,
+    chipA68.className + ' / ' + chipA68.getAttribute('aria-pressed'));
+  check('放上去的词不被禁用，改说它在哪儿（读屏不许这个词凭空消失）',
+    chipA68.getAttribute('aria-label') === '「线粒体」已经放在「甲」上，要点那个位置才拿回来' &&
+      chipA68.disabled === false, chipA68.getAttribute('aria-label'));
+  check('贴完把焦点还给那一枚词牌（键盘不用从头再走一遍）',
+    doc.activeElement === chipA68, String(doc.activeElement?.dataset?.uiItem));
+
+  const beforeBusy68 = posts68();
+  const r68again = handle68({ type: 'click', target: chipA68 });
+  check('点一枚已经贴好的词：不假装能直接拿起来，指路说点那个位置（也不写状态、不报回）',
+    r68again.handled === true && r68again.on === '甲' && posts68() === beforeBusy68 &&
+      ann68()?.textContent === '「线粒体」现在放在「甲」上，点那个位置把它拿回词池',
+    JSON.stringify(r68again) + ' / ' + ann68()?.textContent);
+
+  const beforeLift68 = posts68();
+  const r68lift = handle68({ type: 'click', target: slotA68 });
+  check('点那一处位置 = 拿回词池，并顺手拿在手里（与 arrange 同一手：再点一处就是改放那里）',
+    r68lift.handled === true && r68lift.action === 'lift' &&
+      ui68.readUiState('pn82').state['甲'] === undefined && held68('pn82') === '线粒体',
+    JSON.stringify(r68lift));
+  check('拿回这一步同样记进经过（写清从哪个值到空，自动那本账认不到没留下的键）',
+    posts68() === beforeLift68 + 1 && bodies68[bodies68.length - 1]?.trace?.[0]?.k === '甲' &&
+      bodies68[bodies68.length - 1].trace[0].from === '线粒体' &&
+      bodies68[bodies68.length - 1].trace[0].to === null,
+      JSON.stringify(bodies68[bodies68.length - 1]?.trace));
+  check('拿回之后读数照实说没有（不摆空数）',
+    out68.textContent === '现在还没有名字放上去', out68.textContent);
+
+  const slotB68 = doc.createElement('g'); slotB68.className = 'ui-pin-slot';
+  slotB68.dataset.uiPinSlot = 'pn82'; slotB68.dataset.uiName = '乙';
+  const beforeMove68 = posts68();
+  ui68.setUiValues('pn82', 'pin', { uiKind: 'pin', 甲: '线粒体' });
+  hold68('pn82', '线粒体');
+  const r68move = handle68({ type: 'click', target: slotB68 });
+  check('一个词只在一处：把同一枚贴去另一处，原处自动空出来（改版后旧映射撞上也不留两处）',
+    r68move.handled === true && r68move.action === 'place' &&
+      ui68.readUiState('pn82').state['乙'] === '线粒体' && ui68.readUiState('pn82').state['甲'] === undefined,
+    JSON.stringify(ui68.readUiState('pn82').state));
+  check('这一手机械记两步（乙 拿到词、甲 空出来）——不许只记一半',
+    posts68() === beforeMove68 + 1 && bodies68[bodies68.length - 1]?.trace?.length === 2 &&
+      bodies68[bodies68.length - 1].trace[0].k === '乙' &&
+      bodies68[bodies68.length - 1].trace[1].k === '甲' &&
+      bodies68[bodies68.length - 1].trace[1].to === null,
+      JSON.stringify(bodies68[bodies68.length - 1]?.trace));
+
+  const beforeEmpty68 = posts68();
+  ui68.setUiValues('pn82', 'pin', { uiKind: 'pin' });
+  hold68('pn82', null);
+  const slotC68 = doc.createElement('g'); slotC68.className = 'ui-pin-slot';
+  slotC68.dataset.uiPinSlot = 'pn82'; slotC68.dataset.uiName = '甲';
+  const r68none = handle68({ type: 'click', target: slotC68 });
+  check('手里没词就点位置：不动账、不报回，但那句话一定说出来（点了不响才是最难查的错）',
+    r68none.handled === false && posts68() === beforeEmpty68 &&
+      Object.keys(ui68.readUiState('pn82').state).join(',') === 'uiKind' &&
+      ann68()?.textContent === '先点词池里的一个词，再点图上的一处位置',
+    JSON.stringify(r68none) + ' / ' + ann68()?.textContent);
+
+  // 5) 键盘同权：位置不是原生按钮，宿主得接住 Enter / 空格
+  ui68.resetUiState();
+  compile68(cell);
+  domRoot.append(block68);
+  const beforeKey68 = posts68();
+  pick68('pn82', '细胞核');
+  const k68a = key68({ key: 'Enter', target: slotA68, preventDefault() {} });
+  check('位置聚焦后按 Enter 就是贴上去（与指针同权、同样报回）',
+    k68a.handled === true && k68a.action === 'place' &&
+      ui68.readUiState('pn82').state['甲'] === '细胞核' && posts68() === beforeKey68 + 1,
+    JSON.stringify(k68a));
+  const k68b = key68({ key: ' ', target: slotA68, preventDefault() {} });
+  check('已贴好的位置上按空格 = 拿回词池（同一处再按一下是反着走，不是没反应）',
+    k68b.handled === true && k68b.action === 'lift' && ui68.readUiState('pn82').state['甲'] === undefined,
+    JSON.stringify(k68b));
+  check('别的档的键盘路没被抢（清单的一行不认得贴名图的 data）',
+    key68({ key: 'Enter', target: { dataset: { uiCheck: 'c1' } } }).handled === false, '');
+  check('认不出贴名图就返回 null（这一档之外的事件照原路走，不冒充接住了）',
+    pinClick68({ target: { classList: { contains: () => false }, closest: () => null, dataset: {} } }) === null, '');
+  check('宿主那份口径与编译器同一把尺：同一份状态，两边数出来的槽位一模一样',
+    (() => {
+      ui68.resetUiState();
+      compile68(cell);
+      ui68.setUiValues('pn82', 'pin', { uiKind: 'pin', 甲: '线粒体' });
+      const f = frame68('pn82');
+      const html = compile68(cell).html;
+      return f.slots.length === 2 &&
+        f.slots.map((x) => `${x.name}=${x.term || ''}`).join(',') === '甲=线粒体,乙=' &&
+        f.view.pool.join(',') === '细胞核,细胞膜' &&
+        /data-ui-name="甲"[^>]*aria-label="甲：供能的地方。现在放着「线粒体」（按 Enter 把它拿回词池）"/.test(html);
+    })(), '');
+
+  // 6) handoff：把"哪一处放着哪个词"机械地拼成话递回对话
+  const spec68 = ui68.readUiState('pn82')?.spec;
+  ui68.writeUiState('pn82', 'pin', { uiKind: 'pin', 甲: '线粒体', 乙: '细胞核' }, spec68);
+  const h68 = handle68({ type: 'click', target: { dataset: { uiHandoff: 'pn82' } } });
+  check('pin 的 handoff 被接住', h68.handled === true && h68.kind === 'handoff' && h68.id === 'pn82', JSON.stringify(h68));
+  check('拼句只报这份对应（按位置顺序），没有"对没对"也没有"贴了几个"',
+    input68.value === '我在贴名图「给细胞贴名」里放成：甲=线粒体、乙=细胞核', input68.value);
+  ui68.writeUiState('pn82', 'pin', { uiKind: 'pin' }, spec68);
+  handle68({ type: 'click', target: { dataset: { uiHandoff: 'pn82' } } });
+  check('一处都没贴：照实说没有，并把要贴的那件事带回话里',
+    input68.value.startsWith('我在贴名图「给细胞贴名」里还没有把词放到位置上（哪个位置是线粒体'), input68.value);
+  check('拼句里没有判分词（Invariant 4）',
+    !/score|percent|mastery|correct|incorrect|\/\s*\d/.test(input68.value), input68.value);
+  input68.value = boxBefore68;
+
+  // 7) 右栏回看卡：贴名图出现在「这局动过的界面」
+  st68.notebook.progress.artifact_state = { 'ui:pn82': { uiKind: 'pin', 甲: '线粒体', 乙: '细胞核' } };
+  renderPanel68();
+  const card68 = deepAll(deskBody(), 'ui-state-card')[0] || null;
+  const notes68 = card68 ? deepAll(card68, 'state-note').map((n) => n.textContent) : [];
+  check('右栏卡把贴名图排进来（只出现象：哪一处放着哪个词，没有"贴了几处"）',
+    notes68.includes('贴名图「pn82」') && notes68.includes('· 甲 放着 线粒体') && notes68.includes('· 乙 放着 细胞核') &&
+      !notes68.some((n) => /共\s*\d|\/\s*\d|%/.test(n)), notes68.join(' / '));
+  st68.notebook.progress.artifact_state = { 'ui:pn82': { uiKind: 'pin' } };
+  renderPanel68();
+  const notes68b = (() => {
+    const c = deepAll(deskBody(), 'ui-state-card')[0] || null;
+    return c ? deepAll(c, 'state-note').map((n) => n.textContent) : [];
+  })();
+  check('一处都没贴：卡上照实说还没有把词放上去',
+    notes68b.includes('· 还没有把词放上去'), notes68b.join(' / '));
+
+  // 8) 改版装不下的不静默：词表换短了，装不下的那几条点名
+  ui68.resetUiState();
+  compile68(cell);
+  ui68.setUiValues('pn82', 'pin', { uiKind: 'pin', 甲: '线粒体', 乙: '细胞膜' });
+  const shortFence = cell.filter((l) => l !== 'term: 细胞膜');
+  const c68short = compile68(shortFence).html;
+  check('旧映射装不上来：不摆上来，但照实说装不下几条（改版不许悄悄吃掉他贴好的）',
+    c68short.includes('这一版词表或位置装不下 1 条旧映射，没有摆上来') &&
+      ui68.readUiState('pn82').state['甲'] === '线粒体' &&
+      ui68.readUiState('pn82').state['乙'] === undefined, c68short.slice(-700));
+  check('续得回来的那一条照旧贴在上头，装不下的那枚词从词池里下去了',
+    c68short.includes('现在放着：甲 = 线粒体') && !c68short.includes('data-ui-item="细胞膜"') &&
+      c68short.includes('data-ui-item="细胞核"'), c68short.slice(-400));
+
+  // 9) XSS：id / 位置名 / 词 / ask 里的引号与标签挤不出处理器
+  ui68.resetUiState();
+  const x68 = compile68(['kind: pin', 'id: x1" onfocus=alert(1) x="', 'alt: a" onload="alert(1)',
+    'ask: "><img src=x onerror=1>', 'shape: 甲 | rect | 10,10,60,40',
+    'pin: 位 置" | 30,40', 'pin: 乙 | 45,45', 'term: "><script>alert(1)</script>', 'term: 正常词']).html;
+  check('id / alt / ask / 位置名 / 词里的标签与引号被转义（属性位也跑不掉）',
+    !/<img src=x/.test(x68) && !/<script>/.test(x68) && !/onerror=1"/.test(x68) &&
+      x68.includes('&lt;'), x68.slice(0, 400));
+
+  globalThis.fetch = realFetch68;
+  ui68.resetUiState();
+  check('这一节无异常', errors.length === errsBefore68, errors.slice(errsBefore68).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

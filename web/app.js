@@ -28,6 +28,13 @@ import {
   markFreeSlot,
   markPlace,
   MARK_MAX_DEFAULT,
+  // pin（第八十二轮）：槽位层、词池、读数与"此刻怎么分的"都由编译器给——
+  // 宿主重画的那一帧必须和编译的第一帧一字不差（与 mark 同一把尺）。
+  pinView,
+  pinSlots,
+  pinSlotEls,
+  pinReadoutText,
+  pinTermAria,
   // 文字版（第八十轮）：那份文字只有一份，住在编译器里。宿主摊开与抄走读的是同一个口，
   // 长法也借编译器那一只手——两处各写一遍迟早漂。
   uiTakeaway,
@@ -3575,6 +3582,182 @@ function handleUiMarkClick(evt) {
   return placeUiMark(id, p.x, p.y) ? { kind: 'mark', id, action: 'place' } : null;
 }
 
+// ── pin（第八十二轮）：词池里的名字由学习者放到位置上 ────────────────────
+// 编译器摆第一帧，这一节接住三条动作：拿一个词、把词放到一处、把已放的词拿回词池。
+// 与 arrange 同一把尺：拿起只是这一次手势（不进状态、不报回），放下 / 移走 / 拿回才是
+// 一步（进经过）。判定一个字都不在这儿发生——"放得对不对"是老师在对话里判的事。
+
+/** 台面上此刻的贴名图（按 class 找、再比对 data：id 是模型写的，不拼进选择器）。 */
+function uiPinNodes(id) {
+  return (document.querySelectorAll?.('.ui-pinblock') || []).filter((n) => n.dataset?.uiPin === id);
+}
+
+/** 这一张贴名图此刻的口径：图框、位、词、此刻怎么分的（与编译器同一把尺）。 */
+function uiPinFrame(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return null;
+  const W = Number(rec.spec.W) || 320;
+  const H = Number(rec.spec.H) || 180;
+  const view = pinView(rec.state, rec.spec);
+  return { rec, W, H, view, slots: pinSlots(rec.spec, view) };
+}
+
+/**
+ * 手里拿着的那枚词：住在宿主这本小账上（不进状态、不进经过——它是取景，不是落定的选择，
+ * 与 mark 的十字光标同一条道理）。改版重画、摊开文字版都不会把它冲掉。
+ */
+const uiPinHeld = new Map();
+
+function uiPinHeldTerm(id) {
+  return uiPinHeld.get(id) || null;
+}
+
+function setUiPinHeld(id, term) {
+  if (term) uiPinHeld.set(id, term);
+  else uiPinHeld.delete(id);
+}
+
+function uiPinChips(block, id) {
+  return [...(block.querySelectorAll?.('.ui-pin-term') || [])]
+    .filter((c) => c.dataset?.uiPinTerm === id);
+}
+
+function uiPinChip(id, term) {
+  for (const block of uiPinNodes(id)) {
+    const chip = uiPinChips(block, id).find((c) => c.dataset?.uiItem === term);
+    if (chip) return chip;
+  }
+  return null;
+}
+
+/**
+ * 只重画动的三处：槽位层、词池、读数。词池那两枚逐枚改字（不整段换掉），
+ * 免得正聚焦的那枚词与手里拿着的那一枚被这一刷甩掉。
+ */
+function repaintUiPin(id) {
+  const f = uiPinFrame(id);
+  if (!f) return;
+  const inner = pinSlotEls(id, f.slots, f.W, f.H);
+  const held = uiPinHeldTerm(id);
+  for (const block of uiPinNodes(id)) {
+    for (const layer of [...(block.querySelectorAll?.('.ui-pin-layer') || [])]) {
+      if (layer.dataset?.uiPinLayer !== id) continue; // 认图靠 data，class 只管长相
+      layer.innerHTML = inner;
+    }
+    for (const chip of uiPinChips(block, id)) {
+      const term = chip.dataset?.uiItem;
+      if (!term) continue;
+      const on = f.view.at.get(term) || null;
+      chip.classList?.toggle?.('is-placed', Boolean(on));
+      chip.setAttribute?.('aria-pressed', term === held ? 'true' : 'false');
+      chip.setAttribute?.('aria-label', pinTermAria(term, on));
+      const tag = chip.querySelector?.('.ui-pin-term-on');
+      if (tag) tag.textContent = on ? `已在 ${on}` : '';
+    }
+  }
+  const text = pinReadoutText(f.view);
+  for (const out of [...(document.querySelectorAll?.('.ui-pin-readout') || [])]) {
+    if (out.dataset?.uiPinReadout === id) out.textContent = text;
+  }
+  // 摊开着的文字版跟着这一帧重算（第八十轮）：刚放上去与刚拿回来的词都要在里面。
+  refreshAltText(id);
+}
+
+/** 拿一个词 / 放下手里那个词（同一枚再按一次就是放回）。这不是一步，只是这一次手势。 */
+function pickUiPinTerm(id, term) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return null;
+  if (!(rec.spec.terms || []).includes(term)) return null;
+  const on = pinView(rec.state, rec.spec).at.get(term) || null;
+  if (on) {
+    // 已经在一处位置上了：不假装能直接拿起来——那会让他以为点一下就算改过。指路，不动账。
+    announce(`「${term}」现在放在「${on}」上，点那个位置把它拿回词池`);
+    return { held: null, on };
+  }
+  const held = uiPinHeldTerm(id) === term ? null : term;
+  setUiPinHeld(id, held);
+  repaintUiPin(id);
+  announce(held ? `已拿起「${held}」，再点图上的一处位置放下` : `「${term}」放回词池了，没拿在手里`);
+  return { held, on: null };
+}
+
+/** 把词放到一处：这一处原有的词自动回词池，别处拿着的同一枚词自动挪过来（一个词只在一处）。 */
+function placeUiPinTerm(id, name, termOverride) {
+  const f = uiPinFrame(id);
+  if (!f) return null;
+  const pin = (f.rec.spec.pins || []).find((p) => p.name === name);
+  if (!pin) return null;
+  const prev = f.rec.state || {};
+  const term = termOverride || uiPinHeldTerm(id);
+  if (!term) {
+    announce(f.view.at.size ? '先点一个词拿在手里，再点位置' : '先点词池里的一个词，再点图上的一处位置');
+    return null;
+  }
+  if (!(f.rec.spec.terms || []).includes(term)) return null;
+  const from = prev[name] || null;
+  const state = { ...prev, [name]: term, uiKind: 'pin' };
+  // 一个词只落在一处：它在别处就先从别处摘下来（这一步同时写两处，机械记清楚）。
+  const cleared = (f.rec.spec.pins || []).filter((p) => p.name !== name && prev[p.name] === term);
+  for (const p of cleared) delete state[p.name];
+  setUiValues(id, 'pin', state);
+  setUiPinHeld(id, null);
+  repaintUiPin(id);
+  forwardUiState(id, state, prev,
+    [{ k: name, from, to: term }, ...cleared.map((p) => ({ k: p.name, from: term, to: null }))]);
+  const chip = uiPinChip(id, term);
+  chip?.focus?.();
+  announce(from ? `「${name}」上换成了「${term}」（原来是「${from}」）` : `「${term}」放在「${name}」上`);
+  return { name, term, from };
+}
+
+/** 把已放的词拿回词池，并顺手拿在手里——再点一处位置就是"改放那里"（与 arrange 同一手）。 */
+function liftUiPinTerm(id, name) {
+  const f = uiPinFrame(id);
+  if (!f) return null;
+  const prev = f.rec.state || {};
+  const term = prev[name];
+  if (!term) return null;
+  const state = { ...prev };
+  delete state[name];
+  state.uiKind = 'pin';
+  setUiValues(id, 'pin', state);
+  setUiPinHeld(id, term);
+  repaintUiPin(id);
+  // 拿掉的那一格不在新 state 里，自动那本账记不到它——这一步机械写明。
+  forwardUiState(id, state, prev, [{ k: name, from: term, to: null }]);
+  const chip = uiPinChip(id, term);
+  chip?.focus?.();
+  announce(`「${term}」从「${name}」拿回词池，拿在手里——再点一处位置就放到那里`);
+  return { name, term };
+}
+
+/**
+ * 贴名图上的指针动作：落在词牌上 = 拿起 / 指路，落在一处位置上 = 放下 / 拿回。
+ * 认不出贴名图就返回 null（这一档之外的事件照原路走）。
+ */
+function handleUiPinClick(evt) {
+  const node = evt?.target;
+  if (!node) return null;
+  const chip = node?.classList?.contains?.('ui-pin-term') ? node : node?.closest?.('.ui-pin-term');
+  const chipId = chip?.dataset?.uiPinTerm;
+  const term = chip?.dataset?.uiItem;
+  if (chipId && term) {
+    const r = pickUiPinTerm(chipId, term);
+    return r ? { kind: 'pin', id: chipId, action: 'pick', ...r } : null;
+  }
+  const slot = node?.classList?.contains?.('ui-pin-slot') ? node : node?.closest?.('.ui-pin-slot');
+  const slotId = slot?.dataset?.uiPinSlot;
+  const name = slot?.dataset?.uiName;
+  if (!slotId || !name) return null;
+  const rec = readUiState(slotId);
+  if (rec?.state?.[name]) {
+    return liftUiPinTerm(slotId, name) ? { kind: 'pin', id: slotId, action: 'lift', name } : null;
+  }
+  return placeUiPinTerm(slotId, name)
+    ? { kind: 'pin', id: slotId, action: 'place', name }
+    : null;
+}
+
 /**
  * handoff（第二十九轮，学 Intelligent UI 的 issueNewTurn 不学自动发言）：
  * 交互档把学习者当前的状态递回对话的唯一出口。点了把「勾了哪几项 / 参数滑到哪 /
@@ -3712,6 +3895,15 @@ function handoffUiState(id) {
     text = f?.slots?.length
       ? `我在标图「${name}」里指的是：${shown}${f.slots.length > 5 ? '…' : ''}`
       : `我在标图「${name}」里还没有标上记号（${rec.spec?.ask || ''}）`;
+  } else if (kind === 'pin') {
+    // 只报"哪一处放着哪一个词"：这一份就是下一句话的原料。不写"放对几个 / 共几个"，
+    // 也不写"对不对"——空位不是没学会，放错也不是分数（Invariant 4）。
+    const f = uiPinFrame(id);
+    const placed = (f?.slots || []).filter((s) => s.term);
+    const shown = placed.slice(0, 6).map((s) => `${s.name}=${s.term}`).join('、');
+    text = placed.length
+      ? `我在贴名图「${name}」里放成：${shown}${placed.length > 6 ? '…' : ''}`
+      : `我在贴名图「${name}」里还没有把词放到位置上（${rec.spec?.ask || ''}）`;
   } else {
     return false;
   }
@@ -3837,6 +4029,12 @@ function handleUiDeskEvent(evt) {
   // 是按钮，不该被"点在按钮上顺手标了一处"抢走。不认档位、只认这两个 data。
   const markHit = handleUiMarkClick(evt);
   if (markHit) return { handled: true, ...markHit };
+
+  // pin（第八十二轮）：词牌与位置共用一条委托路——拿起、放下、拿回都是"按一下"，
+  // 与 mark 同一族（不认档位、只认 data-ui-pin-term / data-ui-pin-slot）。排在 mark 之后：
+  // 两者各自只认自己那两个 data，谁也不会抢走对方的事件，放在一起只为读的人好找。
+  const pinHit = handleUiPinClick(evt);
+  if (pinHit) return { handled: true, ...pinHit };
 
   // ask / question（第三十九轮，ask 融入 IUI）：选项点选与提交都走桌面委托。
   // 编译器长的题卡（data-ui-ask-opt）没有 onclick，renderAskCard 也把 onclick 撤了——
@@ -4176,9 +4374,9 @@ function handleUiDeskEvent(evt) {
 /**
  * 键盘也走得通：节点带 tabindex=0，聚焦后回车/空格就是一次点击。空格要 preventDefault，
  * 不然页面会跟着滚。非图节点、非 Enter/空格一律不拦（别的键盘路各走各的）。
- * 这一族有三个：diagram 的节点（data-ui-node）、map 的点（data-ui-map-stop）与
- * callout 的编号（data-ui-callout-mark）——它们都是 SVG 里的 <g role="button">，
- * 不是原生按钮，键盘这条路得宿主接住。
+ * 这一族有四个：diagram 的节点（data-ui-node）、map 的点（data-ui-map-stop）、
+ * callout 的编号（data-ui-callout-mark）与 pin 的一处位置（data-ui-pin-slot）——
+ * 它们都是 SVG 里的 <g role="button">，不是原生按钮，键盘这条路得宿主接住。
  */
 function handleUiDeskKey(e) {
   const key = e?.key;
@@ -4253,7 +4451,8 @@ function handleUiDeskKey(e) {
   }
   if (key !== 'Enter' && key !== ' ') return { handled: false };
   const hit = node?.dataset?.uiNode || node?.dataset?.uiMapStop || node?.dataset?.uiCalloutMark
-    || (node?.closest ? node.closest('[data-ui-node]') || node.closest('[data-ui-map-stop]') || node.closest('[data-ui-callout-mark]') : null);
+    || node?.dataset?.uiPinSlot
+    || (node?.closest ? node.closest('[data-ui-node]') || node.closest('[data-ui-map-stop]') || node.closest('[data-ui-callout-mark]') || node.closest('[data-ui-pin-slot]') : null);
   if (!hit) return { handled: false };
   e.preventDefault?.();
   return handleUiDeskEvent(e);
@@ -4955,7 +5154,7 @@ function renderUiStatePanel(body) {
   );
   if (!entries.length) return;
   const fit = (s) => { const t = String(s); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
-  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍', map: '地图', arrange: '排列', sketch: '草图', callout: '标注图', mark: '标图' };
+  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍', map: '地图', arrange: '排列', sketch: '草图', callout: '标注图', mark: '标图', pin: '贴名图' };
   const card = el('div', 'ui-state-card');
   card.append(el('div', 'panel-section-title', '这局动过的界面'));
   for (const [key, s] of entries) {
@@ -5044,6 +5243,15 @@ function renderUiStatePanel(body) {
         for (const [k, v] of points) card.append(el('div', 'state-note', `· ${fit(k)} 在 ${fit(v)}`));
       } else {
         card.append(el('div', 'state-note', '· 还没有标上记号'));
+      }
+    } else if (s.uiKind === 'pin') {
+      // 与标图同一族：位置名 = 词，是他自己放上去的那份对应，读得回也抄得走。
+      // 只出现象，不写"放对几个 / 共几个"——那是分数，不是学情（Invariant 4）。
+      const put = Object.entries(s).filter(([k, v]) => k !== 'uiKind' && v !== '' && v !== undefined && v !== null);
+      if (put.length) {
+        for (const [k, v] of put) card.append(el('div', 'state-note', `· ${fit(k)} 放着 ${fit(v)}`));
+      } else {
+        card.append(el('div', 'state-note', '· 还没有把词放上去'));
       }
     }
     // 第六十一轮：经过（落定的那几步）。快照上面刚说完"现在停在哪"，这里说"怎么走到这"——
@@ -6568,6 +6776,15 @@ export const __hooks = {
   removeUiMark,
   handleUiMarkClick,
   uiPointOf,
+  // 第八十二轮：贴名图（图上的名字由学习者自己放）
+  repaintUiPin,
+  uiPinFrame,
+  uiPinHeldTerm,
+  setUiPinHeld,
+  pickUiPinTerm,
+  placeUiPinTerm,
+  liftUiPinTerm,
+  handleUiPinClick,
   // 第八十轮：文字版 + 抄走（画出来的那一族的同一份文字，两个出口）
   setAltOpen,
   altIsOpen,
