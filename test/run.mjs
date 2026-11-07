@@ -2427,7 +2427,7 @@ check('学生改过的那条标出来，并写明以他的版本为准',
   handoutSnapshot.includes('〔学生改过〕') && handoutSnapshot.includes('以学生的版本为准'));
 check('只带最近十条（别把整本讲义塞进每一回合）', !handoutSnapshot.includes('n-01') && handoutSnapshot.includes('n-03'));
 check('没有讲义时快照里不多这一段',
-  !renderStateSnapshot({ graph: null, progress: { notes: [] } }).includes('学生「笔记」页上已有的讲义'));
+  !renderStateSnapshot({ graph: null, progress: { notes: [] } }).includes('学生已经收下的讲义'));
 
 // 清掉测试笔记，别污染后续断言
 {

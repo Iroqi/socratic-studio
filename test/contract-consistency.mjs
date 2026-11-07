@@ -2304,6 +2304,53 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   }
 }
 
+// ── 第八十四轮：地名核查——模型每回合最先读的那张表还在念「笔记页」「中间列」。
+//    第八十一轮清了工具 schema 与状态快照的右栏话，但漏了更靠上的那一层：prompt 开头的
+//    「规则里说的 ↔ 这个应用里用」能力映射表。它说 run_scene 把内容按场分段进「中间列」、
+//    说 update_todo_list 让学习者看见进度、说 compile_notes 落进学生的「笔记」页——这三处
+//    界面在第三十九轮与第七十七回已经不存在：台面是一整片对话流（左轨是列表，没有中间列），
+//    待办不画进界面，笔记是长在讲它的那一拍里的卡片。模型在这张表上读到旧地名，就会在
+//    对话里把学习者支使到不存在的页与进度条上去。这一轮把这张表与它下游的几处口径一起
+//    清成现状，并把「笔记是卡片、整本走导出」写成正向锚点。
+{
+  const promptSrc84 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+  const readmeSrc84 = fs.readFileSync(path.join(app, 'README.md'), 'utf8');
+
+  // ① 能力映射表不再提供已经不存在的页 / 列 / 进度条
+  check('prompt 里没有「笔记」页 / 中间列 / 让学习者看见进度（模型每回合最先读的那张表）',
+    !promptSrc84.includes('「笔记」页') && !promptSrc84.includes('中间列')
+      && !promptSrc84.includes('让学习者看见进度'),
+    '能力映射表还在念旧地名');
+
+  // ② 待办那一行与工具描述同一口径（第 81 轮改的是 schema，这张表漏了）
+  check('待办那一行写明「不画进界面」「学习者看不见待办」',
+    promptSrc84.includes('学习者看不见待办') && promptSrc84.includes('待办不画进界面')
+      && !promptSrc84.includes('用它让学习者知道你现在到哪儿了'),
+    '待办那一行还在许诺一个学习者能看见的进度条');
+
+  // ③ 笔记的去向改成卡片 + 导出（正向锚点：模型能指着真东西说）
+  check('笔记那两处写明「笔记卡片」与台面顶部的「导出笔记」',
+    promptSrc84.includes('笔记卡片') && promptSrc84.includes('台面顶部的「导出笔记」'),
+    '笔记还被说成有独立一页');
+
+  // ④ 工具描述里也没有旧地名，且保持正向说法
+  check('工具说明书没有「笔记」页 / 中间列，compile_notes 说「落成笔记卡片」',
+    !agentSrc.includes('「笔记」页') && !agentSrc.includes('中间列')
+      && agentSrc.includes('落成一张笔记卡片'),
+    'agent.mjs 还在指旧页');
+
+  // ⑤ 快照标题随口径更新（旧标题只在一处，别又长出第二份说法）
+  check('讲义快照标题改成「学生已经收下的讲义」（旧「笔记页」标题一处不剩）',
+    promptSrc84.includes('学生已经收下的讲义')
+      && promptSrc84.split('学生「笔记」页上已有的讲义').length - 1 === 0,
+    '快照标题与实现不同步');
+
+  // ⑥ README 的已知边界如实记下笔记的去向（文档与实现同一句话）
+  check('README §10 记下「笔记没有独立的一页」',
+    /## 10\. 已知边界[\s\S]*?笔记没有独立的一页/.test(readmeSrc84),
+    'README 没记这条边界');
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;

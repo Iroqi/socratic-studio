@@ -370,7 +370,7 @@ export function buildTools() {
     {
       name: TOOL_NAMES.GET_GRAPH,
       description:
-        '读取当前 Learning Graph 与学习状态快照（Graph / 进度 / 全部结构化笔记 / 补丁日志）。续学、写讲解或制品、判断下一步之前调用，确认概念范围、误解与当前 state。需要回想早先收过的笔记时，include=notes（或 all）会把学生「笔记」页上**全部**结构化笔记带回（含 key_points、example 与〔学生改过〕标记）——回读是准的，不要凭印象。',
+        '读取当前 Learning Graph 与学习状态快照（Graph / 进度 / 全部结构化笔记 / 补丁日志）。续学、写讲解或制品、判断下一步之前调用，确认概念范围、误解与当前 state。需要回想早先收过的笔记时，include=notes（或 all）会把这一本收下的**全部**结构化笔记带回（含 key_points、example 与〔学生改过〕标记）——回读是准的，不要凭印象。',
       parameters: Type.Object({
         include: Type.Optional(
           Type.String({ description: 'graph | progress | notes | patch_log | all，默认 all' }),
@@ -471,7 +471,7 @@ export function buildTools() {
     {
       name: TOOL_NAMES.COMPILE_NOTES,
       description:
-        '把刚讲完的教学内容整理成一条结构化笔记。**当场同步落盘**：这一轮就存进学生的「笔记」页，不排队、不延后。笔记必须来自刚讲完它的你——你知道哪里是重点、哪里是类比、哪里埋了坑，事后重读 transcript 再提炼只会又慢又丢重点。时机不用自己拿捏：set_progress_state 把某个概念升到「已学懂」或「能用出来」时，返回值里会点名告诉你该收了。不要每条 text_delta 都调，一个知识点讲透了收一条；学生最后拿走的「笔记本」就是这些东西攒出来的。',
+        '把刚讲完的教学内容整理成一条结构化笔记。**当场同步落盘**：这一轮就落成一张笔记卡片（长在讲它的那一拍里），不排队、不延后。笔记必须来自刚讲完它的你——你知道哪里是重点、哪里是类比、哪里埋了坑，事后重读 transcript 再提炼只会又慢又丢重点。时机不用自己拿捏：set_progress_state 把某个概念升到「已学懂」或「能用出来」时，返回值里会点名告诉你该收了。不要每条 text_delta 都调，一个知识点讲透了收一条；学生最后拿走的「笔记本」就是这些东西攒出来的。',
       parameters: Type.Object({
         title: Type.String({ description: '这条笔记的标题，一句话点题' }),
         concepts: Type.Optional(Type.Array(Type.String({ description: '本条笔记关联的概念 id' }))),
@@ -2275,7 +2275,7 @@ export async function runTurn({
     // 带上 msgId，宿主侧做幂等 upsert：同一条消息重复落盘是更新而不是追加。
     // 放在这里而不是循环顶部的 break 之前：纯正文的收尾 step 也走这条路径，
     // 否则最后一段话（往往是最重要的总结）永远不落盘。
-    // 场是中间列的分组单元：这一步的正文/道具/题属于哪一场，消息就带哪一场的 id。
+    // 场是台面的分组单元：这一步的正文/道具/题属于哪一场，消息就带哪一场的 id。
     // 只打一次、打过不改——一条消息归它开始那场。跨场时若允许后一场把它重标，
     // 上一场的正文就会从上一场的格子里消失（同一 msgId 反复 upsert 时最容易犯的错）。
     if (host && host.sceneId == null && session.scene?.current) host.sceneId = session.scene.current.id;
