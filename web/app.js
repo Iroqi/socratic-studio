@@ -35,6 +35,20 @@ import {
   pinSlotEls,
   pinReadoutText,
   pinTermAria,
+  // build（第八十三轮）：部件层、线层、池子、读数与"放不放得下"都由编译器给——
+  // 宿主重画的那一帧必须和编译的第一帧一字不差（与 mark / pin 同一把尺）。
+  buildView,
+  buildStateOf,
+  buildCanPlace,
+  buildPartEls,
+  buildLinkEls,
+  buildPoolEls,
+  buildReadoutText,
+  buildPoolAria,
+  buildCrossSvg,
+  buildLinkKey,
+  BUILD_LINK_ON,
+  BUILD_MAX_LINKS,
   // 文字版（第八十轮）：那份文字只有一份，住在编译器里。宿主摊开与抄走读的是同一个口，
   // 长法也借编译器那一只手——两处各写一遍迟早漂。
   uiTakeaway,
@@ -3904,6 +3918,18 @@ function handoffUiState(id) {
     text = placed.length
       ? `我在贴名图「${name}」里放成：${shown}${placed.length > 6 ? '…' : ''}`
       : `我在贴名图「${name}」里还没有把词放到位置上（${rec.spec?.ask || ''}）`;
+  } else if (kind === 'build') {
+    // 只报"他摆成什么样"：件在哪、线怎么连。不写"接对几条 / 共几条"，也不写"对不对"——
+    // 结构还没搭完不是没学会，搭错了也不是分数（Invariant 4）。
+    const f = uiBuildFrame(id);
+    const placed = f?.view?.placed || [];
+    const shown = placed.slice(0, 6)
+      .map((p) => `${p.name}（${markPlace(p.x, p.y, f.W, f.H)}）`).join('、');
+    const wires = (f?.view?.links || []).slice(0, 8).map((l) => `${l.a} → ${l.b}`).join('、');
+    text = placed.length
+      ? `我在搭建图「${name}」里搭的是：${shown}${placed.length > 6 ? '…' : ''}` +
+        (wires ? `；线：${wires}${(f.view.links.length > 8 ? '…' : '')}` : '')
+      : `我在搭建图「${name}」里还没有把部件摆上图框（${rec.spec?.ask || ''}）`;
   } else {
     return false;
   }
@@ -3912,6 +3938,367 @@ function handoffUiState(id) {
   box.focus?.();
   toast('已放进输入框，看过再发');
   return true;
+}
+
+// ── build（第八十三轮）：部件与线由学习者搭 ─────────────────────────────────
+// 编译器摆第一帧（空图框 + 一排部件），这一节接住四条动作：拿一件、放一件、接一条线、
+// 拆一样。与 pin 同一把尺：拿起 / 选线头只是这一次手势（不进状态、不报回），放下 / 接上 /
+// 断掉才是落定的一步（进状态、进步骤的经过）。判定一个字都不在这儿发生——"这么搭对不对"
+// 是老师在对话里判的事，图框上没有答案，也没有"该摆哪"的坐标可比。
+
+/** 台面上此刻的搭建图（按 class 找、再比对 data：id 是模型写的，不拼进选择器）。 */
+function uiBuildNodes(id) {
+  return (document.querySelectorAll?.('.ui-buildblock') || []).filter((n) => n.dataset?.uiBuildblock === id);
+}
+
+/** 这一张搭建图此刻的口径：图框、有哪些件、此刻摆成什么样（与编译器同一把尺）。 */
+function uiBuildFrame(id) {
+  const rec = readUiState(id);
+  if (!rec?.spec) return null;
+  const W = Number(rec.spec.W) || 320;
+  const H = Number(rec.spec.H) || 180;
+  return { rec, W, H, view: buildView(rec.state, rec.spec) };
+}
+
+/**
+ * 手里拿着的那一件、当线头的那一件：都住在宿主这本小账上（不进状态、不进经过——它们是
+ * 一次手势的中途，与 pin 手里那枚词、mark 的十字光标同一条道理）。落定的那一步才记账。
+ */
+const uiBuildHeld = new Map();
+const uiBuildSource = new Map();
+
+function uiBuildHeldPart(id) { return uiBuildHeld.get(id) || null; }
+function uiBuildSourcePart(id) { return uiBuildSource.get(id) || null; }
+
+function setUiBuildHeld(id, name) {
+  if (name) uiBuildHeld.set(id, name); else uiBuildHeld.delete(id);
+  // 拿在手里才看得见十字光标（CSS 靠这一枚 class，不靠 JS 往里塞节点）。
+  for (const block of uiBuildNodes(id)) block.classList?.toggle?.('is-held', Boolean(name));
+}
+
+function setUiBuildSource(id, name) {
+  if (name) uiBuildSource.set(id, name); else uiBuildSource.delete(id);
+}
+
+function uiBuildChips(block, id) {
+  return [...(block.querySelectorAll?.('.ui-build-chip') || [])]
+    .filter((c) => c.dataset?.uiBuildChip === id);
+}
+
+function uiBuildChip(id, name) {
+  for (const block of uiBuildNodes(id)) {
+    const chip = uiBuildChips(block, id).find((c) => c.dataset?.uiItem === name);
+    if (chip) return chip;
+  }
+  return null;
+}
+
+/**
+ * 只重画动的四处：部件层、线层、池子里每一枚、读数。整块重画会把正聚焦的那一件换掉——
+ * 键盘用户每接一条线就被扔回页首，与滑杆 / 草图 / 贴名图那一路是同一条道理。
+ */
+function repaintUiBuild(id) {
+  const f = uiBuildFrame(id);
+  if (!f) return;
+  const markerId = f.rec.spec.markerId || 'ui-build-arrow-0';
+  const partsInner = buildPartEls(id, f.view, f.W, f.H, uiBuildSourcePart(id));
+  const linksInner = buildLinkEls(id, f.view, markerId);
+  const held = uiBuildHeldPart(id);
+  for (const block of uiBuildNodes(id)) {
+    for (const layer of [...(block.querySelectorAll?.('.ui-build-layer') || [])]) {
+      if (layer.dataset?.uiBuildLayer !== id) continue; // 认图靠 data，class 只管长相
+      layer.innerHTML = partsInner;
+    }
+    for (const layer of [...(block.querySelectorAll?.('.ui-build-links') || [])]) {
+      if (layer.dataset?.uiBuildLinks !== id) continue;
+      layer.innerHTML = linksInner;
+    }
+    for (const chip of uiBuildChips(block, id)) {
+      const name = chip.dataset?.uiItem;
+      if (!name) continue;
+      const on = f.view.byName.get(name) || null;
+      const where = on ? markPlace(on.x, on.y, f.W, f.H) : null;
+      chip.classList?.toggle?.('is-placed', Boolean(on));
+      chip.setAttribute?.('aria-pressed', !on && held === name ? 'true' : 'false');
+      chip.setAttribute?.('aria-label', buildPoolAria(name, where));
+      const tag = chip.querySelector?.('.ui-build-chip-on');
+      if (tag) tag.textContent = on && where ? `已在${where}` : '';
+    }
+  }
+  const text = buildReadoutText(f.view, f.W, f.H);
+  for (const out of [...(document.querySelectorAll?.('.ui-build-readout') || [])]) {
+    if (out.dataset?.uiBuildReadout === id) out.textContent = text;
+  }
+  // 摊开着的文字版跟着这一帧重算（第八十轮）：刚摆上的、刚断掉的都要在里面。
+  refreshAltText(id);
+}
+
+/** 图框上那截十字光标此刻在哪：住在宿主，不进状态（取景不是落定的选择）。 */
+const uiBuildCursors = new Map();
+
+function uiBuildCursor(id) {
+  const f = uiBuildFrame(id);
+  if (!f) return null;
+  const kept = uiBuildCursors.get(id);
+  const x = Number.isFinite(kept?.x) ? kept.x : f.W / 2;
+  const y = Number.isFinite(kept?.y) ? kept.y : f.H / 2;
+  return { ...f, x: Math.min(f.W, Math.max(0, x)), y: Math.min(f.H, Math.max(0, y)) };
+}
+
+function nudgeUiBuildCursor(id, dirX, dirY, shift = false) {
+  const cur = uiBuildCursor(id);
+  if (!cur) return null;
+  const step = Math.max(2, Math.round(Math.min(cur.W, cur.H) / 24)) * (shift ? 4 : 1);
+  const x = Math.min(cur.W, Math.max(0, cur.x + dirX * step));
+  const y = Math.min(cur.H, Math.max(0, cur.y + dirY * step));
+  uiBuildCursors.set(id, { x, y });
+  for (const g of [...(document.querySelectorAll?.('.ui-build-cross') || [])]) {
+    if (g.dataset?.uiBuildCross === id) {
+      g.setAttribute?.('transform', `translate(${uiPointText(x, y).replace(',', ' ')})`);
+    }
+  }
+  const held = uiBuildHeldPart(id);
+  const why = held ? buildCanPlace(cur.view, cur.W, cur.H, held, x, y) : null;
+  announce(why
+    ? `光标在 ${uiPointText(x, y)}，这里${why}`
+    : `光标在 ${uiPointText(x, y)}${held ? `（手里是「${held}」）` : ''}`);
+  return { x, y };
+}
+
+/** 落定的一步交回宿主：状态、这一刷、经过（删掉的键不在新 state 里，机械写明）。 */
+function commitUiBuild(id, prev, state, trace) {
+  setUiValues(id, 'build', state);
+  repaintUiBuild(id);
+  forwardUiState(id, state, prev, trace);
+}
+
+/** 池子里点一件：没摆上 = 拿在手里（再点一次放回）；已摆上 = 把它从图框拿回来（身上的线一起断）。 */
+function pickUiBuildPart(id, name) {
+  const f = uiBuildFrame(id);
+  if (!f) return null;
+  const part = (f.rec.spec.parts || []).find((p) => p.name === name);
+  if (!part) return null;
+  if (f.view.byName.has(name)) {
+    const off = liftUiBuildPart(id, name);
+    return off ? { lifted: name, cut: off.cut } : null;
+  }
+  const held = uiBuildHeldPart(id) === name ? null : name;
+  setUiBuildHeld(id, held);
+  setUiBuildSource(id, null);
+  repaintUiBuild(id);
+  announce(held
+    ? `已拿起「${held}」，再点图框上一处空位放下`
+    : `「${name}」放回池子里了，没拿在手里`);
+  return { held, lifted: null };
+}
+
+/** 把一件摆到图框上：放不放得下由编译器那一句判（边上、叠着）。拒掉的这一次照实给个记号——
+ *  那句话说过了就等于这一次点击有了归属，不许让宿主以为"不是我这张图的事"再往下走一遍。 */
+function placeUiBuildPart(id, x, y, nameOverride) {
+  const f = uiBuildFrame(id);
+  if (!f) return null;
+  const name = nameOverride || uiBuildHeldPart(id);
+  if (!name) {
+    announce(f.view.placed.length
+      ? '先点池子里的一件拿在手里，再点图框'
+      : '先点池子里的一件，再点图框上你要它待着的位置');
+    return { refused: true };
+  }
+  if (!f.view.pool.some((p) => p.name === name) && !f.rec.spec.parts.some((p) => p.name === name)) return null;
+  const nx = Math.round(x * 100) / 100;
+  const ny = Math.round(y * 100) / 100;
+  const why = buildCanPlace(f.view, f.W, f.H, name, nx, ny);
+  if (why) {
+    announce(`这一处${why}，挪开一点再放`);
+    return { refused: true };
+  }
+  const prev = f.rec.state || {};
+  const state = { ...prev, [name]: uiPointText(nx, ny), uiKind: 'build' };
+  commitUiBuild(id, prev, state, [{ k: name, from: prev[name] ?? null, to: state[name] }]);
+  setUiBuildHeld(id, null);
+  repaintUiBuild(id);
+  const chip = uiBuildChip(id, name);
+  chip?.focus?.();
+  announce(`「${name}」摆在${markPlace(nx, ny, f.W, f.H)}`);
+  return { name, x: nx, y: ny };
+}
+
+/** 把已摆上的一件拿回池子：它身上的线同时断掉——断掉的每一格都不在新 state 里，逐条写明。 */
+function liftUiBuildPart(id, name) {
+  const f = uiBuildFrame(id);
+  if (!f) return null;
+  const prev = f.rec.state || {};
+  const raw = prev[name];
+  if (raw === undefined || raw === null || raw === '') return null;
+  const gone = f.view.links.filter((l) => l.a === name || l.b === name);
+  const state = { ...prev };
+  delete state[name];
+  for (const l of gone) delete state[l.key];
+  state.uiKind = 'build';
+  const trace = [
+    { k: name, from: raw, to: null },
+    ...gone.map((l) => ({ k: l.key, from: BUILD_LINK_ON, to: null })),
+  ];
+  commitUiBuild(id, prev, state, trace);
+  if (uiBuildSourcePart(id) === name) setUiBuildSource(id, null);
+  setUiBuildHeld(id, name);
+  repaintUiBuild(id);
+  const chip = uiBuildChip(id, name);
+  chip?.focus?.();
+  announce(gone.length
+    ? `「${name}」拿回池子里了，身上 ${gone.length} 条线一起断开`
+    : `「${name}」拿回池子里了，拿在手里——再点图框就放到那里`);
+  return { name, cut: gone.length };
+}
+
+/** 点图框上的一件：手里有线头就接一条线，没有就把它当线头（再点一次取消）。 */
+function selectUiBuildPart(id, name) {
+  const f = uiBuildFrame(id);
+  if (!f) return null;
+  const from = uiBuildSourcePart(id);
+  if (!from) {
+    setUiBuildSource(id, name);
+    repaintUiBuild(id);
+    announce(`「${name}」是线头，再点另一件就接一条线（再点它自己取消）`);
+    return { action: 'source', name };
+  }
+  if (from === name) {
+    setUiBuildSource(id, null);
+    repaintUiBuild(id);
+    announce(`「${name}」不当线头了`);
+    return { action: 'unsource', name };
+  }
+  return linkUiBuildParts(id, from, name);
+}
+
+/** 接一条线：同一个方向只有一条（要反着来就另接一条），满了照实说，不静默挤掉旧的。 */
+function linkUiBuildParts(id, from, to) {
+  const f = uiBuildFrame(id);
+  if (!f) return null;
+  if (!f.view.byName.has(from) || !f.view.byName.has(to)) {
+    announce('两头都得先在图框上，线才有地方落');
+    return null;
+  }
+  const prev = f.rec.state || {};
+  const key = buildLinkKey(from, to);
+  if (prev[key]) {
+    announce(`「${from}」到「${to}」已经有一条线了，点那条线可以断开`);
+    setUiBuildSource(id, null);
+    repaintUiBuild(id);
+    return { action: 'dup', key };
+  }
+  if (f.view.links.length >= BUILD_MAX_LINKS) {
+    announce(`这张搭建图最多接 ${BUILD_MAX_LINKS} 条线，先断一条再接`);
+    return null;
+  }
+  const state = { ...prev, [key]: BUILD_LINK_ON, uiKind: 'build' };
+  commitUiBuild(id, prev, state, [{ k: key, from: null, to: BUILD_LINK_ON }]);
+  setUiBuildSource(id, null);
+  setUiBuildHeld(id, null);
+  repaintUiBuild(id);
+  announce(`接上：${from} → ${to}`);
+  return { action: 'link', key };
+}
+
+/** 点一条线 = 断开它：这一步 mechanical 写明（断掉的键不在新 state 里，自动那本账记不到）。 */
+function cutUiBuildLink(id, key) {
+  const f = uiBuildFrame(id);
+  if (!f) return null;
+  const prev = f.rec.state || {};
+  const raw = prev[key];
+  if (raw === undefined || raw === null || raw === '') return null;
+  const state = { ...prev };
+  delete state[key];
+  state.uiKind = 'build';
+  commitUiBuild(id, prev, state, [{ k: key, from: raw, to: null }]);
+  const pair = String(key).split('>');
+  announce(`断开：${pair[0]} → ${pair[1]}`);
+  // 线层刚被整段换掉，正聚焦的那一条已经没了：把焦点还给这张图框，别把人扔回页首。
+  for (const svg of [...(document.querySelectorAll?.('.ui-build-canvas') || [])]) {
+    if (svg.dataset?.uiBuildAdd === id) svg.focus?.();
+  }
+  return { key };
+}
+
+/** 方向键挪一件已经摆上的部件：挪不动照实说，不把它塞进别人的框里。 */
+function nudgeUiBuildPart(id, name, dirX, dirY, shift = false) {
+  const f = uiBuildFrame(id);
+  if (!f) return null;
+  const at = f.view.byName.get(name);
+  if (!at) return null;
+  const step = Math.max(2, Math.round(Math.min(f.W, f.H) / 24)) * (shift ? 4 : 1);
+  const x = at.x + dirX * step;
+  const y = at.y + dirY * step;
+  const why = buildCanPlace(f.view, f.W, f.H, name, x, y, name);
+  if (why) {
+    announce(`「${name}」挪不动：${why}`);
+    return null;
+  }
+  const nx = Math.round(x * 100) / 100;
+  const ny = Math.round(y * 100) / 100;
+  const prev = f.rec.state || {};
+  const state = { ...prev, [name]: uiPointText(nx, ny), uiKind: 'build' };
+  commitUiBuild(id, prev, state, [{ k: name, from: prev[name], to: state[name] }]);
+  announce(`「${name}」挪到 ${uiPointText(nx, ny)}（${markPlace(nx, ny, f.W, f.H)}）`);
+  return { x: nx, y: ny };
+}
+
+/**
+ * 搭建图上的指针动作：落在池子里的一枚 = 拿起 / 拿回，落在一条线上 = 断开，
+ * 落在一件部件上 = 当线头 / 接一条线，落在图框别处 = 把手里那件放下。
+ * 认不出搭建图就返回 null（这一档之外的事件照原路走）。
+ */
+function handleUiBuildClick(evt) {
+  const node = evt?.target;
+  if (!node) return null;
+  const chip = node?.classList?.contains?.('ui-build-chip') ? node : node?.closest?.('.ui-build-chip');
+  const chipId = chip?.dataset?.uiBuildChip;
+  const chipName = chip?.dataset?.uiItem;
+  if (chipId && chipName) {
+    const r = pickUiBuildPart(chipId, chipName);
+    if (!r) return null;
+    return r.lifted
+      ? { kind: 'build', id: chipId, action: 'lift', name: chipName, cut: r.cut }
+      : { kind: 'build', id: chipId, action: 'pick', name: chipName };
+  }
+  const link = node?.classList?.contains?.('ui-build-link') ? node : node?.closest?.('.ui-build-link');
+  const linkKey = link?.dataset?.uiBuildLink;
+  if (linkKey) {
+    const block = link?.closest?.('.ui-buildblock');
+    const id = block?.dataset?.uiBuildblock;
+    if (!id) return null;
+    return cutUiBuildLink(id, linkKey) ? { kind: 'build', id, action: 'cut', key: linkKey } : null;
+  }
+  const part = node?.classList?.contains?.('ui-build-part') ? node : node?.closest?.('.ui-build-part');
+  const partId = part?.dataset?.uiBuildPart;
+  const partName = part?.dataset?.uiName;
+  if (partId && partName) {
+    const r = selectUiBuildPart(partId, partName);
+    return r ? { kind: 'build', id: partId, ...r, name: partName } : null;
+  }
+  const svg = node?.dataset?.uiBuildAdd !== undefined ? node : node?.closest?.('.ui-build-canvas');
+  const id = svg?.dataset?.uiBuildAdd;
+  if (!id) return null;
+  const f = uiBuildFrame(id);
+  if (!f) return null;
+  const p = sketchPointFromClient(svg, evt?.clientX, evt?.clientY, f.W, f.H);
+  if (!p) return null;
+  if (uiBuildHeldPart(id)) {
+    const put = placeUiBuildPart(id, p.x, p.y);
+    if (!put) return null;
+    return put.refused
+      ? { kind: 'build', id, action: 'none' }
+      : { kind: 'build', id, action: 'place', name: put.name };
+  }
+  if (uiBuildSourcePart(id)) {
+    // 线头状态下点了空白：不偷偷落位，也不凭空接一条线——只把线头取消。
+    setUiBuildSource(id, null);
+    repaintUiBuild(id);
+    announce('线头取消了');
+    return { kind: 'build', id, action: 'unsource' };
+  }
+  announce('先点池子里的一件，再点图框；点一件再点另一件接一条线');
+  return { kind: 'build', id, action: 'none' };
 }
 
 // ── 文字版 + 抄走（第八十轮）：画出来的那一族的同一份文字，两个出口 ──────────
@@ -4035,6 +4422,11 @@ function handleUiDeskEvent(evt) {
   // 两者各自只认自己那两个 data，谁也不会抢走对方的事件，放在一起只为读的人好找。
   const pinHit = handleUiPinClick(evt);
   if (pinHit) return { handled: true, ...pinHit };
+
+  // build（第八十三轮）：池子、部件、线、图框四条路共用一条委托——拿 / 放 / 接 / 断都是
+  // "按一下"，与 mark / pin 同一族（各自只认自己那几个 data，谁也不会抢走对方的事件）。
+  const buildHit = handleUiBuildClick(evt);
+  if (buildHit) return { handled: true, ...buildHit };
 
   // ask / question（第三十九轮，ask 融入 IUI）：选项点选与提交都走桌面委托。
   // 编译器长的题卡（data-ui-ask-opt）没有 onclick，renderAskCard 也把 onclick 撤了——
@@ -4449,10 +4841,62 @@ function handleUiDeskKey(e) {
     }
     return { handled: false };
   }
+  // build（第八十三轮）：部件与线都不是原生控件（SVG 里的 <g role="button"> / <g role="group">），
+  // 方向键与 Delete 必须排在通用 Enter/空格之前接住，否则空格会被当成"点一下"而什么也不发生。
+  const buildPart = node?.classList?.contains?.('ui-build-part') ? node : node?.closest?.('.ui-build-part');
+  if (buildPart?.dataset?.uiBuildPart && buildPart?.dataset?.uiName) {
+    const id = buildPart.dataset.uiBuildPart;
+    const name = buildPart.dataset.uiName;
+    if (key === 'Backspace' || key === 'Delete') {
+      e.preventDefault?.();
+      uiSettling = true;
+      const off = liftUiBuildPart(id, name);
+      return { handled: Boolean(off), kind: 'build', id, action: 'lift', name };
+    }
+    const step = e?.shiftKey ? 4 : 1;
+    const delta = key === 'ArrowLeft' ? [-1, 0]
+      : key === 'ArrowRight' ? [1, 0]
+        : key === 'ArrowUp' ? [0, -1]
+          : key === 'ArrowDown' ? [0, 1]
+            : null;
+    if (delta) {
+      e.preventDefault?.();
+      uiSettling = true;
+      const moved = nudgeUiBuildPart(id, name, delta[0], delta[1], e?.shiftKey);
+      return { handled: Boolean(moved), kind: 'build', id, action: 'move', name };
+    }
+  }
+  const buildLinkNode = node?.classList?.contains?.('ui-build-link') ? node : node?.closest?.('.ui-build-link');
+  // 图框那一段只认最外面那层：件与线都长在图框里，Enter 落在它们身上时不许被"放到光标上"抢走
+  // ——指针那一路是先认牌、再认线、再认件、最后才认取景面，键盘必须走同一个次序。
+  const buildCanvas = node?.dataset?.uiBuildAdd !== undefined ? node
+    : (buildPart || buildLinkNode) ? null : node?.closest?.('.ui-build-canvas');
+  if (buildCanvas?.dataset?.uiBuildAdd) {
+    const id = buildCanvas.dataset.uiBuildAdd;
+    const delta = key === 'ArrowLeft' ? [-1, 0]
+      : key === 'ArrowRight' ? [1, 0]
+        : key === 'ArrowUp' ? [0, -1]
+          : key === 'ArrowDown' ? [0, 1]
+            : null;
+    if (delta) {
+      e.preventDefault?.();
+      return { handled: Boolean(nudgeUiBuildCursor(id, delta[0], delta[1], Boolean(e?.shiftKey))), kind: 'build', id };
+    }
+    if (key === 'Enter' || key === ' ') {
+      // 光标在哪就放在哪：光标是取景，落下来的这一件才进状态与经过。
+      e.preventDefault?.();
+      uiSettling = true;
+      const cur = uiBuildCursor(id);
+      if (!cur) return { handled: false };
+      const put = placeUiBuildPart(id, cur.x, cur.y);
+      if (!put) return { handled: false };
+      return { handled: true, kind: 'build', id, action: put.refused ? 'none' : 'place' };
+    }
+  }
   if (key !== 'Enter' && key !== ' ') return { handled: false };
   const hit = node?.dataset?.uiNode || node?.dataset?.uiMapStop || node?.dataset?.uiCalloutMark
-    || node?.dataset?.uiPinSlot
-    || (node?.closest ? node.closest('[data-ui-node]') || node.closest('[data-ui-map-stop]') || node.closest('[data-ui-callout-mark]') || node.closest('[data-ui-pin-slot]') : null);
+    || node?.dataset?.uiPinSlot || node?.dataset?.uiBuildPart || node?.dataset?.uiBuildLink || node?.dataset?.uiBuild
+    || (node?.closest ? node.closest('[data-ui-node]') || node.closest('[data-ui-map-stop]') || node.closest('[data-ui-callout-mark]') || node.closest('[data-ui-pin-slot]') || node.closest('[data-ui-build-part]') || node.closest('[data-ui-build-link]') : null);
   if (!hit) return { handled: false };
   e.preventDefault?.();
   return handleUiDeskEvent(e);
@@ -5154,7 +5598,7 @@ function renderUiStatePanel(body) {
   );
   if (!entries.length) return;
   const fit = (s) => { const t = String(s); return t.length > 40 ? `${t.slice(0, 39)}…` : t; };
-  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍', map: '地图', arrange: '排列', sketch: '草图', callout: '标注图', mark: '标图', pin: '贴名图' };
+  const word = { checklist: '清单', form: '表单', calculator: '计算器', diagram: '图解', chart: '图表', explore: '探索', game: '游戏', walkthrough: '走一遍', map: '地图', arrange: '排列', sketch: '草图', callout: '标注图', mark: '标图', pin: '贴名图', build: '搭建图' };
   const card = el('div', 'ui-state-card');
   card.append(el('div', 'panel-section-title', '这局动过的界面'));
   for (const [key, s] of entries) {
@@ -5253,6 +5697,15 @@ function renderUiStatePanel(body) {
       } else {
         card.append(el('div', 'state-note', '· 还没有把词放上去'));
       }
+    } else if (s.uiKind === 'build') {
+      // 与贴名图同一族：摆上哪几件、接了哪几条线，是他自己搭出来的那份结构。
+      // 只出现象，不写"搭对没有 / 几条线"——那是判分，不是证据（Invariant 4）。
+      const put = Object.entries(s).filter(([k]) => k !== 'uiKind');
+      const on = put.filter(([k]) => !k.includes('>'));
+      const wires = put.filter(([k]) => k.includes('>'));
+      for (const [k, v] of on) card.append(el('div', 'state-note', `· ${fit(k)} 摆在 ${fit(v)}`));
+      for (const [k] of wires) card.append(el('div', 'state-note', `· ${fit(k).replace('>', ' → ')}`));
+      if (!put.length) card.append(el('div', 'state-note', '· 还没有把部件摆上图框'));
     }
     // 第六十一轮：经过（落定的那几步）。快照上面刚说完"现在停在哪"，这里说"怎么走到这"——
     // 学习者自己回看得到，老师下一轮也读得到（同一份 progress.ui_trace，不是一个新账本）。
@@ -6785,6 +7238,23 @@ export const __hooks = {
   placeUiPinTerm,
   liftUiPinTerm,
   handleUiPinClick,
+  // 第八十三轮：搭建图（部件与线由学习者搭）
+  repaintUiBuild,
+  uiBuildFrame,
+  uiBuildHeldPart,
+  uiBuildSourcePart,
+  setUiBuildHeld,
+  setUiBuildSource,
+  uiBuildCursor,
+  nudgeUiBuildCursor,
+  nudgeUiBuildPart,
+  pickUiBuildPart,
+  placeUiBuildPart,
+  liftUiBuildPart,
+  selectUiBuildPart,
+  linkUiBuildParts,
+  cutUiBuildLink,
+  handleUiBuildClick,
   // 第八十轮：文字版 + 抄走（画出来的那一族的同一份文字，两个出口）
   setAltOpen,
   altIsOpen,

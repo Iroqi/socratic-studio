@@ -1226,7 +1226,7 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   // 比的是"有哪几种"，不是"各写了几处"：同一个记号在两个档里都写一次是常事（data-ui-name
   // 先由 form 写、第四十七轮 map 的点也写）——名字对得上就行，多一种没人读的才该红。
   check('编译器一共只写这几个 data-*（多一个就是多一条没人读的记号，契约测试会把它认成断线）',
-    [...new Set(emittedAttrs)].sort().join(',') === 'ui-alt,ui-alt-toggle,ui-arrange,ui-arrange-bin,ui-arrange-item,ui-arrange-move,ui-ask-opt,ui-ask-skip,ui-ask-submit,ui-bucket,ui-calc,ui-callout,ui-callout-mark,ui-chart,ui-chart-snap,ui-check,ui-copy,ui-diagram,ui-dir,ui-explore,ui-explore-tab,ui-field,ui-form,ui-game,ui-game-try,ui-handle,ui-handoff,ui-item,ui-map,ui-map-stop,ui-mark,ui-mark-add,ui-mark-cross,ui-mark-holder,ui-mark-layer,ui-mark-readout,ui-mark-slot,ui-name,ui-node,ui-param,ui-pin,ui-pin-layer,ui-pin-readout,ui-pin-slot,ui-pin-term,ui-sketch,ui-sketch-formula,ui-sketch-link,ui-sketch-readout,ui-slider,ui-suggest,ui-tab-name,ui-try-name,ui-walk,ui-walk-next,ui-walk-prev',
+    [...new Set(emittedAttrs)].sort().join(',') === 'ui-alt,ui-alt-toggle,ui-arrange,ui-arrange-bin,ui-arrange-item,ui-arrange-move,ui-ask-opt,ui-ask-skip,ui-ask-submit,ui-bucket,ui-build,ui-build-add,ui-build-chip,ui-build-cross,ui-build-layer,ui-build-link,ui-build-links,ui-build-part,ui-build-readout,ui-buildblock,ui-calc,ui-callout,ui-callout-mark,ui-chart,ui-chart-snap,ui-check,ui-copy,ui-diagram,ui-dir,ui-explore,ui-explore-tab,ui-field,ui-form,ui-game,ui-game-try,ui-handle,ui-handoff,ui-item,ui-map,ui-map-stop,ui-mark,ui-mark-add,ui-mark-cross,ui-mark-holder,ui-mark-layer,ui-mark-readout,ui-mark-slot,ui-name,ui-node,ui-param,ui-pin,ui-pin-layer,ui-pin-readout,ui-pin-slot,ui-pin-term,ui-sketch,ui-sketch-formula,ui-sketch-link,ui-sketch-readout,ui-slider,ui-suggest,ui-tab-name,ui-try-name,ui-walk,ui-walk-next,ui-walk-prev',
     [...new Set(emittedAttrs)].sort().join(','));
   for (const attr of new Set(emittedAttrs)) {
     const key = attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
@@ -1236,8 +1236,8 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   }
   check('宿主报回的 id 前缀 = 编译器续状态用的那个键位（`ui:` 两边一份）',
     /const UI_PREFIX = 'ui:'/.test(hostSrc25), 'app.js 里 UI_PREFIX 变了形状');
-  check('只有该存的十四档进 UI_STATEFUL（静态形状没有"学习者做过什么"这回事；diagram 第二十七轮升成交互档；chart 第三十二轮随 slider 升档：滑到哪张快照就是状态，静态 chart 不写 id 不存；explore 第三十三轮：点开看了哪一面就是状态；game 第三十五轮：试到哪一步、试过哪些就是状态；walkthrough 第三十六轮：走到哪一步、走到过哪些就是状态；form 第四十四轮：填进去的值就是状态；map 第四十七轮：点开看了哪个点就是状态，"他看了哪"不是"他会了"；arrange 第六十六轮：排成的顺序 / 每条在哪一栏就是状态，"他摆成什么样"不是"他摆对了"；sketch 第七十二轮：每个点拖到哪就是状态，"他摆成什么样"不是"他摆对了"；callout 第七十三轮：点开过图上的哪几块就是状态，"他点开了哪"不是"他点对了"；mark 第七十九轮：他在图上标了哪几处就是状态，"他指了哪"不是"他指对了"；pin 第八十二轮：哪个位置放着哪个名字就是状态，"他怎么配的"不是"他配对了"）',
-    (stateful || []).join(',') === 'checklist,form,calculator,diagram,chart,explore,game,walkthrough,map,arrange,sketch,callout,mark,pin', (stateful || []).join(','));
+  check('只有该存的十五档进 UI_STATEFUL（静态形状没有"学习者做过什么"这回事；diagram 第二十七轮升成交互档；chart 第三十二轮随 slider 升档：滑到哪张快照就是状态，静态 chart 不写 id 不存；explore 第三十三轮：点开看了哪一面就是状态；game 第三十五轮：试到哪一步、试过哪些就是状态；walkthrough 第三十六轮：走到哪一步、走到过哪些就是状态；form 第四十四轮：填进去的值就是状态；map 第四十七轮：点开看了哪个点就是状态，"他看了哪"不是"他会了"；arrange 第六十六轮：排成的顺序 / 每条在哪一栏就是状态，"他摆成什么样"不是"他摆对了"；sketch 第七十二轮：每个点拖到哪就是状态，"他摆成什么样"不是"他摆对了"；callout 第七十三轮：点开过图上的哪几块就是状态，"他点开了哪"不是"他点对了"；mark 第七十九轮：他在图上标了哪几处就是状态，"他指了哪"不是"他指对了"；pin 第八十二轮：哪个位置放着哪个名字就是状态，"他怎么配的"不是"他配对了"；build 第八十三轮：他摆上图框的件与接的线就是状态，"他搭成什么样"不是"他搭对了"）',
+    (stateful || []).join(',') === 'checklist,form,calculator,diagram,chart,explore,game,walkthrough,map,arrange,sketch,callout,mark,pin,build', (stateful || []).join(','));
   check('arrange 那一行说清了"界面里没有答案键"（order 故意打乱 / bucket 先落待分）',
     rowOf25('arrange').includes('没有答案键') && rowOf25('arrange').includes('故意打乱') && rowOf25('arrange').includes('待分'),
     rowOf25('arrange').slice(0, 120));
@@ -1295,9 +1295,9 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
       /图框的/.test(uiSrc) && !/现在标在：.*\$\{figNum/.test(uiSrc), '读数里混进了坐标');
     check('槽位号是身份不是进度：可见文字里没有「标了 N / 共 M 处」这一族计数',
       !/共 \$\{|标了 \$\{.*\} 处/.test(uiSrc), '界面上长出了完成度');
-    check('提示与 README 都改口到二十二档（一处说二十一处说二十二=词表数目在漂）',
-      promptSrc25.includes('只能用下面二十二档') && promptSrc25.includes('二十二档（围栏内每行都是') &&
-        readmeDoc.includes('### 6.2 二十二档') && readmeDoc.includes('共二十二档') &&
+    check('提示与 README 都改口到二十三档（一处说二十一处说二十二=词表数目在漂）',
+      promptSrc25.includes('只能用下面二十三档') && promptSrc25.includes('二十三档（围栏内每行都是') &&
+        readmeDoc.includes('### 6.2 二十三档') && readmeDoc.includes('共二十三档') &&
         !promptSrc25.includes('二十档') && !readmeDoc.includes('二十档'),
       '还有没跟着改口的地方');
     check('提示的第二十一条硬规矩说的是 mark（教了这档才写得出来）',
@@ -1894,8 +1894,8 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   check('名单里每一档都在封闭词表里（名单不是第二套词汇）',
     (drawn || []).every((k) => (kinds80 || []).includes(k)),
     (drawn || []).filter((k) => !(kinds80 || []).includes(k)).join(','));
-  check('名单点是那七档：diagram / map / figure / sketch / callout / mark / pin',
-    (drawn || []).slice().sort().join(',') === 'callout,diagram,figure,map,mark,pin,sketch', (drawn || []).join(','));
+  check('名单点是那八档：diagram / map / figure / sketch / callout / mark / pin / build',
+    (drawn || []).slice().sort().join(',') === 'build,callout,diagram,figure,map,mark,pin,sketch', (drawn || []).join(','));
   check('chart 不在这一族里：它的数据出口本来就是那张看得见的表（缺口写在 README 已知边界）',
     !(drawn || []).includes('chart') && readmeSrc80.includes('chart') &&
       /文字版/.test(readmeSrc80) && /已知边界/.test(readmeSrc80), 'chart 的账没对上');
@@ -1933,8 +1933,8 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   check('剪贴板打不到有退路：摊开那句人话在界面上说得出口（不静默失败）',
     hostSrc80.includes('文字已经摊开，选中即可复制') && /toast\([^)]*, true\)/.test(hostSrc80),
     '抄不走的那一路没话说');
-  check('画出来的那一族每次落定都刷摊开的那一份（sketch / mark / pin / callout 四处）',
-    (hostSrc80.match(/refreshAltText\(id\);/g) || []).length === 4,
+  check('画出来的那一族每次落定都刷摊开的那一份（sketch / mark / pin / callout / build 五处）',
+    (hostSrc80.match(/refreshAltText\(id\);/g) || []).length === 5,
     `刷新点=${(hostSrc80.match(/refreshAltText\(id\);/g) || []).length} 处`);
 
   // ④ 样式：合着时读屏读得到，不许退成 display:none
@@ -1948,7 +1948,7 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
 
   // ⑤ 提示与 README 说的是同一件事（教了才可能写对；写了不教=偷偷多了一条出口）
   check('提示第二十二条说的是这一族的文字版（硬规矩排到 22 及以上）',
-    /^22\. \*\*/m.test(promptSrc80) && promptSrc80.includes('二十三条硬规矩') &&
+    /^22\. \*\*/m.test(promptSrc80) && promptSrc80.includes('二十四条硬规矩') &&
       promptSrc80.includes('文字版') && promptSrc80.includes('抄走'), '硬规矩没排到 22，或这一条没教');
   check('提示劝退"正文再复述一遍图"（与算式那条分工同一把尺）',
     promptSrc80.includes('不要把同一张图再散文复述一遍'), '提示里没有这条分工');
@@ -2064,12 +2064,28 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
 
   // ④ 词汇边界：这一档的词不许被别的档偷偷吃掉，也不许反过来抢
   check('ask 写进别的档被点名，mark 与 pin 两道门共用一条话术',
-    /kind !== 'mark' && kind !== 'pin' && markWords/.test(uiSrc82), '顶层那道 ask 守卫没放宽给 pin');
+    /kind !== 'mark' && kind !== 'pin' && kind !== 'build' && markWords/.test(uiSrc82), '顶层那道 ask 守卫没放宽给 pin / build');
+  check('part 写进别的档被点名（封闭词汇表不靠散文自觉）',
+    /kind !== 'build' && buildWords\(parsed\.fields\)/.test(uiSrc82) &&
+      /part 只配带 id 的 build/.test(uiSrc82), '顶层没有 part 那道守卫');
   check('pin / term 写进别的档被点名（语义词写错档不静默吞，与 handle / callout 同一把尺）',
     /只配带 id 的 pin/.test(uiSrc82), '没有这道守卫');
-  check('deck 的子块检查跟着放宽（顶层改了、子块没改=拼一块进去就漏网）',
-    /part\.kind !== 'mark' && part\.kind !== 'pin' && markWords/.test(uiSrc82) &&
-      /part\.kind !== 'pin' && pinWords/.test(uiSrc82), 'deck 里那道镜像守卫没跟上');
+  // 五道"这个词只配那一档"的守卫有两份：顶层一份、deck 子块一份。放宽给某一档必须两处一起改
+  // （只改顶层 = 拼进 deck 就漏网；只改子块 = 单独写那一档反而被拦）。这里比的是两边的豁免名单，
+  // 不背具体字符串——第八十三轮把 sketch / callout / pin 三道也放宽给了 build，靠背字面量背不下来。
+  const exempt83 = (src, guard, child) => {
+    const re = child
+      ? new RegExp(`(?:part\\.)?kind !== '[a-z]+'(?: && part\\.kind !== '[a-z]+')* && ${guard}\\(child\\.fields\\)`)
+      : new RegExp(`kind !== '[a-z]+'(?: && kind !== '[a-z]+')* && ${guard}\\(parsed\\.fields\\)`);
+    const m = src.match(re);
+    return m ? [...m[0].matchAll(/!== '([a-z]+)'/g)].map((x) => x[1]).sort().join(',') : null;
+  };
+  for (const w of ['sketchWords', 'calloutWords', 'markWords', 'pinWords', 'buildWords']) {
+    const top = exempt83(uiSrc82, w, false);
+    const kid = exempt83(uiSrc82, w, true);
+    check(`${w}：顶层与 deck 子块两道守卫豁免的是同一批档（顶层改了、子块没改=拼一块进去就漏网）`,
+      top !== null && kid !== null && top === kid, `顶层 ${top} / 子块 ${kid}`);
+  }
 
   // ⑤ 画法只有一处：宿主重画那一帧必须和编译的第一帧一字不差
   check('槽位层、词池、读数各一处定义，宿主走编译器导出的那一份',
@@ -2112,6 +2128,180 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   //    这里只钉最容易漏的一处——"合着不占位"那一格）
   check('「已在 甲」那一格永远长着、空着时不占位（宿主只改字不增删节点，焦点不会被甩掉）',
     /\.ui-pin-term-on:empty\s*\{\s*display:\s*none/.test(cssSrc82), 'styles.css 里少了这条');
+}
+
+// ── 第八十三轮：搭建图——件与线由学习者搭（学 Intelligent UI 的"可编辑图表"里"增删元素 +
+//    建构结构"那半句：diagram 的节点是模型写定的，这一档的节点与连线是他摆出来的）。
+//    与上一轮同一把尺：词表 + 编译器 + 宿主 + 提示 + README + 经过 + 样式，七处说同一件事。
+{
+  const uiSrc83 = fs.readFileSync(path.join(app, 'web', 'ui-compile.js'), 'utf8');
+  const hostSrc83 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
+  const promptSrc83 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+  const readmeSrc83 = fs.readFileSync(path.join(app, 'README.md'), 'utf8');
+  const cssSrc83 = fs.readFileSync(path.join(app, 'web', 'styles.css'), 'utf8');
+  const ledgerSrc83 = fs.readFileSync(path.join(app, 'server', 'ui-ledger.mjs'), 'utf8');
+
+  const litOf83 = (name) => {
+    const m = new RegExp(`export const ${name} = \\[([^\\]]*)\\]`).exec(uiSrc83);
+    return m ? [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]) : null;
+  };
+  const rowOf83 = (kind) =>
+    promptSrc83.split('\n').find((l) => l.includes('| \\`' + kind + '\\` |')) || '';
+
+  // ① 名单：三处名单 + 经过那张人话表，少一处 = 那一处不认这档
+  check('build 进了封闭词表（不进去=围栏写出来掉回原文，模型永远用不上）',
+    (litOf83('UI_KINDS') || []).includes('build'), (litOf83('UI_KINDS') || []).join(','));
+  check('build 进了 UI_STATEFUL（他摆上哪几件、接了哪几条线就是状态，改版与刷新都续得回来）',
+    (litOf83('UI_STATEFUL') || []).includes('build'), (litOf83('UI_STATEFUL') || []).join(','));
+  check('build 进了 UI_DRAWN（画出来的那一族第八档：图框上的结构得有一份人人能读的文字版）',
+    (litOf83('UI_DRAWN') || []).includes('build'), (litOf83('UI_DRAWN') || []).join(','));
+  check('经过里 build 有人话名字（读回的不是 kind 原文）',
+    /build: '搭建图'/.test(ledgerSrc83), 'ui-ledger.mjs 的 KIND_WORDS 缺 build');
+
+  // ② 说明书两处：提示那一行与 README 那一行都得点名门槛字段与"没有答案键"
+  {
+    const bdRow = rowOf83('build');
+    check('提示里 build 那行点名 id / ask / part，并说清围栏里没有答案键',
+      /id/.test(bdRow) && /ask/.test(bdRow) && /part/.test(bdRow) && /没有答案键/.test(bdRow),
+      bdRow.slice(0, 220));
+    check('提示里 build 那行写清"件与线由他摆"，不是又一层只读的 diagram',
+      /他自己搭|由你给/.test(bdRow) && /续着读给你/.test(bdRow), bdRow.slice(0, 300));
+    check('提示的第 24 条硬规矩就是 build（规矩数与档位同源，别处不许悄悄少一条）',
+      /^24\. \*\*\\`build\\`/m.test(promptSrc83) && /二十四条硬规矩/.test(promptSrc83), '');
+    check('README 的档位表里有 build 一行，6.2 那段说清了两种状态格子与 12 条线的上限',
+      /\| `build` \|/.test(readmeSrc83) && /草>兔 = 连着/.test(readmeSrc83) && /最多 12 条/.test(readmeSrc83), '');
+    check('README 的 6.4 写了 build 的两条键盘路（部件与线都可聚焦，图框自己也收键盘）',
+      /`build` 的两条路都是原生可达/.test(readmeSrc83) && /命中那条宽而透明/.test(readmeSrc83),
+      'README 里这一档的可访问说法没落地');
+    check('README 的已知边界认下"部件池是封闭的"这一条（不发明构件这件事要说在前头）',
+      /`build` 的部件池是封闭的/.test(readmeSrc83) && /canvas` 制品/.test(readmeSrc83), '');
+  }
+
+  // ③ completeness 编码：写不全就编不出来（与 mark / pin 同一道门）
+  check('build 的 ask 缺失是硬错（没有要搭的事，一盒部件就只是积木）',
+    /这张搭建图没写 ask/.test(uiSrc83), '编译器没有这条');
+  check('没有 id 编不出来（他搭成什么样得有个地方续）',
+    /这张搭建图没有 id/.test(uiSrc83), '编译器没有这条');
+  check('只有一件部件被劝回 question（一件东西不成结构）',
+    /只有一件部件就别用 build/.test(uiSrc83), '编译器没有这条');
+  check('画了底子却没有 alt 是硬错，空图框不要求（那张图还没被他搭出来）',
+    /画了底子就得写 alt/.test(uiSrc83) && /requireAlt: false/.test(uiSrc83), 'alt 那道门不是条件必填');
+  check('底子可以不画（requireShape 放宽给 build：图本来就该是空的）',
+    /requireShape: false/.test(uiSrc83), 'parseFigureScene 没带这个开关');
+
+  // ④ 词汇边界：这一档的词不许被别的档吃掉，别的档的词也不许混进来
+  for (const [话术, 漏掉的后果] of [
+    ['node / edge 是 diagram 的字段：谁连着谁由你写定用 diagram，要他接着搭用 build',
+      '模型把 diagram 的写法混进 build，界面就成了既不是那个也不是这个的半个东西'],
+    ['stop / route 是 map 的字段：谁在哪儿用 map，要他搭结构用 build', '同上，map 那套词混进来'],
+    ['handle / connect 是 sketch 的字段：点已由你摆好要他拖用 sketch，件与线都由他搭用 build',
+      'sketch 那套词混进来，两头都摆不平'],
+    ['pin / term 是 pin 的字段：位置你画好、名字他来贴用 pin，件与线他来摆用 build',
+      'pin 那套词混进来，编译器猜不想要哪一个'],
+    ['max 是 mark 的上限：build 容几件就是几行 part，标完放不下的那件由池子说给他听',
+      '一个不存在的上限字段被静默吞掉'],
+  ]) {
+    check(`围栏在 build 里写错档的词会被点名（不静默吞，也不给半个界面）：${话术.slice(0, 18)}…`,
+      uiSrc83.includes(话术), 漏掉的后果);
+  }
+  check('一条线上限只有一处数（宿主与编译器共用导出的那一个常量，别各自写 12）',
+    (uiSrc83.match(/export const BUILD_MAX_LINKS = 12/g) || []).length === 1 &&
+      /BUILD_MAX_LINKS,/.test(hostSrc83) && /BUILD_MAX_LINKS/.test(hostSrc83) &&
+      /最多接 \$\{BUILD_MAX_LINKS\} 条线/.test(hostSrc83) && /最多 12 条/.test(promptSrc83),
+    '上限在别处又写了一遍数字');
+
+  // ⑤ 画法只有一处：宿主重画那一帧必须和编译的第一帧一字不差
+  check('部件层、线层、池子、读数各一处定义，宿主走编译器导出的那一份',
+    (uiSrc83.match(/function buildPartEls/g) || []).length === 1 &&
+      (uiSrc83.match(/function buildLinkEls/g) || []).length === 1 &&
+      (uiSrc83.match(/function buildPoolEls/g) || []).length === 1 &&
+      (uiSrc83.match(/function buildReadoutText/g) || []).length === 1 &&
+      /buildPartEls,/.test(hostSrc83) && /buildPartEls\(/.test(hostSrc83) &&
+      /buildLinkEls,/.test(hostSrc83) && /buildLinkEls\(/.test(hostSrc83) &&
+      /buildReadoutText,/.test(hostSrc83) && /buildReadoutText\(/.test(hostSrc83),
+    '宿主在拼第二遍字（两处各写一遍迟早漂）');
+  check('口径也只有一处（buildView / buildStateOf / buildCanPlace 编译器与宿主共用同一把尺）',
+    (uiSrc83.match(/function buildView/g) || []).length === 1 &&
+      (uiSrc83.match(/function buildStateOf/g) || []).length === 1 &&
+      (uiSrc83.match(/function buildCanPlace/g) || []).length === 1 &&
+      /buildView,/.test(hostSrc83) && /buildView\(/.test(hostSrc83) &&
+      /buildCanPlace,/.test(hostSrc83) && /buildCanPlace\(/.test(hostSrc83),
+    '宿主自己算了一遍"此刻的样子"');
+  check('键的拼法只有一处（甲>乙 这个约定不许在别处手搓字符串）',
+    (uiSrc83.match(/function buildLinkKey/g) || []).length === 1 &&
+      /buildLinkKey,/.test(hostSrc83) && /buildLinkKey\(/.test(hostSrc83) &&
+      /BUILD_LINK_ON,/.test(hostSrc83) &&
+      (uiSrc83.match(/state\[l\.key\] = BUILD_LINK_ON/g) || []).length === 1,
+    '状态里的线在别处又写了一遍字面值');
+
+  // ⑥ 接线：点得动、键盘走得通、右栏读得到、递回有一句话
+  check('宿主的事件路由接上了 handleUiBuildClick（这档长出来点不动=没有这一档）',
+    /const buildHit = handleUiBuildClick\(evt\);/.test(hostSrc83), '事件路由里没接');
+  check('部件与图框两条键盘路都接上了（SVG 的 <g role="button"> 不是原生按钮）',
+    /node\?\.dataset\?\.uiBuildPart/.test(hostSrc83) && /node\?\.dataset\?\.uiBuild\b/.test(hostSrc83) &&
+      /closest\('\[data-ui-build-part\]'\)/.test(hostSrc83) && /closest\('\[data-ui-build-link\]'\)/.test(hostSrc83),
+    '键盘那两条路没接');
+  check('handoff 为 build 拼了一句人话（哪几件摆在哪、哪几条线，机械事实不交给模型）',
+    /kind === 'build'/.test(hostSrc83) && /我在搭建图「\$\{name\}」里搭的是/.test(hostSrc83) &&
+      /还没有把部件摆上图框/.test(hostSrc83), '递回那个出口没有这一档，或者空手时不说话');
+  check('右栏那张回看卡认得 build（word 表 + 状态分支两处都要有）',
+    /build: '搭建图'/.test(hostSrc83) && /s\.uiKind === 'build'/.test(hostSrc83),
+    '学习者自己看不见他刚做过的事');
+
+  // ⑦ Invariant 4：只出现象，不出现分数；手里那件与线头不是状态
+  check('界面上没有"接对几条 / 搭对几个"这一族计数（分数不许从界面这条缝里回来）',
+    !/搭对了|接对了|正确率|\banswer|solution/.test(uiSrc83.slice(
+      uiSrc83.indexOf('function compileBuild'), uiSrc83.indexOf('function compileBuild') + 12000)),
+    'build 里长出了对错');
+  check('拿在手里的那件、当线头的那件、十字光标都住在宿主这本小账上：不进状态、不进经过',
+    /const uiBuildHeld = new Map\(\)/.test(hostSrc83) &&
+      /const uiBuildSource = new Map\(\)/.test(hostSrc83) &&
+      /const uiBuildCursors = new Map\(\)/.test(hostSrc83) &&
+      !/uiBuildHeld|uiBuildSource|uiBuildCursors/.test(uiSrc83),
+    '取景被当成落定记进账本了');
+  check('断掉的线在「经过」里逐条写明（自动那本账只记新值，删格子必须手工补一行）',
+    /from: BUILD_LINK_ON, to: null/.test(hostSrc83), '拿回一件部件时，它身上的线没有记账');
+
+  // ⑧ 样式：最容易漏的两处——不占位那一格与"只加描边"那本账
+  check('「已在 西北部」那一格永远长着、空着时不占位（宿主只改字不增删节点，焦点不会被甩掉）',
+    /\.ui-build-chip-on:empty\s*\{\s*display:\s*none/.test(cssSrc83), 'styles.css 里少了这条');
+  check('拿在手里只加描边：底色这一路不许动（第四十八轮那本账）',
+    /\.ui-build-chip\[aria-pressed="true"\]\s*\{\s*border-color:[^}]*\}/.test(cssSrc83) &&
+      !/\.ui-build-chip\[aria-pressed="true"\][^}]*background/.test(cssSrc83),
+    'aria-pressed 那条规则里长出了底色');
+
+  // ⑨ 真跑一遍口径：状态里的键不能撞车（这是整档编码唯一的地基）
+  {
+    const ui83 = await import('../web/ui-compile.js');
+    const spec = {
+      W: 320, H: 180, ask: '把食物链搭出来',
+      parts: [{ name: '草', hint: '生产者' }, { name: '兔', hint: '' }, { name: '鹰', hint: '' }],
+    };
+    const state = { uiKind: 'build', '草': '90,40', '兔': '200,90', '草>兔': '连着' };
+    const v = ui83.buildView(state, spec);
+    check('摆上的两件进了图框、没摆的那件在池子里（口径不靠宿主猜）',
+      v.placed.length === 2 && v.pool.length === 1 && v.pool[0].name === '鹰',
+      JSON.stringify({ placed: v.placed.length, pool: v.pool.map((p) => p.name) }));
+    check('一条线数得出来，写回去的键与读进来的键是同一个（甲>乙 这套拼法闭合）',
+      v.links.length === 1 && v.links[0].key === ui83.buildLinkKey('草', '兔') &&
+        ui83.buildStateOf(v)['草>兔'] === ui83.BUILD_LINK_ON &&
+        ui83.buildStateOf(v)['草'] === '90,40',
+      JSON.stringify(ui83.buildStateOf(v)));
+    check('部件名字里带 > 编不出来（线靠「甲>乙」记，名字带 > 两种格子就分不开）',
+      ui83.buildLinkKey('草', '兔') === '草>兔' &&
+        /名字里有 >|不能带 >/.test(String(ui83.compileUiBlock(
+          ['kind: build', 'id: c83', 'ask: 搭出来', 'part: 甲>乙', 'part: 丙'], false).degraded || '')),
+      String(ui83.compileUiBlock(['kind: build', 'id: c83', 'ask: 搭出来', 'part: 甲>乙', 'part: 丙'], false).degraded));
+    check('越界的那件不算摆上：回到池子并说清装不下几件（改版不许悄悄吃掉他搭好的）',
+      ui83.buildView({ uiKind: 'build', '草': '319,179' }, { ...spec, W: 320, H: 180 }).dropped === 1 &&
+        ui83.buildView({ uiKind: 'build', '草': '90,40', '兔': '200,90', '鹰>兔': '连着' }, spec).droppedLinks === 1,
+      '装不下与断线没有各自记账');
+    check('放不下这一处会返回一句人话，不是 false（宿主照这句播出去，不静默吞点击）',
+      ui83.buildCanPlace(v, spec.W, spec.H, '鹰', 6, 6) === '图框边上放不下这一件' &&
+        /^和「.+」叠在一起$/.test(String(ui83.buildCanPlace(v, spec.W, spec.H, '鹰', 90, 40))) &&
+        ui83.buildCanPlace(v, spec.W, spec.H, '草', 90, 40, '草') === null,
+      String(ui83.buildCanPlace(v, spec.W, spec.H, '鹰', 6, 6)));
+  }
 }
 
 console.log(`\n${'─'.repeat(52)}`);

@@ -23,7 +23,7 @@ import { escapeHtml } from './escape.js';
 import { renderInline } from './inline.js';
 
 /** 封闭词汇表。加一档要连同它的降级路径、无障碍形状一起加，并在契约测试里对上 prompt.mjs。 */
-export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'figure', 'sketch', 'callout', 'mark', 'pin', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
+export const UI_KINDS = ['compare', 'steps', 'timeline', 'map', 'checklist', 'form', 'calculator', 'diagram', 'figure', 'sketch', 'callout', 'mark', 'pin', 'build', 'explore', 'chart', 'suggest', 'game', 'walkthrough', 'arrange', 'deck', 'question', 'canvas'];
 
 /**
  * 明名单：这些档**永远不做**，即使模型写了也不给编译。
@@ -48,8 +48,9 @@ export const UI_VETOED = ['progress', 'percent', 'score', 'mastery', 'bar', 'met
  * callout 第七十三轮："点开过图上的哪几块"就是状态（编号落在部件上，点一个看那一块）。
  * mark 第七十九轮："他在图上指了哪几处"就是状态（记号由学习者自己落，槽位号是身份）。
  * pin 第八十二轮："哪个位置放上了哪个名字"就是状态（图上的语义由学习者填，词表是模型给的）。
+ * build 第八十三轮："他摆上哪几件、接了哪几条线"就是状态（结构由学习者搭，部件池是模型给的）。
  */
-export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map', 'arrange', 'sketch', 'callout', 'mark', 'pin'];
+export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart', 'explore', 'game', 'walkthrough', 'map', 'arrange', 'sketch', 'callout', 'mark', 'pin', 'build'];
 
 /**
  * 画出来的那一族（第八十轮）：这一族的内容活在像素与编号里——SVG 的节点框、折线、
@@ -64,7 +65,7 @@ export const UI_STATEFUL = ['checklist', 'form', 'calculator', 'diagram', 'chart
  * chart 不在名单里，不是忘了它：它的数据出口本来就是 `table:` 那张看得见的表
  * （第五十四轮立的），这一轮不去动它，缺口记在 README「已知边界」。
  */
-export const UI_DRAWN = ['diagram', 'map', 'figure', 'sketch', 'callout', 'mark', 'pin'];
+export const UI_DRAWN = ['diagram', 'map', 'figure', 'sketch', 'callout', 'mark', 'pin', 'build'];
 
 const MAX_ITEMS = 40;
 const MAX_CELLS = 6;
@@ -2090,7 +2091,7 @@ function figureArrowEls(arrows, markerId) {
  * 解析只做一次，免得两份坐标校验迟早漂开（同一张图在 figure 里画得出来、在 sketch
  * 里却因为一条规则漏改而画不出来，是这一轮最不该出现的事）。
  */
-function parseFigureScene(fields, partial, kindName, { requireShape = true } = {}) {
+function parseFigureScene(fields, partial, kindName, { requireShape = true, requireAlt = true } = {}) {
   const title = pick(fields, 'title')[0] || '';
   const alt = (pick(fields, 'alt')[0] || '').trim();
   if (alt.length > FIGURE_ALT_MAX) {
@@ -2251,7 +2252,9 @@ function parseFigureScene(fields, partial, kindName, { requireShape = true } = {
     if (e) return e;
     return { pending: true };
   }
-  if (!alt && !partial) {
+  // alt 这道门默认是硬的（第五十二轮立的"写不出来就别画"）；requireAlt:false 只给 build 用——
+  // 它的图框一开始是空的，那张图还没被他搭出来，要说的事由 ask 说（compileBuild 里补底子那一查）。
+  if (requireAlt && !alt && !partial) {
     return { error: '没有 alt：写一句"这张图让人看到什么"——写不出来，就说明这张图还不该画' };
   }
   return { W, H, title, alt, shapes, labels, arrows, rawFrame, parts: [...names] };
@@ -3352,6 +3355,447 @@ function pinWords(fields) {
 }
 const PIN_ONLY = 'pin / term 只配带 id 的 pin（把名字贴到图上的位置，别的档没有"他放上去的词"这回事）';
 
+// ── 图上搭出来（第八十三轮，学 Intelligent UI 的 "editable" 里"增删元素"那半句） ──
+/**
+ * build（第八十三轮）：**场上有哪些东西、谁连着谁，由他摆**——第七十二轮的 sketch 让他挪
+ * 模型给定的点，第七十九轮的 mark 让他指一处，第八十二轮的 pin 让他给位置配名字；可每一档的
+ * **物件清单与关系**都写死在围栏里。缺的动词正是 OpenAI 说 editable graphics 时的那半句：
+ * "人可以往图上增删元素"——增与删。他说得出「线粒体」这三个字，不等于他知道线粒体在细胞里
+ * 站在谁旁边、谁供谁。
+ *
+ * 这一档的形状：模型给一组部件（`part`，封闭池子），图框一开始是空的。他从池子里拿一件、
+ * 放到图框上，再点一件当线头、点另一件接一条线。于是**结构是他搭出来的**，围栏里没有"该摆哪"、
+ * 没有"该连谁"，界面上也没有对错两色（教学法那条「结构 / 系统 靠建构（搭出来 / 拆开）」，
+ * 到今天才有内联的形状——从前只能整页走 canvas 制品）。
+ *
+ * 五条边界：
+ *   ① **部件池封闭**：图框上只可能出现声明过的部件，他不发明构件——发明构件是制品（canvas）的事，
+ *      这一档要读的是"他怎么组织给他的一组东西"，不是"他能画出什么"；
+ *   ② **没有答案键**：围栏里不存在正确布局与正确连线，界面只记"他此刻摆成什么样"（Invariant 4）；
+ *   ③ **一条线有方向**：线头那件 → 后点那件；同一对同一个方向只有一条，反向另算（食物链的箭头
+ *      朝哪边是内容，不是装饰）；
+ *   ④ **位置是内容、数字不是**：屏幕上与读屏里只说方位（图框的西北部），像素坐标进状态、进经过、
+ *      进递回的那句话（第五十二轮与第七十九轮那把尺）；
+ *   ⑤ 至少两件部件、`ask` 必填：只有一件东西就不成结构，没有要搭的事就只是一盒可拖的积木。
+ *
+ * 为什么不并进 sketch：sketch 的契约是"几何已经画好，几个点能动"，它的点与线由围栏声明、
+ * 拖了要接着算公式；build 的线是他接的，公式无从算起。同一 id 既"点由模型给"又"件由他添"，
+ * 两件界面就又混成一件了（与第八十二轮不并进 callout 同一把握）。
+ *
+ * `alt` 在这一档是**条件必填**：画了底子（有 shape）就得说清"这张图让人看到什么"，与 figure
+ * 同一道门；空图框不要求——那张图还不存在，此刻要说的事由 `ask` 说。
+ */
+const BUILD_FIELDS = new Set([...FIGURE_FIELDS, 'id', 'handoff', 'ask', 'part']);
+const BUILD_MIN_PARTS = 2;
+const BUILD_MAX_PARTS = 8;
+export const BUILD_MAX_LINKS = 12;
+const BUILD_NAME_MAX = 12;
+const BUILD_HINT_MAX = 40;
+const BUILD_ASK_MAX = 60;
+const BUILD_BOX_H = 30;
+/** 一条线在状态里的值：一个词，不是一个数（界面上没有"几条 / 共几条"这回事）。 */
+export const BUILD_LINK_ON = '连着';
+/** 键盘那条路的说法：编译器与宿主重画共用，别处不许再抄一份。 */
+const BUILD_KEYS = [
+  'Tab 走到池子里的一件按 Enter 拿在手里',
+  'Tab 走到图框按方向键移十字光标、Enter 放下',
+  '点一件再点另一件接一条线，点那条线断开它',
+  '聚焦一件按方向键挪它、Delete 拆掉（池子里点它同样拆）',
+].join('；');
+const BUILD_POOL_LABEL = '部件池：这几件由你摆到图框上，谁连着谁也由你接';
+
+/** 一件部件占多大的格子：名字越长框越宽，宽度只由名字决定（不藏内容，只藏排版）。 */
+export function buildBoxOf(name) {
+  const chars = [...String(name ?? '')].length;
+  return { w: Math.max(40, Math.min(150, 20 + chars * 11)), h: BUILD_BOX_H };
+}
+
+/** `甲 > 乙` 那条写法在状态里的键。名字过 UI_IDENT，绝不含 `>`，所以不会与某个部件撞键。 */
+export function buildLinkKey(a, b) {
+  return `${a}>${b}`;
+}
+
+function buildLinkNames(key) {
+  const at = String(key ?? '').indexOf('>');
+  if (at <= 0 || at === String(key).length - 1) return null;
+  return [String(key).slice(0, at), String(key).slice(at + 1)];
+}
+
+/**
+ * 此刻他搭成什么样：件在不在图框上、线连着谁，全部以**这一版围栏**为口径——
+ * 改版删掉的部件不再摆上来，但装不下的（越界 / 与别的叠了 / 两端没摆上图框的线）不静默，
+ * 编译器在旁边补一句。编译摆第一帧与宿主每次重画共用这一个函数。
+ */
+export function buildView(state, spec) {
+  const parts = spec?.parts || [];
+  const byName = new Map();
+  const placed = [];
+  const pool = [];
+  let dropped = 0;
+  for (const p of parts) {
+    const raw = state?.[p.name];
+    if (raw === undefined || raw === null || raw === '') { pool.push(p); continue; }
+    const pt = figPoint(raw);
+    const box = buildBoxOf(p.name);
+    if (!pt || !figInFrame(pt.x - box.w / 2, pt.y - box.h / 2, spec.W, spec.H) ||
+      !figInFrame(pt.x + box.w / 2, pt.y + box.h / 2, spec.W, spec.H)) {
+      dropped += 1;
+      pool.push(p);
+      continue;
+    }
+    byName.set(p.name, { ...p, x: pt.x, y: pt.y });
+    placed.push({ ...p, x: pt.x, y: pt.y });
+  }
+  // 线按声明顺序数出来（不按状态里键的先后）：同一份盘上必须每次读出同一串话。
+  const links = [];
+  let droppedLinks = 0;
+  for (const a of parts) {
+    for (const b of parts) {
+      if (a.name === b.name) continue;
+      const key = buildLinkKey(a.name, b.name);
+      const raw = state?.[key];
+      if (raw === undefined || raw === null || raw === '') continue;
+      const from = byName.get(a.name);
+      const to = byName.get(b.name);
+      if (!from || !to) { droppedLinks += 1; continue; }
+      links.push({ key, a: a.name, b: b.name, from, to });
+    }
+  }
+  return { placed, pool, links, byName, dropped, droppedLinks };
+}
+
+/** 此刻的样子 → 该写进状态账的那一份（只写机械事实：方位数与线，没有别的）。 */
+export function buildStateOf(view) {
+  const state = { uiKind: 'build' };
+  for (const p of view.placed) state[p.name] = `${figNum(p.x)},${figNum(p.y)}`;
+  for (const l of view.links) state[l.key] = BUILD_LINK_ON;
+  return state;
+}
+
+/**
+ * 这一处放不放得下：边上有半件出去就不放，跟别人叠着也不放。返回 null = 能放，
+ * 否则返回一句人话的原因（宿主照这句播出去，不静默吞掉他这一次点击）。
+ * skipName 用于"挪动已经摆着的那一件"：跟自己比当然重叠，那一次不比。
+ */
+export function buildCanPlace(view, W, H, name, x, y, skipName = null) {
+  const box = buildBoxOf(name);
+  const hw = box.w / 2;
+  const hh = box.h / 2;
+  if (!figInFrame(x - hw, y - hh, W, H) || !figInFrame(x + hw, y + hh, W, H)) {
+    return '图框边上放不下这一件';
+  }
+  for (const p of view?.placed || []) {
+    if (p.name === skipName) continue;
+    const other = buildBoxOf(p.name);
+    if (Math.abs(p.x - x) < (other.w + box.w) / 2 && Math.abs(p.y - y) < (other.h + box.h) / 2) {
+      return `和「${p.name}」叠在一起`;
+    }
+  }
+  return null;
+}
+
+/** 部件框该说的话：摆上的与还在池子里的两种口径，编译器与宿主重画共用（两处各写一遍迟早漂）。 */
+export function buildPartAria(name, hint, where, isSelected) {
+  const what = hint ? `「${name}」：${hint}。` : `「${name}」。`;
+  const said = isSelected
+    ? `已经选作线头（再点另一件就接一条线，再点一次取消）`
+    : `摆在${where}（点另一件接一条线；方向键挪它，Delete 拆掉它）`;
+  return `${what}${said}`;
+}
+
+export function buildPoolAria(name, where) {
+  return where
+    ? `「${name}」已经摆在${where}，点它把它拿回池子（它身上的线一起断）`
+    : `「${name}」还在池子里，点了就拿在手里，再点图框放下`;
+}
+
+/** 部件那一层：一件一个框，框里写名字。摆放与选中都在这里长（宿主重画走同一段画法）。 */
+export function buildPartEls(id, view, W, H, selected) {
+  return view.placed
+    .map((p) => {
+      const box = buildBoxOf(p.name);
+      const where = markPlace(p.x, p.y, W, H);
+      const on = selected === p.name;
+      const room = Math.max(2, Math.floor((box.w - 14) / 12));
+      return (
+        `<g class="ui-build-part${on ? ' is-source' : ''}" data-ui-build-part="${escapeHtml(id)}" ` +
+        `data-ui-name="${escapeHtml(p.name)}" tabindex="0" role="button" aria-pressed="${on ? 'true' : 'false'}" ` +
+        `aria-label="${escapeHtml(buildPartAria(p.name, p.hint, where, on))}" ` +
+        `transform="translate(${figNum(p.x)} ${figNum(p.y)})">` +
+        `<title>${escapeHtml(`${p.name}${p.hint ? `：${p.hint}` : ''}（${where}）`)}</title>` +
+        `<rect class="ui-build-box" x="${figNum(-box.w / 2)}" y="${figNum(-box.h / 2)}" ` +
+        `width="${figNum(box.w)}" height="${figNum(box.h)}" rx="8"/>` +
+        `<text class="ui-build-name" text-anchor="middle" dominant-baseline="middle">` +
+        `${escapeHtml(fitText(p.name, room))}</text>` +
+        `</g>`
+      );
+    })
+    .join('');
+}
+
+/**
+ * 线段端点落在框边上，不落在框中心：箭头压在框底下就等于没有箭头。
+ * 从一个中心朝另一个中心走，撞到半宽 / 半哪个先碰边就停在哪。
+ */
+function buildEdgeTrim(from, to) {
+  const a = buildBoxOf(from.name);
+  const b = buildBoxOf(to.name);
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const sa = Math.min(
+    dx === 0 ? Infinity : (a.w / 2) / Math.abs(dx),
+    dy === 0 ? Infinity : (a.h / 2) / Math.abs(dy),
+  );
+  const sb = Math.min(
+    dx === 0 ? Infinity : (b.w / 2) / Math.abs(dx),
+    dy === 0 ? Infinity : (b.h / 2) / Math.abs(dy),
+  );
+  const ka = Number.isFinite(sa) ? sa : 0;
+  const kb = Number.isFinite(sb) ? sb : 0;
+  return {
+    x1: from.x + dx * ka,
+    y1: from.y + dy * ka,
+    x2: to.x - dx * kb,
+    y2: to.y - dy * kb,
+  };
+}
+
+/**
+ * 线那一层：看得见的一条线 + 一条宽的透明命中线（点线上任一处 = 断开它）。
+ * 断开端不长在框角上——部件的拆是"从池子里拿回来"，线的断是"点这条线"，两个动作两个去处。
+ */
+export function buildLinkEls(id, view, markerId) {
+  return view.links
+    .map((l) => {
+      const t = buildEdgeTrim(l.from, l.to);
+      return (
+        `<g class="ui-build-link" data-ui-build-link="${escapeHtml(l.key)}" tabindex="0" role="button" ` +
+        `aria-label="${escapeHtml(`断开这条线：${l.a} 指向 ${l.b}（按 Enter 断开）`)}">` +
+        `<title>${escapeHtml(`${l.a} → ${l.b}：点这条线就断开`)}</title>` +
+        `<line class="ui-build-link-hit" x1="${figNum(t.x1)}" y1="${figNum(t.y1)}" x2="${figNum(t.x2)}" y2="${figNum(t.y2)}"/>` +
+        `<line class="ui-build-link-line" x1="${figNum(t.x1)}" y1="${figNum(t.y1)}" x2="${figNum(t.x2)}" y2="${figNum(t.y2)}" ` +
+        `marker-end="url(#${markerId})"/>` +
+        `</g>`
+      );
+    })
+    .join('');
+}
+
+/** 池子那一排：摆上去的部件不消失、不禁用，改标"已在 西北部"——还剩哪些没摆，当场看得见。 */
+export function buildPoolEls(id, parts, view, W, H, held) {
+  return parts
+    .map((p) => {
+      const on = view.byName.get(p.name) || null;
+      const where = on ? markPlace(on.x, on.y, W, H) : null;
+      return (
+        `<button type="button" class="ui-build-chip${on ? ' is-placed' : ''}" ` +
+        `data-ui-build-chip="${escapeHtml(id)}" data-ui-item="${escapeHtml(p.name)}" ` +
+        `aria-pressed="${!on && held === p.name ? 'true' : 'false'}" ` +
+        `aria-label="${escapeHtml(buildPoolAria(p.name, where))}">` +
+        `<span class="ui-build-chip-name">${escapeHtml(p.name)}</span>` +
+        `<span class="ui-build-chip-on">${on && where ? `已在${where}` : ''}</span>` +
+        `</button>`
+      );
+    })
+    .join('');
+}
+
+/** 此刻搭成什么样：只报件在哪、线怎么连，不报"几条线 / 共几条"，也不报对错。 */
+export function buildReadoutText(view, W, H) {
+  const said = view.placed.length
+    ? `现在摆着：${view.placed.map((p) => `${p.name}（${markPlace(p.x, p.y, W, H)}）`).join('、')}`
+    : '图框上还没有部件';
+  const wired = view.links.length
+    ? `接的线：${view.links.map((l) => `${l.a} → ${l.b}`).join('、')}`
+    : '还没有接上线';
+  return `${said}；${wired}`;
+}
+
+/** 键盘光标那截十字：只在拿着部件时看得见它在哪，位置不进状态（与 mark 同一把尺）。 */
+export function buildCrossSvg(id, x, y, W, H) {
+  const arm = Math.min(16, Math.max(6, Math.round(Math.min(W, H) / 12)));
+  return (
+    `<g class="ui-build-cross" data-ui-build-cross="${escapeHtml(id)}" aria-hidden="true" ` +
+    `transform="translate(${figNum(x)} ${figNum(y)})">` +
+    `<line class="ui-build-cross-arm" x1="${-arm}" y1="0" x2="${arm}" y2="0"/>` +
+    `<line class="ui-build-cross-arm" x1="0" y1="${-arm}" x2="0" y2="${arm}"/>` +
+    `<rect class="ui-build-cross-box" x="${figNum(-arm)}" y="${figNum(-arm / 2)}" ` +
+    `width="${figNum(arm * 2)}" height="${figNum(arm)}" rx="4"/>` +
+    `</g>`
+  );
+}
+
+/**
+ * 文字版那份话（第八十轮那一族第八档）：要搭什么、能用哪些件、此刻摆成什么样、线怎么连。
+ * 后两行跟着他走——宿主就地重画，所以登记的必须是生成器，不是算好的几行。
+ */
+export function buildTextLines(scene, spec, view, W, H) {
+  const lines = [];
+  if (scene.alt) lines.push(...figureAltLines(scene));
+  lines.push(`要搭的是：${spec.ask}`);
+  lines.push(`可以用的部件：${spec.parts.map((p) => (p.hint ? `${p.name}（${p.hint}）` : p.name)).join('、')}`);
+  lines.push(view.pool.length ? `还在池子里：${view.pool.map((p) => p.name).join('、')}` : '部件都摆上图框了');
+  lines.push(`用键盘：${BUILD_KEYS}`);
+  lines.push(buildReadoutText(view, W, H));
+  return lines;
+}
+
+function compileBuild(fields, lines, partial) {
+  if (pick(fields, 'table').length) return { error: 'table 只配 chart（数值逐项查是 chart 的形状）' };
+  if (pick(fields, 'node').length || pick(fields, 'edge').length) {
+    return { error: 'node / edge 是 diagram 的字段：谁连着谁由你写定用 diagram，要他接着搭用 build' };
+  }
+  if (pick(fields, 'stop').length || pick(fields, 'route').length) {
+    return { error: 'stop / route 是 map 的字段：谁在哪儿用 map，要他搭结构用 build' };
+  }
+  if (pick(fields, 'handle').length || pick(fields, 'connect').length) {
+    return { error: 'handle / connect 是 sketch 的字段：点已由你摆好要他拖用 sketch，件与线都由他搭用 build' };
+  }
+  if (pick(fields, 'callout').length) {
+    return { error: 'callout 是那一档的名字：部件点开看说明用 callout，部件由他摆上去用 build' };
+  }
+  if (pick(fields, 'pin').length || pick(fields, 'term').length) {
+    return { error: 'pin / term 是 pin 的字段：位置你画好、名字他来贴用 pin，件与线他来摆用 build' };
+  }
+  if (pick(fields, 'max').length) {
+    return { error: 'max 是 mark 的上限：build 容几件就是几行 part，标完放不下的那件由池子说给他听' };
+  }
+  const stray = fields.filter(([k]) => !BUILD_FIELDS.has(k)).map(([k]) => k);
+  if (stray.length) {
+    return { error: `「${stray[0]}」不是 build 的字段（build 只认 id / ask / part / frame / shape / label / arrow / alt / title / handoff）` };
+  }
+  const ids = pick(fields, 'id');
+  if (ids.length > 1) return { error: 'id 写了两遍' };
+  const id = (ids[0] || '').trim();
+  if (!id) {
+    if (!partial) return { error: '这张搭建图没有 id：他搭成什么样没地方续，下一轮读不回来' };
+    return { html: skeleton('正在把这张搭建图长出来…'), pending: true };
+  }
+  // ask 是这一档的门槛（与 mark / pin 同一道门）：没有要搭的事，一排积木就只是积木。
+  const rawAsk = pick(fields, 'ask');
+  if (rawAsk.length > 1) return { error: 'ask 只写一行（要他搭出来的是什么，一句话）' };
+  const ask = (rawAsk[0] || '').trim();
+  if (!ask) {
+    if (!partial) return { error: '这张搭建图没写 ask：让学习者搭出结构，得先说要搭的是什么（没有要搭的事，部件池就只是一盒积木）' };
+    return { html: skeleton('正在把这张搭建图长出来…'), pending: true };
+  }
+  if (ask.length > BUILD_ASK_MAX) return { error: `ask 太长了（≤${BUILD_ASK_MAX} 字）：那是一句要人搭的话，不是一段讲解` };
+  const handoff = pick(fields, 'handoff')[0] || '';
+  if (handoff.length > HANDOFF_MAX) return { error: `handoff 的文案太长了（≤${HANDOFF_MAX} 字）` };
+
+  // 底子可选：空图框合法（这一档的图本来就是他画的）。画了底子就退回 figure 那道门——
+  // 有形状却没有一句"让人看到什么"，读屏就对着半张图说不出话。
+  const scene = parseFigureScene(fields, partial, 'build', { requireShape: false, requireAlt: false });
+  if (scene.error) return { error: scene.error };
+  if (scene.pending) return { html: skeleton('正在把这张搭建图长出来…'), pending: true };
+  const { W, H, title, alt, shapes, labels, arrows } = scene;
+  if (!alt && shapes.length && !partial) {
+    return { error: '画了底子就得写 alt：一句话说清这张底子让人看到什么（图框空着可以不写，图还没搭出来）' };
+  }
+  const soft = (why) => (partial ? null : { error: why });
+
+  const parts = [];
+  const seenNames = new Set();
+  for (const raw of pick(fields, 'part')) {
+    const seg = String(raw).split('|').map((s) => s.trim());
+    if (seg.length < 1 || seg.length > 2) {
+      const e = soft(`part「${String(raw).slice(0, 32)}」要写成「名字」或「名字 | 一句话」`);
+      if (e) return e;
+      continue;
+    }
+    const [name, hint = ''] = seg;
+    if (!name) { const e = soft('有一件部件的名字是空的'); if (e) return e; continue; }
+    if (name.length > BUILD_NAME_MAX) { const e = soft(`部件「${name}」的名字太长了（≤${BUILD_NAME_MAX} 字：那是框里的一个名字，不是一句话）`); if (e) return e; continue; }
+    if (!UI_IDENT.test(name)) { const e = soft(`部件「${name}」不合法（字母 / 汉字起头，中间不许空格与标点——线要用「甲>乙」记，名字里不能带 >）`); if (e) return e; continue; }
+    if (seenNames.has(name)) { const e = soft(`「${name}」写了两遍：部件的身份就是它的名字`); if (e) return e; continue; }
+    if (hint.length > BUILD_HINT_MAX) { const e = soft(`part「${name}」的那句话太长了（≤${BUILD_HINT_MAX} 字）`); if (e) return e; continue; }
+    if (parts.length >= BUILD_MAX_PARTS) {
+      const e = soft(`部件太多了（最多 ${BUILD_MAX_PARTS} 件：搭的是结构，一上来一盒十几件就是干扰）`);
+      if (e) return e;
+      continue;
+    }
+    seenNames.add(name);
+    parts.push({ name, hint });
+  }
+  if (!parts.length) {
+    const e = soft('部件池是空的：build 至少要两件东西给他摆');
+    if (e) return e;
+    return { html: skeleton('正在把这张搭建图长出来…'), pending: true };
+  }
+  if (parts.length < BUILD_MIN_PARTS) {
+    const e = soft('只有一件部件就别用 build：一件东西没有结构可搭，要他挑一件用的是 question');
+    if (e) return e;
+    return { html: skeleton('正在把这张搭建图长出来…'), pending: true };
+  }
+
+  const markerId = `ui-build-arrow-${hashText(`${id}\n${ask}\n${parts.map((p) => p.name).join(',')}`)}`;
+  const spec = { W, H, title, alt, ask, parts, markerId };
+  const stored = readUiState(id)?.state || {};
+  const view = buildView(stored, spec);
+  // 流里这一版还没写全（part 一行一行到）：新出现的那几件先不进状态，别把他已经摆好的
+  // 那些当成"装不下"抹掉（与 sketch 那条 partial 不落位置同一把握）。
+  const nextState = buildStateOf(view);
+  if (partial) {
+    for (const [k, v] of Object.entries(stored)) if (!(k in nextState)) nextState[k] = v;
+  }
+  writeUiState(id, 'build', nextState, spec);
+
+  const arrowEls = figureArrowEls(arrows, markerId);
+  const labelEls = labels.map((l) => figureLabelEl(l.text, l.x, l.y, l.align, W)).join('');
+  const cap = title ? `<p class="ui-cap">${cell(title)}</p>` : '';
+  const aria = alt || `这张图框由学习者自己搭：${ask}`;
+  const svg =
+    `<svg class="ui-build-canvas ui-figure" role="group" tabindex="0" ` +
+    `aria-label="${escapeHtml(`${aria}（图框上的部件与线都由他摆上来；先点一件再点另一件接一条线）`)}" ` +
+    `viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" data-ui-build="${escapeHtml(id)}" ` +
+    `data-ui-build-add="${escapeHtml(id)}">` +
+    `<title>${escapeHtml(aria)}</title>` +
+    `<defs><marker id="${markerId}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+    `<path class="ui-fig-arrow-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>` +
+    // 一整块透明的取景面（与 mark 同一手）：SVG 只在画出来的地方收指针，空图框上
+    // 点空白会落到 svg 之外——而这一档要的恰恰是"放到图框上的哪一处"。底子画在它上面一层，
+    // 一份底子只画一遍（画两遍等于同一张图长两处，迟早有一处忘了改）。
+    `<rect class="ui-build-hit" data-ui-build-add="${escapeHtml(id)}" x="0" y="0" width="${W}" height="${H}" fill="transparent"/>` +
+    shapes.join('') + arrowEls + labelEls +
+    `<g class="ui-build-links" data-ui-build-links="${escapeHtml(id)}">${buildLinkEls(id, view, markerId)}</g>` +
+    `<g class="ui-build-layer" data-ui-build-layer="${escapeHtml(id)}">${buildPartEls(id, view, W, H, null)}</g>` +
+    buildCrossSvg(id, W / 2, H / 2, W, H) +
+    `</svg>`;
+  const pool = `<div class="ui-build-pool" role="group" aria-label="${escapeHtml(BUILD_POOL_LABEL)}">` +
+    `${buildPoolEls(id, parts, view, W, H, null)}</div>`;
+  const notes = [];
+  if (view.dropped) notes.push(`这一版图框装不下 ${view.dropped} 件旧位置，它们回到池子里`);
+  if (view.droppedLinks) notes.push(`${view.droppedLinks} 条线两端有部件不在图框上，没有画出来`);
+  const body =
+    `<div class="ui-buildblock" data-ui-buildblock="${escapeHtml(id)}">` +
+    `<p class="ui-build-ask">${cell(ask)}</p>` +
+    svg + pool +
+    `<p class="ui-build-hint">点池子里的一件拿在手里，再点图框放下；点一件再点另一件就接一条线，点那条线断开它；池子里点已摆上的那件把它拿回来。这里只记你搭成什么样，不判对错</p>` +
+    `<p class="ui-build-readout" data-ui-build-readout="${escapeHtml(id)}" aria-live="polite">` +
+    `${escapeHtml(buildReadoutText(view, W, H))}</p>` +
+    (notes.length ? paramNote(notes.join('；')) : '') +
+    `</div>`;
+  return {
+    html: `${cap}${body}${handoff ? handoffButton(id, handoff) : ''}`,
+    shape: 'build',
+    pending: partial || undefined,
+    alt: {
+      id,
+      lines: buildTextLines(scene, spec, view, W, H),
+      live: () => {
+        const now = buildView(readUiState(id)?.state || {}, spec);
+        return buildTextLines(scene, spec, now, W, H);
+      },
+    },
+  };
+}
+
+/** build 的专属词写在别的档 = 语义词写错档：不许静默吞（与 pin / callout 同一把尺）。 */
+function buildWords(fields) {
+  return pick(fields, 'part').length > 0;
+}
+const BUILD_ONLY = 'part 只配带 id 的 build（部件由学习者摆上图框，别的档没有"他添上去的构件"这回事）';
+
 // ── 分段探索 ─────────────────────────────────────────────────────────────
 /**
  * explore（第三十三轮，学 IUI 官方旗舰演示「Select a system to explore its role」——
@@ -3969,17 +4413,20 @@ function compileDeck(fields, lines, partial) {
     }
     const metaErr = metaWordsError(child.fields, part.kind);
     if (metaErr) return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${metaErr}` };
-    if (part.kind !== 'sketch' && sketchWords(child.fields)) {
+    if (part.kind !== 'sketch' && part.kind !== 'build' && sketchWords(child.fields)) {
       return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${SKETCH_ONLY}` };
     }
-    if (part.kind !== 'callout' && calloutWords(child.fields)) {
+    if (part.kind !== 'callout' && part.kind !== 'build' && calloutWords(child.fields)) {
       return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${CALLOUT_ONLY}` };
     }
-    if (part.kind !== 'mark' && part.kind !== 'pin' && markWords(child.fields)) {
+    if (part.kind !== 'mark' && part.kind !== 'pin' && part.kind !== 'build' && markWords(child.fields)) {
       return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${MARK_ONLY}` };
     }
-    if (part.kind !== 'pin' && pinWords(child.fields)) {
+    if (part.kind !== 'pin' && part.kind !== 'build' && pinWords(child.fields)) {
       return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${PIN_ONLY}` };
+    }
+    if (part.kind !== 'build' && buildWords(child.fields)) {
+      return { error: `第 ${i + 1} 块（${part.kind}）没编出来：${BUILD_ONLY}` };
     }
     // 与顶层同一把尺（第七十八轮添了带 param 的曲线）：chart 里的 uses 由 compileChart 自己判
     // （它要知道这条曲线有没有参数），别让这里的守卫把"带 param 的曲线"一并拒掉。
@@ -4877,7 +5324,7 @@ function compileQuestion(fields) {
 /** question 的专属词写在别的档 = 语义词写错档：不许静默吞（与 table / game 同一把尺）。 */
 const QUESTION_FIELDS = new Set(['id', 'question', 'header', 'option', 'multiSelect', 'allowText', 'conceptId']);
 
-const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, figure: compileFigure, sketch: compileSketch, callout: compileCallout, mark: compileMark, pin: compilePin, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
+const COMPILERS = { compare: compileCompare, steps: compileSteps, timeline: compileTimeline, map: compileMap, checklist: compileChecklist, form: compileForm, calculator: compileCalculator, diagram: compileDiagram, figure: compileFigure, sketch: compileSketch, callout: compileCallout, mark: compileMark, pin: compilePin, build: compileBuild, explore: compileExplore, chart: compileChart, suggest: compileSuggest, game: compileGame, walkthrough: compileWalkthrough, arrange: compileArrange, deck: compileDeck, question: compileQuestion, canvas: compileCanvas };
 
 /**
  * 稳定键（第六十五轮，学 Intelligent UI 的 "native, streamable components" 那一手）：
@@ -4945,10 +5392,13 @@ function compileUiBlockInner(lines, partial) {
   if (kind !== 'deck') {
     const metaErr = metaWordsError(parsed.fields, kind);
     if (metaErr) return fail(metaErr);
-    if (kind !== 'sketch' && sketchWords(parsed.fields)) return fail(SKETCH_ONLY);
-    if (kind !== 'callout' && calloutWords(parsed.fields)) return fail(CALLOUT_ONLY);
-    if (kind !== 'mark' && kind !== 'pin' && markWords(parsed.fields)) return fail(MARK_ONLY);
-    if (kind !== 'pin' && pinWords(parsed.fields)) return fail(PIN_ONLY);
+    // build 自己那两句话更准（它要说清"点已由你摆好"与"件与线都由他搭"的分工），
+    // 通用那两句在这里会说错：搭建图上的件恰恰有可改的方位。
+    if (kind !== 'sketch' && kind !== 'build' && sketchWords(parsed.fields)) return fail(SKETCH_ONLY);
+    if (kind !== 'callout' && kind !== 'build' && calloutWords(parsed.fields)) return fail(CALLOUT_ONLY);
+    if (kind !== 'mark' && kind !== 'pin' && kind !== 'build' && markWords(parsed.fields)) return fail(MARK_ONLY);
+    if (kind !== 'pin' && kind !== 'build' && pinWords(parsed.fields)) return fail(PIN_ONLY);
+    if (kind !== 'build' && buildWords(parsed.fields)) return fail(BUILD_ONLY);
     // uses 配 calculator / form / 带 param 的曲线（第六十三轮立的那两档，第七十八轮添了曲线）：
     // 只有这几档有"能被场上参数填上的默认值 / 空格子"，各档内部再校验名字对不对得上。
     if (kind !== 'calculator' && kind !== 'form' && kind !== 'chart') {

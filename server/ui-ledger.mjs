@@ -40,6 +40,7 @@ export const KIND_WORDS = {
   callout: '标注图',
   mark: '标图',
   pin: '贴名图',
+  build: '搭建图',
   explore: '探索',
   chart: '图表',
   suggest: '分支',

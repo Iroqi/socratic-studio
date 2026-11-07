@@ -9230,7 +9230,7 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   const host67 = fs.readFileSync(path.join(webDir, 'app.js'), 'utf8');
   ui67.resetUiState();
 
-  // 七档各一份能编出来的最小围栏（与前面几节同一批例子，认得出才算真的接上了）
+  // 八档各一份能编出来的最小围栏（与前面几节同一批例子，认得出才算真的接上了）
   const fixtures67 = {
     diagram: ['kind: diagram', 'id: t67d', 'node: 光反应 | 在类囊体膜上', 'node: 暗反应', 'edge: 光反应 -> 暗反应 | 提供 ATP'],
     map: ['kind: map', 'id: t67m', 'stop: 成都 | 15,80 | 起点', 'stop: 康定 | 40,45', 'route: 成都 > 康定'],
@@ -9241,6 +9241,8 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
     pin: ['kind: pin', 'id: t67p', 'alt: 细胞图上两处空位', 'ask: 把名字贴到该贴的位置',
       'shape: 膜 | rect | 20,20,280,120', 'pin: 甲 | 80,60', 'pin: 乙 | 220,100',
       'term: 线粒体', 'term: 细胞核'],
+    build: ['kind: build', 'id: t67b', 'ask: 把水循环的三件摆上来、接成一条线',
+      'part: 蒸发 | 水变成汽上去', 'part: 凝结', 'part: 降水 | 落回地面'],
   };
   const got67 = {};
   for (const [kind, lines] of Object.entries(fixtures67)) {
@@ -9259,14 +9261,14 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   }
   check('名单里的每一档都真的登记了文字（少一档 = 契约测试该红的那一件事）',
     ui67.UI_DRAWN.every((k) => Object.keys(fixtures67).includes(k)) &&
-      new Set(ui67.UI_DRAWN).size === 7,
+      new Set(ui67.UI_DRAWN).size === 8,
     ui67.UI_DRAWN.join(','));
   check('handle 的口径：有 id 的档认 id，静态的 figure 认编译键',
     /data-ui-alt-toggle="t67s"/.test(got67.sketch.html) &&
       /data-ui-alt-toggle="ui-[0-9a-z-]+"/.test(got67.figure.html) &&
       got67.figure.html.includes(`data-ui-alt-toggle="${got67.figure.key}"`),
     got67.figure.html.slice(-260));
-  check('画出来的七档不再各自写一份 .sr-only（同一句话不长两处）',
+  check('画出来的八档不再各自写一份 .sr-only（同一句话不长两处）',
     Object.values(fixtures67).every((lines) => !/class="sr-only"/.test(compile67(lines, false).html)), '');
   check('chart 那份 .sr-only 数据表照旧在（它的数据出口是 table: 那张看得见的表，这一轮不去动它）',
     compile67(['kind: chart', 'series: 收入 = 1,2', 'series: 支出 = 2,3'], false).html.includes('class="sr-only"'), '');
@@ -9830,6 +9832,545 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   globalThis.fetch = realFetch68;
   ui68.resetUiState();
   check('这一节无异常', errors.length === errsBefore68, errors.slice(errsBefore68).join(' | '));
+}
+
+// ─── 69. build：图框上的件与线由学习者搭（第八十三轮，学 Intelligent UI 的"可编辑图表"里
+//        最硬的那半句——增删元素、由学习者建构结构，不是把模型画好的图换个皮）。
+// diagram 的节点与连线是模型写定的，sketch 的点是模型摆好让他挪的，pin 的位置是模型画的。
+// 而"食物链谁吃谁、模块谁调谁"这类结构，学习者自己搭一遍才是建构——这一档的图框一开始是空的，
+// 部件池由模型声明，摆上哪几件、摆在哪儿、谁指向谁由他决定。围栏里没有该摆哪、没有该连谁、
+// 没有答案键：状态只记"搭成什么样"，对不对仍在对话里判。
+{
+  console.log('\n69. build（件与线由学习者搭：空图框 + 封闭部件池 + 有方向的线 + 没有答案键）');
+  const errsBefore69 = errors.length;
+  const ui69 = await import('file:///' + path.join(webDir, 'ui-compile.js').replace(/\\/g, '/'));
+  const {
+    state: st69, handleUiDeskEvent: handle69, handleUiDeskKey: key69, renderDeskState: renderPanel69,
+    uiBuildFrame: frame69, uiBuildHeldPart: held69, uiBuildSourcePart: source69,
+    pickUiBuildPart: pick69, handleUiBuildClick: buildClick69, setUiBuildSource: setSrc69,
+  } = appModule.__hooks;
+  const compile69 = (lines, partial) => ui69.compileUiBlock(lines.filter((l) => l.trim()), partial);
+  const deg69 = (lines) => ui69.compileUiBlock(lines.filter((l) => l.trim()), false).degraded || '';
+  const ann69 = () => doc.getElementById('announcer');
+  const input69 = doc.getElementById('input');
+  const boxBefore69 = input69.value;
+  ui69.resetUiState();
+
+  const cell69 = ['kind: build', 'id: bd83', 'title: 搭一条食物链', 'ask: 把这三件接成一条食物链',
+    'frame: 320x180', 'part: 草 | 能自己造养分的', 'part: 兔', 'part: 鹰 | 站在顶端',
+    'handoff: 把我搭的带回对话'];
+  const c69 = compile69(cell69).html;
+
+  // 1) 编译：一块空图框 + 一排部件 + 门槛那句话
+  check('编译成一块能搭的图：ui-buildblock 带 data-ui-buildblock，ask 是界面上第一句话',
+    c69.includes('<div class="ui-buildblock" data-ui-buildblock="bd83">') &&
+      c69.includes('<p class="ui-build-ask">把这三件接成一条食物链</p>'), c69.slice(0, 300));
+  check('图框是 role=group 且自己可聚焦，读屏名说清"件与线都由他摆"（结构性描述，不是完成度）',
+    c69.includes('<svg class="ui-build-canvas ui-figure" role="group" tabindex="0"') &&
+      c69.includes('aria-label="这张图框由学习者自己搭：把这三件接成一条食物链（图框上的部件与线都由他摆上来；') &&
+      c69.includes('viewBox="0 0 320 180"'), c69.slice(0, 500));
+  check('空图框也收得到指针：一整块透明的取景面排在最前（SVG 只在画出来的地方收事件）',
+    c69.includes('<rect class="ui-build-hit" data-ui-build-add="bd83" x="0" y="0" width="320" height="180" fill="transparent"/>'),
+    c69.slice(300, 1200));
+  check('图框一开始是空的：部件层与线层都长着但没有内容（这一档的图由他搭出来）',
+    c69.includes('<g class="ui-build-links" data-ui-build-links="bd83"></g>') &&
+      c69.includes('<g class="ui-build-layer" data-ui-build-layer="bd83"></g>'), c69.slice(600, 1600));
+  check('十字光标永远长着、不占读屏（拿着部件时 CSS 才把它亮出来）',
+    c69.includes('<g class="ui-build-cross" data-ui-build-cross="bd83" aria-hidden="true"'),
+    c69.slice(1400, 2200));
+  check('部件池是三枚真 <button>：aria-pressed 报拿没拿在手里，「已在」那一格永远长着（空着时 :empty 不占位）',
+    c69.includes('<button type="button" class="ui-build-chip" data-ui-build-chip="bd83" data-ui-item="草" aria-pressed="false" aria-label="「草」还在池子里，点了就拿在手里，再点图框放下">') &&
+      c69.includes('<span class="ui-build-chip-name">兔</span><span class="ui-build-chip-on"></span>'),
+    c69.slice(1600, 2600));
+  check('读数条按 id 落一处、aria-live=polite，第一句就说图框上还没有部件',
+    c69.includes('<p class="ui-build-readout" data-ui-build-readout="bd83" aria-live="polite">图框上还没有部件；还没有接上线</p>'),
+    c69.slice(-900));
+  check('界面上明写"只记你搭成什么样，不判对错"（没有答案键这句话由界面自己说给学习者）',
+    c69.includes('这里只记你搭成什么样，不判对错'), '');
+  check('文字版里写清要搭什么、能用哪些件（带那句话）、键盘怎么走、此刻搭成什么样',
+    c69.includes('<p class="ui-alt-line">要搭的是：把这三件接成一条食物链</p>') &&
+      c69.includes('<p class="ui-alt-line">可以用的部件：草（能自己造养分的）、兔、鹰（站在顶端）</p>') &&
+      c69.includes('<p class="ui-alt-line">还在池子里：草、兔、鹰</p>') &&
+      c69.includes('<p class="ui-alt-line">用键盘：Tab 走到池子里的一件按 Enter 拿在手里') &&
+      c69.includes('<p class="ui-alt-line">图框上还没有部件；还没有接上线</p>'), c69.slice(-1500));
+  check('这一档不再另写一份 .sr-only（同一句话不长两处，与第八十轮同一把尺）',
+    !c69.includes('class="sr-only"') && c69.includes('class="ui-takeaway"'), '');
+  check('界面上没有百分比 / 分数 / 完成度（Invariant 4 的指纹扫不到这一档）',
+    !/%|得分|分数|掌握|正确率|搭对|接对/.test(c69), '');
+  check('答案键写进围栏也不认（build 的字段表里没有"该摆哪 / 该连谁"这一项）',
+    deg69([...cell69, 'answer: 草=兔']).includes('不是 build 的字段'), '');
+  check('空图框不写 alt 是合法的（那张图还没被他搭出来，要说的事由 ask 说）',
+    !compile69(['kind: build', 'id: b69a', 'ask: 搭出来', 'part: 甲', 'part: 乙']).degraded, '');
+  check('画了底子却没有 alt：掉回原文并点名（读屏不能对着半张图说不出话）',
+    deg69(['kind: build', 'id: b69b', 'ask: 搭出来', 'part: 甲', 'part: 乙',
+      'shape: 土 | rect | 10,10,60,40']).includes('画了底子就得写 alt'), '');
+  {
+    const base69 = compile69(['kind: build', 'id: b69d', 'ask: 搭', 'part: 甲', 'part: 乙',
+      'alt: 底子上搭', 'shape: 土 | rect | 10,10,60,40']).html;
+    check('底子只画一遍，且压在取景面之上（同一份底子长两处，迟早有一处忘了改）',
+      (base69.match(/ui-fig-shape/g) || []).length === 1 &&
+        base69.indexOf('ui-build-hit') < base69.indexOf('ui-fig-shape'),
+      String((base69.match(/ui-fig-shape/g) || []).length));
+  }
+
+  // 2) 降级：每条都点名为什么不行
+  ui69.resetUiState();
+  check('没有 id：掉回原文并点名（他搭成什么样没地方续）',
+    deg69(['kind: build', 'ask: 搭', 'part: 甲', 'part: 乙']).includes('这张搭建图没有 id'), '');
+  check('没有 ask：掉回原文并点名（没有要搭的事，一盒部件就只是积木）',
+    deg69(['kind: build', 'id: b1', 'part: 甲', 'part: 乙']).includes('没写 ask'), '');
+  check('ask 太长 / 写两行：各点名一次（那是一句要人搭的话，不是一段讲解）',
+    deg69(['kind: build', 'id: b1', 'ask: ' + '一'.repeat(61), 'part: 甲', 'part: 乙']).includes('ask 太长了') &&
+      deg69(['kind: build', 'id: b1', 'ask: 一句', 'ask: 另一句', 'part: 甲', 'part: 乙']).includes('ask 只写一行'), '');
+  check('一件部件都没有 / 只有一件：都拦下（一件东西不成结构，那是 question 的事）',
+    deg69(['kind: build', 'id: b1', 'ask: 搭']).includes('部件池是空的') &&
+      deg69(['kind: build', 'id: b1', 'ask: 搭', 'part: 甲']).includes('只有一件部件就别用 build'), '');
+  check('部件名字重复 / 带空格 / 带 > / 太长：各点名一次（名字是身份，线要用「甲>乙」记）',
+    deg69([...cell69, 'part: 兔']).includes('」写了两遍') &&
+      deg69([...cell69, 'part: 名 字']).includes('不合法') &&
+      deg69([...cell69, 'part: 甲>乙']).includes('不合法') &&
+      deg69([...cell69, 'part: ' + '一'.repeat(13)]).includes('太长了'), '');
+  check('部件后面那句话太长 / 段数不对：各点名一次（那是一句话，不是一段讲解）',
+    deg69(['kind: build', 'id: b2', 'ask: 搭', 'part: 甲 | ' + '一'.repeat(41), 'part: 乙']).includes('那句话太长了') &&
+      deg69(['kind: build', 'id: b2', 'ask: 搭', 'part: 甲 | 一句 | 两句', 'part: 乙']).includes('要写成「名字」或「名字 | 一句话」'), '');
+  check('部件超过八件：拦下并说清上限（搭的是结构，一盒十几件就是干扰）',
+    deg69(['kind: build', 'id: b3', 'ask: 搭', 'part: 甲', 'part: 乙', 'part: 丙', 'part: 丁',
+      'part: 戊', 'part: 己', 'part: 庚', 'part: 辛', 'part: 壬']).includes('部件太多了'), '');
+  check('别档的词写进 build：逐条点名该用哪一档（封闭词汇表不靠散文自觉）',
+    deg69([...cell69, 'node: 甲']).includes('diagram 的字段') &&
+      deg69([...cell69, 'stop: 甲 | 1,2']).includes('map 的字段') &&
+      deg69([...cell69, 'handle: 甲 | 20,20']).includes('sketch 的字段') &&
+      deg69([...cell69, 'pin: 甲 | 20,20']).includes('pin 的字段') &&
+      deg69([...cell69, 'callout: 甲 | 20,20 | 一句']).includes('callout 是那一档的名字') &&
+      deg69([...cell69, 'max: 3']).includes('max 是 mark 的上限') &&
+      deg69([...cell69, 'table: 表']).includes('table 只配 chart'), '');
+  check('build 的 part 写进别的档被点名（反向那道守卫也在）',
+    deg69(['kind: steps', 'step: 一', 'part: 甲']).includes('part 只配带 id 的 build') &&
+      deg69(['kind: figure', 'alt: x', 'shape: 甲 | rect | 10,10,60,40', 'part: 甲']).includes('part 只配带 id 的 build'), '');
+  check('ask 写进别的档仍是那一道门（mark / pin / build 三档共用同一条话术）',
+    deg69(['kind: compare', 'row: 甲 | 乙', 'ask: 搭一处']).includes('只配带 id 的 mark'), '');
+  check('deck 的子块写 part：整块被点名（顶层放宽了，子块那道镜像守卫也得跟上）',
+    deg69(['kind: deck', 'title: 两步', 'part: steps', '  step: 一', '  part: 甲',
+      'part: checklist', '  item: 乙']).includes('part 只配带 id 的 build'), '');
+  check('build 自己可以拼进 deck（十九档里的一员：他搭的件与线照旧记进那一份状态）',
+    !compile69(['kind: deck', 'title: 搭与讲', 'part: build', '  id: bd83b', '  ask: 接成一条链',
+      '  part: 草', '  part: 兔', 'part: steps', '  step: 说说你为什么这么接']).degraded &&
+      ui69.readUiState('bd83b')?.state?.uiKind === 'build', '');
+  check('handoff 超 24 字：掉回原文并点名',
+    deg69(cell69.map((l) => (l.startsWith('handoff:') ? 'handoff: ' + '发'.repeat(25) : l))).includes('24'), '');
+
+  // 3) 流式：长到一半先摆占位，没到齐的部件不算写坏，更不算他丢件
+  ui69.resetUiState();
+  const p69a = compile69(['kind: build', 'ask: 搭'], true);
+  check('流里还没有 id：先摆占位（搭成什么样没地方续）',
+    p69a.pending === true && p69a.html.includes('ui-skeleton'), p69a.html.slice(0, 200));
+  const p69b = compile69(['kind: build', 'id: b1'], true);
+  check('流里还没有 ask：先摆占位（要搭什么还没写完，不算写坏）',
+    p69b.pending === true && p69b.html.includes('ui-skeleton'), p69b.html.slice(0, 200));
+  const p69c = compile69(['kind: build', 'id: b1', 'ask: 搭', 'part: 甲'], true);
+  check('流里只到一件部件：先摆占位，不催"只有一件就别用 build"（那一行还没写完）',
+    p69c.pending === true && !p69c.degraded, String(p69c.degraded || ''));
+  const p69d = compile69(['kind: build', 'id: b1', 'ask: 搭', 'part: 甲', 'part: 乙 |'], true);
+  check('流里那一行的后半句才写出一个「|」：这一行先当部件名到了、那句话空着，两件照常上台',
+    !p69d.degraded && p69d.html.includes('data-ui-item="甲"') && p69d.html.includes('data-ui-item="乙"'),
+    String(p69d.degraded || p69d.html).slice(0, 200));
+  const p69f = compile69(['kind: build', 'id: b1', 'ask: 搭', 'part: 甲', 'part: 乙', 'part:'], true);
+  check('流里那一行只写了「part:」连值都没有：先摆占位，围栏一合上才点名（半行不等于一行）',
+    p69f.pending === true && p69f.html.includes('ui-skeleton') &&
+      deg69(['kind: build', 'id: b1', 'ask: 搭', 'part: 甲', 'part: 乙', 'part:']).includes('这一行不是'),
+    String(p69f.degraded || p69f.html).slice(0, 120));
+  {
+    ui69.resetUiState();
+    compile69(cell69);
+    ui69.setUiValues('bd83', 'build', { uiKind: 'build', 草: '90,40', 兔: '200,90', '草>兔': '连着' });
+    const p69e = compile69(['kind: build', 'id: bd83', 'ask: 把这三件接成一条食物链', 'part: 草', 'part:'], true);
+    check('流里部件一行一行到齐时，已经摆上的那两件不当成"装不下"抹掉（改版不许吃他的账）',
+      p69e.pending === true && ui69.readUiState('bd83').state['草'] === '90,40' &&
+        ui69.readUiState('bd83').state['草>兔'] === '连着',
+      JSON.stringify(ui69.readUiState('bd83').state));
+  }
+
+  // 4) 宿主接线：拿一件 → 放一处 → 接一条线 → 断一条线（判分一个字都不发生）
+  ui69.resetUiState();
+  st69.notebook = sampleNotebook();
+  st69.uiReported?.clear?.();
+  const posts69 = () => requests.filter((r) => /\/artifact-message$/.test(r)).length;
+  const bodies69 = [];
+  const realFetch69 = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (/\/artifact-message$/.test(url)) {
+      try { bodies69.push(JSON.parse(opts.body)); } catch {}
+    }
+    return realFetch69(url, opts);
+  };
+  compile69(cell69);
+
+  const mkChip69 = (name, placed) => {
+    const b = doc.createElement('button'); b.className = 'ui-build-chip';
+    b.dataset.uiBuildChip = 'bd83'; b.dataset.uiItem = name;
+    b.setAttribute('aria-pressed', 'false');
+    const w = doc.createElement('span'); w.className = 'ui-build-chip-name'; w.textContent = name;
+    const on = doc.createElement('span'); on.className = 'ui-build-chip-on'; on.textContent = placed || '';
+    b.append(w, on);
+    return b;
+  };
+  const block69 = doc.createElement('div'); block69.className = 'ui-buildblock';
+  block69.dataset.uiBuildblock = 'bd83';
+  const svg69 = doc.createElement('svg'); svg69.className = 'ui-build-canvas ui-figure';
+  svg69.dataset.uiBuild = 'bd83'; svg69.dataset.uiBuildAdd = 'bd83';
+  svg69._rect = { left: 0, top: 0, width: 320, height: 180 };
+  const layer69 = doc.createElement('g'); layer69.className = 'ui-build-layer';
+  layer69.dataset.uiBuildLayer = 'bd83';
+  const links69 = doc.createElement('g'); links69.className = 'ui-build-links';
+  links69.dataset.uiBuildLinks = 'bd83';
+  const cross69 = doc.createElement('g'); cross69.className = 'ui-build-cross';
+  cross69.dataset.uiBuildCross = 'bd83';
+  const chipA69 = mkChip69('草'); const chipB69 = mkChip69('兔'); const chipC69 = mkChip69('鹰');
+  const pool69 = doc.createElement('div'); pool69.className = 'ui-build-pool';
+  pool69.append(chipA69, chipB69, chipC69);
+  const out69 = doc.createElement('p'); out69.className = 'ui-build-readout';
+  out69.dataset.uiBuildReadout = 'bd83'; out69.textContent = '图框上还没有部件；还没有接上线';
+  const outOther69 = doc.createElement('p'); outOther69.className = 'ui-build-readout';
+  outOther69.dataset.uiBuildReadout = '别的图'; outOther69.textContent = '不动';
+  svg69.append(links69, layer69, cross69);
+  block69.append(svg69, pool69, out69);
+  domRoot.append(block69, outOther69);
+
+  const beforePick69 = posts69();
+  const r69pick = handle69({ type: 'click', target: chipA69 });
+  check('点池子里的一件 = 拿在手里：不是一步，不报回、不写状态（取景不是落定的选择）',
+    r69pick.handled === true && r69pick.kind === 'build' && r69pick.action === 'pick' &&
+      r69pick.name === '草' && posts69() === beforePick69 &&
+      Object.keys(ui69.readUiState('bd83').state).join(',') === 'uiKind' && held69('bd83') === '草',
+    JSON.stringify(r69pick));
+  check('拿在手里的这一枚在牌上标出来（aria-pressed=true），块上长出 is-held（十字这才看得见），别的枚不动',
+    chipA69.getAttribute('aria-pressed') === 'true' && chipB69.getAttribute('aria-pressed') === 'false' &&
+      block69.classList.contains('is-held'), chipA69.getAttribute('aria-pressed') + ' / ' + block69.className);
+  check('再点同一枚 = 放回池子（没拿在手里了），照旧不是一步',
+    handle69({ type: 'click', target: chipA69 }).action === 'pick' && held69('bd83') === null &&
+      chipA69.getAttribute('aria-pressed') === 'false' && !block69.classList.contains('is-held') &&
+      posts69() === beforePick69, ann69()?.textContent);
+
+  pick69('bd83', '草');
+  const beforePlace69 = posts69();
+  const r69place = handle69({ type: 'click', target: svg69, clientX: 90, clientY: 40 });
+  check('点图框上一处 = 把手里那件放到那里：状态写「草 = "90,40"」（方位数在界面上，像素只在这格里）',
+    r69place.handled === true && r69place.action === 'place' &&
+      ui69.readUiState('bd83').state['草'] === '90,40', JSON.stringify(r69place));
+  check('放下才报回一次，经过记的是「草 从空到 90,40」（记的是他搭的内容，不是对错）',
+    posts69() === beforePlace69 + 1 && bodies69[bodies69.length - 1]?.trace?.length === 1 &&
+      bodies69[bodies69.length - 1].trace[0].k === '草' &&
+      bodies69[bodies69.length - 1].trace[0].from === null &&
+      bodies69[bodies69.length - 1].trace[0].to === '90,40',
+    JSON.stringify(bodies69[bodies69.length - 1]?.trace));
+  check('就地重画：部件层长出那一件（框里写名字、外面写方位）、读数跟着走、别的图不动',
+    layer69._innerHTML.includes('data-ui-build-part="bd83"') && layer69._innerHTML.includes('草') &&
+      layer69._innerHTML.includes('translate(90 40)') &&
+      out69.textContent === '现在摆着：草（图框的西北部）；还没有接上线' &&
+      outOther69.textContent === '不动', layer69._innerHTML.slice(0, 300) + ' / ' + out69.textContent);
+  check('牌就地改字不增删节点：这一枚标成已摆上、「已在 西北部」写进那一格、手里的件放下了',
+    chipA69.classList.contains('is-placed') &&
+      chipA69.querySelector('.ui-build-chip-on').textContent === '已在图框的西北部' &&
+      chipA69.getAttribute('aria-pressed') === 'false' && held69('bd83') === null,
+    chipA69.className + ' / ' + chipA69.querySelector('.ui-build-chip-on').textContent);
+  check('摆上去的件不被禁用、不消失，改说它摆在哪儿（读屏不许这件凭空没了）',
+    chipA69.getAttribute('aria-label') === '「草」已经摆在图框的西北部，点它把它拿回池子（它身上的线一起断）' &&
+      chipA69.disabled === false, chipA69.getAttribute('aria-label'));
+  check('摆完把焦点还给那一枚牌（键盘不用从头再走一遍）',
+    doc.activeElement === chipA69, String(doc.activeElement?.dataset?.uiItem));
+
+  // 部件层与线层每次重画都整段换新（桩里换下来的那一份不再跟着改 class），所以这里造的
+  // 节点只当"事件落在哪"的靶子；要看结果一律看重画出来的那一份字符串。
+  const mkPart69 = (name) => {
+    const g = doc.createElement('g'); g.className = 'ui-build-part';
+    g.dataset.uiBuildPart = 'bd83'; g.dataset.uiName = name;
+    g.setAttribute('aria-pressed', 'false');
+    layer69.append(g);
+    return g;
+  };
+  const mkLink69 = (key) => {
+    const g = doc.createElement('g'); g.className = 'ui-build-link';
+    g.dataset.uiBuildLink = key;
+    links69.append(g);
+    return g;
+  };
+
+  pick69('bd83', '兔');
+  handle69({ type: 'click', target: svg69, clientX: 200, clientY: 90 });
+  pick69('bd83', '鹰');
+  handle69({ type: 'click', target: svg69, clientX: 300, clientY: 150 });
+  check('三件挨着摆开：状态里就是三格方位，没有第四种东西（手里、线头都不进这一本账）',
+    Object.keys(ui69.readUiState('bd83').state).join(',') === 'uiKind,草,兔,鹰' &&
+      held69('bd83') === null && source69('bd83') === null,
+    JSON.stringify(ui69.readUiState('bd83').state));
+
+  const partA69 = mkPart69('草');
+  const beforeSrc69 = posts69();
+  const r69src = handle69({ type: 'click', target: partA69 });
+  check('点图框上的一件 = 当线头：不是一步，不报回、不写状态；线头只标在这一件上',
+    r69src.handled === true && r69src.action === 'source' && r69src.name === '草' &&
+      source69('bd83') === '草' && posts69() === beforeSrc69 &&
+      Object.keys(ui69.readUiState('bd83').state).join(',') === 'uiKind,草,兔,鹰' &&
+      /class="ui-build-part is-source"[^>]*data-ui-name="草"[^>]*aria-pressed="true"/.test(layer69._innerHTML) &&
+      /class="ui-build-part" data-ui-build-part="bd83" data-ui-name="兔"/.test(layer69._innerHTML) &&
+      /摆在图框的中部（点另一件接一条线/.test(layer69._innerHTML),
+    JSON.stringify(r69src) + ' / ' + layer69._innerHTML.slice(0, 400));
+
+  const partB69 = mkPart69('兔');
+  const beforeLink69 = posts69();
+  const r69link = handle69({ type: 'click', target: partB69 });
+  check('线头状态下点另一件 = 接一条有方向的线：状态写「草>兔 = 连着」（一个词，不是一个数）',
+    r69link.handled === true && r69link.action === 'link' && r69link.key === '草>兔' &&
+      ui69.readUiState('bd83').state['草>兔'] === '连着', JSON.stringify(r69link));
+  check('接线这一步报回一次，经过写明「草>兔 从空到 连着」；线头顺手放下',
+    posts69() === beforeLink69 + 1 && bodies69[bodies69.length - 1]?.trace?.[0]?.k === '草>兔' &&
+      bodies69[bodies69.length - 1].trace[0].from === null &&
+      bodies69[bodies69.length - 1].trace[0].to === '连着' && source69('bd83') === null,
+    JSON.stringify(bodies69[bodies69.length - 1]?.trace));
+  check('线那一层画出来的是两条：看得见的一条 + 宽而透明的命中条（不要求指针压在 1px 上）',
+    links69._innerHTML.includes('class="ui-build-link-hit"') &&
+      links69._innerHTML.includes('class="ui-build-link-line"') &&
+      links69._innerHTML.includes('data-ui-build-link="草&gt;兔"') &&
+      links69._innerHTML.includes('aria-label="断开这条线：草 指向 兔（按 Enter 断开）"'),
+    links69._innerHTML.slice(0, 400));
+  check('端点落在框边上而不是框中心：箭头压在框底下就等于没有箭头',
+    (() => {
+      const m = links69._innerHTML.match(/class="ui-build-link-line" x1="([\d.]+)" y1="([\d.]+)" x2="([\d.]+)" y2="([\d.]+)"/);
+      return Boolean(m) && Number(m[1]) === 110 && Number(m[3]) === 180 &&
+        Number(m[2]) > 40 && Number(m[2]) < 90 && Number(m[4]) > 40 && Number(m[4]) < 90;
+    })(), links69._innerHTML.slice(0, 400));
+  check('读数说的是方位与谁指向谁，界面上没有"几条线 / 共几件"',
+    out69.textContent === '现在摆着：草（图框的西北部）、兔（图框的中部）、鹰（图框的东南部）；接的线：草 → 兔' &&
+      !/共|条线：\d|\/\s*\d/.test(out69.textContent), out69.textContent);
+
+  const beforeDup69 = posts69();
+  handle69({ type: 'click', target: partA69 });
+  const r69dup = handle69({ type: 'click', target: partB69 });
+  check('同方向再接一次：不重复长一条线，也不写第二份状态（照实说已经有了）',
+    r69dup.action === 'dup' && posts69() === beforeDup69 &&
+      Object.keys(ui69.readUiState('bd83').state).length === 5 &&
+      ann69()?.textContent === '「草」到「兔」已经有一条线了，点那条线可以断开',
+    JSON.stringify(r69dup) + ' / ' + ann69()?.textContent);
+  check('反着来是另一条线（键是 甲>乙，乙>甲 另算一格）',
+    ui69.buildLinkKey('兔', '草') !== ui69.buildLinkKey('草', '兔'), '');
+
+  const linkNode69 = mkLink69('草>兔');
+  const beforeCut69 = posts69();
+  const r69cut = handle69({ type: 'click', target: linkNode69 });
+  check('点那条线 = 断开它：键从状态里去掉，报回写明从 连着 到空',
+    r69cut.handled === true && r69cut.action === 'cut' && r69cut.key === '草>兔' &&
+      ui69.readUiState('bd83').state['草>兔'] === undefined &&
+      posts69() === beforeCut69 + 1 &&
+      bodies69[bodies69.length - 1]?.trace?.[0]?.from === '连着' &&
+      bodies69[bodies69.length - 1].trace[0].to === null, JSON.stringify(bodies69[bodies69.length - 1]?.trace));
+  check('断线后焦点回到图框（那一条已经不在屏幕上了，不能把人扔回页首）',
+    doc.activeElement === svg69, String(doc.activeElement?.className));
+
+  handle69({ type: 'click', target: partA69 });
+  handle69({ type: 'click', target: partB69 });
+  const beforeLift69 = posts69();
+  const r69lift = handle69({ type: 'click', target: chipA69 });
+  check('池子里点已摆上的那件 = 把它拿回来，身上的线一起断',
+    r69lift.action === 'lift' && r69lift.cut === 1 &&
+      ui69.readUiState('bd83').state['草'] === undefined &&
+      ui69.readUiState('bd83').state['草>兔'] === undefined && held69('bd83') === '草',
+    JSON.stringify(r69lift));
+  check('这一手机械记两行（草 从 90,40 到空、草>兔 从 连着 到空）——删掉的格子自动那本账记不到',
+    posts69() === beforeLift69 + 1 && bodies69[bodies69.length - 1]?.trace?.length === 2 &&
+      bodies69[bodies69.length - 1].trace[0].k === '草' &&
+      bodies69[bodies69.length - 1].trace[0].from === '90,40' &&
+      bodies69[bodies69.length - 1].trace[1].k === '草>兔' &&
+      bodies69[bodies69.length - 1].trace[1].to === null,
+    JSON.stringify(bodies69[bodies69.length - 1]?.trace));
+
+  handle69({ type: 'click', target: chipA69 });
+  const beforeEmpty69 = posts69();
+  const r69none = handle69({ type: 'click', target: svg69, clientX: 150, clientY: 100 });
+  check('手里没件就点图框：不动账、不报回，但那句话一定说出来（点了不响才是最难查的错）',
+    r69none.handled === true && r69none.action === 'none' && posts69() === beforeEmpty69 &&
+      Object.keys(ui69.readUiState('bd83').state).length === 3 &&
+      ann69()?.textContent.startsWith('先点池子里的一件'),
+    JSON.stringify(r69none) + ' / ' + ann69()?.textContent);
+
+  const beforeEdge69 = posts69();
+  pick69('bd83', '草');
+  const r69edge = handle69({ type: 'click', target: svg69, clientX: 2, clientY: 2 });
+  check('边上一处放不下：不静默吞这一次点击，照实说为什么（也不写状态、不报回，这一次算接住了）',
+    r69edge.handled === true && r69edge.action === 'none' && posts69() === beforeEdge69 &&
+      ui69.readUiState('bd83').state['草'] === undefined && held69('bd83') === '草' &&
+      ann69()?.textContent === '这一处图框边上放不下这一件，挪开一点再放',
+    JSON.stringify(r69edge) + ' / ' + ann69()?.textContent);
+  const r69overlap = handle69({ type: 'click', target: svg69, clientX: 200, clientY: 90 });
+  check('与已经摆着的那件叠在一起：点名是和谁叠的，手里那件还在（让他挪开再放，不是白点一次）',
+    r69overlap.action === 'none' && ui69.readUiState('bd83').state['兔'] === '200,90' &&
+      held69('bd83') === '草' &&
+      ann69()?.textContent === '这一处和「兔」叠在一起，挪开一点再放', ann69()?.textContent);
+
+  pick69('bd83', '草');
+  const beforeCancel69 = posts69();
+  handle69({ type: 'click', target: partB69 });
+  const r69cancel = handle69({ type: 'click', target: svg69, clientX: 20, clientY: 120 });
+  check('当了线头却点了空白：不偷偷落一件、也不凭空接一条线，只把线头取消',
+    r69cancel.action === 'unsource' && source69('bd83') === null &&
+      ui69.readUiState('bd83').state['兔'] === '200,90' &&
+      posts69() === beforeCancel69 && ann69()?.textContent === '线头取消了', JSON.stringify(r69cancel));
+
+  // 5) 键盘同权：部件、线、图框都不是原生控件，宿主得接住方向键 / Enter / Delete
+  ui69.resetUiState();
+  compile69(cell69);
+  domRoot.append(block69);
+  const beforeKey69 = posts69();
+  pick69('bd83', '草');
+  const k69a = key69({ key: 'Enter', target: svg69, preventDefault() {} });
+  check('图框聚焦 + Enter = 把手里那件放到光标上（与指针同权、同样报回）',
+    k69a.handled === true && k69a.action === 'place' &&
+      ui69.readUiState('bd83').state['草'] === '160,90' && posts69() === beforeKey69 + 1,
+    JSON.stringify(k69a));
+  const k69b = key69({ key: 'ArrowRight', target: svg69, shiftKey: true, preventDefault() {} });
+  check('图框聚焦 + 方向键 = 移十字光标：取景的一步，不写状态、不报回',
+    k69b.handled === true && posts69() === beforeKey69 + 1 &&
+      Object.keys(ui69.readUiState('bd83').state).join(',') === 'uiKind,草' &&
+      ui69.buildView(ui69.readUiState('bd83').state, ui69.readUiState('bd83').spec).placed.length === 1,
+    JSON.stringify(k69b));
+  const beforeMove69 = posts69();
+  const k69c = key69({ key: 'ArrowRight', target: partA69, preventDefault() {} });
+  check('部件聚焦 + 方向键 = 挪它（这一步是落定的：状态跟着改、报回一次）',
+    k69c.handled === true && k69c.action === 'move' &&
+      ui69.readUiState('bd83').state['草'] === '168,90' && posts69() === beforeMove69 + 1,
+    JSON.stringify(k69c) + ' / ' + ui69.readUiState('bd83').state['草']);
+  check('十字光标那一截跟着方向键走（它是取景：方位只写在节点上，不进状态也不进经过）',
+    cross69.getAttribute('transform') === 'translate(192 90)' &&
+      Object.keys(ui69.readUiState('bd83').state).join(',') === 'uiKind,草',
+    String(cross69.getAttribute('transform')) + ' / ' + JSON.stringify(ui69.readUiState('bd83').state));
+
+  pick69('bd83', '兔');
+  const k69no = key69({ key: 'Enter', target: svg69, preventDefault() {} });
+  check('键盘摆到叠着的那一处：同样接住、同样说出为什么（不静默吞掉这一次 Enter）',
+    k69no.handled === true && k69no.action === 'none' &&
+      ui69.readUiState('bd83').state['兔'] === undefined && held69('bd83') === '兔' &&
+      ann69()?.textContent === '这一处和「草」叠在一起，挪开一点再放',
+    JSON.stringify(k69no) + ' / ' + ann69()?.textContent);
+  key69({ key: 'ArrowRight', target: svg69, shiftKey: true, preventDefault() {} });
+  const k69b2 = key69({ key: 'Enter', target: svg69, preventDefault() {} });
+  check('光标挪开一格再按 Enter：同一件就放得下了（拒一次不等于把这一档关掉）',
+    k69b2.handled === true && k69b2.action === 'place' &&
+      ui69.readUiState('bd83').state['兔'] === '224,90' &&
+      ui69.readUiState('bd83').state['草'] === '168,90',
+    JSON.stringify(k69b2) + ' / ' + JSON.stringify(ui69.readUiState('bd83').state));
+
+  const k69s = key69({ key: 'Enter', target: partA69, preventDefault() {} });
+  check('部件聚焦 + Enter = 当线头（图框那一段不许把落在件上的 Enter 抢去当"放到光标上"）',
+    k69s.handled === true && k69s.action === 'source' && source69('bd83') === '草', JSON.stringify(k69s));
+  const partB69k = mkPart69('兔');
+  const k69l = key69({ key: 'Enter', target: partB69k, preventDefault() {} });
+  check('线头状态下 Enter 另一件 = 接一条线：状态里多的还是 草>兔 = 连着',
+    k69l.handled === true && k69l.action === 'link' &&
+      ui69.readUiState('bd83').state['草>兔'] === '连着', JSON.stringify(k69l));
+  const linkK69 = mkLink69('草>兔');
+  const beforeCutKey69 = posts69();
+  const k69e = key69({ key: 'Enter', target: linkK69, preventDefault() {} });
+  check('线聚焦 + Enter = 断开它（SVG 的 <g role=button> 不是原生按钮，不接住就什么也不发生）',
+    k69e.handled === true && ui69.readUiState('bd83').state['草>兔'] === undefined &&
+      posts69() === beforeCutKey69 + 1, JSON.stringify(k69e));
+  const k69d = key69({ key: 'Delete', target: partA69, preventDefault() {} });
+  check('部件聚焦 + Delete = 拆回池子（与点那枚牌同权，键从状态里去掉）',
+    k69d.handled === true && k69d.action === 'lift' &&
+      ui69.readUiState('bd83').state['草'] === undefined, JSON.stringify(k69d));
+  check('别的档的键盘路没被抢（清单的一行不认得搭建图的 data）',
+    key69({ key: 'Enter', target: { dataset: { uiCheck: 'c1' } } }).handled === false, '');
+  check('认不出搭建图就返回 null（这一档之外的事件照原路走，不冒充接住了）',
+    buildClick69({ target: { classList: { contains: () => false }, closest: () => null, dataset: {} } }) === null, '');
+  check('宿主那份口径与编译器同一把尺：同一份状态，两边数出来的件与线一模一样',
+    (() => {
+      ui69.resetUiState();
+      compile69(cell69);
+      ui69.setUiValues('bd83', 'build', { uiKind: 'build', 草: '90,40', 兔: '200,90', '草>兔': '连着' });
+      const f = frame69('bd83');
+      const html = compile69(cell69).html;
+      return f.view.placed.length === 2 && f.view.links.length === 1 &&
+        f.view.pool.map((p) => p.name).join(',') === '鹰' &&
+        /data-ui-name="草"[^>]*aria-label="「草」：能自己造养分的。摆在图框的西北部/.test(html) &&
+        html.includes('现在摆着：草（图框的西北部）、兔（图框的中部）；接的线：草 → 兔');
+    })(), '');
+
+  // 6) handoff：把"摆上哪几件、接了哪几条线"机械地拼成话递回对话
+  {
+    const spec69 = ui69.readUiState('bd83')?.spec;
+    ui69.writeUiState('bd83', 'build', { uiKind: 'build', 草: '90,40', 兔: '200,90', '草>兔': '连着' }, spec69);
+    const h69 = handle69({ type: 'click', target: { dataset: { uiHandoff: 'bd83' } } });
+    check('build 的 handoff 被接住', h69.handled === true && h69.kind === 'handoff' && h69.id === 'bd83', JSON.stringify(h69));
+    check('拼句只报这份结构（件在各处、线怎么连），没有"对不对"也没有"搭了几件"',
+      input69.value === '我在搭建图「搭一条食物链」里搭的是：草（图框的西北部）、兔（图框的中部）；线：草 → 兔',
+      input69.value);
+    ui69.writeUiState('bd83', 'build', { uiKind: 'build' }, spec69);
+    handle69({ type: 'click', target: { dataset: { uiHandoff: 'bd83' } } });
+    check('一件都没摆：照实说没有，并把要搭的那件事带回话里',
+      input69.value.startsWith('我在搭建图「搭一条食物链」里还没有把部件摆上图框（把这三件接成一条食物链'),
+      input69.value);
+    check('拼句里没有判分词（Invariant 4）',
+      !/score|percent|mastery|correct|incorrect|\/\s*\d/.test(input69.value), input69.value);
+    input69.value = boxBefore69;
+  }
+
+  // 7) 右栏回看卡：搭建图出现在「这局动过的界面」
+  {
+    st69.notebook.progress.artifact_state = {
+      'ui:bd83': { uiKind: 'build', 草: '90,40', 兔: '200,90', '草>兔': '连着' },
+    };
+    renderPanel69();
+    const card69 = deepAll(deskBody(), 'ui-state-card')[0] || null;
+    const notes69 = card69 ? deepAll(card69, 'state-note').map((n) => n.textContent) : [];
+    check('右栏卡把搭建图排进来（只出现象：哪件摆在哪儿、哪条线连着哪条，没有"搭了几件"）',
+      notes69.includes('搭建图「bd83」') && notes69.includes('· 草 摆在 90,40') &&
+        notes69.includes('· 兔 摆在 200,90') && notes69.includes('· 草 → 兔') &&
+        !notes69.some((n) => /共\s*\d|\/\s*\d|%/.test(n)), notes69.join(' / '));
+    st69.notebook.progress.artifact_state = { 'ui:bd83': { uiKind: 'build' } };
+    renderPanel69();
+    const notes69b = (() => {
+      const c = deepAll(deskBody(), 'ui-state-card')[0] || null;
+      return c ? deepAll(c, 'state-note').map((n) => n.textContent) : [];
+    })();
+    check('一件都没摆：卡上照实说还没有把部件摆上图框',
+      notes69b.includes('· 还没有把部件摆上图框'), notes69b.join(' / '));
+  }
+
+  // 8) 改版不静默：池子换短了 / 图框换小了，装不下的都点名
+  {
+    ui69.resetUiState();
+    compile69(cell69);
+    ui69.setUiValues('bd83', 'build', { uiKind: 'build', 草: '90,40', 兔: '200,90', 鹰: '300,150', '草>兔': '连着' });
+    const shortFence = cell69.filter((l) => l !== 'part: 鹰 | 站在顶端');
+    const c69short = compile69(shortFence).html;
+    check('池子换短了：不再声明的那一件连它摆的位置一起去掉，不留一格孤儿（改版不许留着说不清的东西）',
+      ui69.readUiState('bd83').state['鹰'] === undefined &&
+        ui69.readUiState('bd83').state['草'] === '90,40' &&
+        !c69short.includes('data-ui-item="鹰"'), c69short.slice(-700));
+    check('续得回来的那两件照旧在图上，线也照旧连着（改版不许吃他已经搭好的结构）',
+      ui69.readUiState('bd83').state['草>兔'] === '连着' &&
+        c69short.includes('现在摆着：草（图框的西北部）、兔（图框的中部）') &&
+        c69short.includes('接的线：草 → 兔'), c69short.slice(-500));
+    ui69.resetUiState();
+    compile69(['kind: build', 'id: bd83c', 'ask: 搭', 'frame: 320x180', 'part: 草', 'part: 兔']);
+    ui69.setUiValues('bd83c', 'build', { uiKind: 'build', 草: '90,40', 兔: '200,90', '草>兔': '连着' });
+    const c69small = compile69(['kind: build', 'id: bd83c', 'ask: 搭', 'frame: 160x120', 'part: 草', 'part: 兔']).html;
+    check('线两端有部件不在图框上：那条线不画，但说一句（结构没画全不能算他搭完了）',
+      /这一版图框装不下 \d 件旧位置/.test(c69small) &&
+        c69small.includes('条线两端有部件不在图框上，没有画出来'), c69small.slice(-700));
+  }
+
+  // 9) XSS：id / ask / 部件名 / 那句话里的引号与标签挤不出处理器
+  {
+    ui69.resetUiState();
+    const x69 = compile69(['kind: build', 'id: x1" onfocus=alert(1) x="', 'ask: "><img src=x onerror=1>',
+      'part: 甲" onclick=alert(1)', 'part: <script>alert(1)</script>']).html;
+    check('id / ask / 部件名里的标签与引号被转义（属性位也跑不掉）',
+      !/<img src=x/.test(x69) && !/<script>/.test(x69) && !/onerror=1"/.test(x69) &&
+        x69.includes('&lt;'), x69.slice(0, 400));
+  }
+
+  globalThis.fetch = realFetch69;
+  ui69.resetUiState();
+  check('这一节无异常', errors.length === errsBefore69, errors.slice(errsBefore69).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });
