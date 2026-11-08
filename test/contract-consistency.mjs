@@ -2351,6 +2351,66 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
     'README 没记这条边界');
 }
 
+// ── 第八十五轮：接口不收了，就别再往界面寄——顺带给「地名」立一道守卫。
+//    第八十一轮清了工具 schema 与快照里的右栏话，第八十四轮清了能力映射表里的「中间列」，
+//    这一轮又在 run_scene 的描述里抓到「中栏」。同一类漂移用三轮回合各抓一层，说明缺的不是
+//    文案而是守卫：只要模型侧文案里还允许出现已经拆掉的界面地名，下一次改界面就会再长出来。
+//    这一轮把「右栏 / 中间列 / 中栏 / 笔记页」列为退役地名，扫模型能读到的全部文案
+//    （能力映射表、工具说明书、制品说明书、规则五份），并钉住正向的现名「台面（对话流）」。
+//    另一半是待办：第七十七轮起界面不画它，但 SSE 事件与 HTTP 快照仍在往浏览器寄
+//    （todo 事件没人接，todos / retests / decisions 三个派生字段是右栏两个视图的数据源）——
+//    这一轮把这条管道拆掉，只留落盘供快照读。
+{
+  const stripJsComments = (src) => src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  const serveSrc85 = fs.readFileSync(path.join(app, 'server', 'serve.mjs'), 'utf8');
+  const promptSrc85 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
+  const rulesSrc85 = ['artifact.md', 'main.md', 'pedagogy.md', 'protocols.md', 'runtime.md']
+    .map((f) => fs.readFileSync(path.join(app, 'server', 'rules', f), 'utf8')).join('\n');
+
+  const retiredNames = ['右栏', '中间列', '中栏', '「笔记」页', '笔记页', '右侧页签'];
+  const modelFacing85 = [
+    ['prompt.mjs', stripJsComments(promptSrc85)],
+    ['agent.mjs（工具说明书）', stripJsComments(agentSrc)],
+    ['artifact.mjs（制品说明书）', stripJsComments(artifactSrc)],
+    ['rules（五份教学规则）', rulesSrc85],
+  ];
+  const leaks85 = [];
+  for (const [name, text] of modelFacing85) {
+    for (const word of retiredNames) {
+      if (text.includes(word)) leaks85.push(`${name}: ${word}`);
+    }
+  }
+
+  // ① 模型读到的文案里没有任何退役界面地名
+  check('模型侧文案没有退役界面地名（右栏 / 中间列 / 中栏 / 笔记页）',
+    leaks85.length === 0, leaks85.join('；'));
+
+  // ② 正向锚点：地名指向真实的那一片（不然守卫只能证明"没写错"，证明不了"写对"）
+  check('能力映射表与 run_scene 说明书都指向「台面（对话流）」',
+    promptSrc85.includes('台面（对话流）按「场」分段')
+      && agentSrc.includes('台面（对话流）按场分段'));
+
+  // ③ 待办不再向浏览器推事件（界面没有它的收件人）
+  check('服务端不再发 todo SSE 事件（两处 emit 都拆掉）',
+    !agentSrc.includes("type: 'todo'") && !serveSrc85.includes("type: 'todo'"),
+    '还有 todo 事件在往界面寄');
+
+  // ④ HTTP 快照不再带右栏时代的三个派生字段
+  check('浏览器快照剥离 todos / retests / decisions，且三处 notebook 响应都走同一个出口',
+    /const notebookForClient = (?:\([^)]*\)|\{[^}]*\}) =>/.test(serveSrc85)
+      && ['todos', 'retests', 'decisions'].every((k) => new RegExp(`notebookForClient\\b`).test(serveSrc85) && serveSrc85.includes(k))
+      && (serveSrc85.match(/notebookForClient\(store/g) || []).length >= 3,
+    '快照还在把界面不收的字段寄出去');
+
+  // ⑤ 文档如实同步：事件表没有 todo 行，§10 立了地名守卫这条边界
+  const readmeSrc85 = fs.readFileSync(path.join(app, 'README.md'), 'utf8');
+  check('README 事件表删掉 todo 行，§10 记下「地名只有一套」',
+    readmeSrc85.split('| `todo` |').length - 1 === 0
+      && /## 10\. 已知边界[\s\S]*?界面地名只有一套/.test(readmeSrc85));
+}
+
 console.log(`\n${'─'.repeat(52)}`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 process.exitCode = failed === 0 ? 0 : 1;

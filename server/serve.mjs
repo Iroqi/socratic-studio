@@ -40,6 +40,15 @@ import { TaskRunner } from './tasks.mjs';
 import { generateStarters, readStarterCache, writeStarterCache, studiedFingerprint } from './starters.mjs';
 import { panelDecisionOpts, jevPing } from './decision.mjs';
 
+/**
+ * 发给浏览器的学习快照：去掉右栏时代的三个派生字段。
+ * - `todos`：模型给自己排的组织线，第七十七轮起界面不画它；
+ * - `retests` / `decisions`：原「上次还差这些」续学卡与「判定记录」审计视图的数据源，
+ *   第三十九轮右栏并入台面后两个视图都没了。
+ * 界面不收的东西不再随每次 GET 寄出去；服务端仍从盘上现读给 prompt 快照与审计用。
+ */
+const notebookForClient = ({ todos, retests, decisions, ...rest }) => rest;
+
 ensureDirs();
 const registry = await createRegistry();
 // 只调一次：它返回未能加载的订阅清单，给启动日志和 /api/bootstrap 用
@@ -829,7 +838,7 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { error: '请给出想学的主题' });
       }
       const meta = store.createNotebook(body);
-      return sendJson(res, 201, { notebook: store.getNotebook(meta.id) });
+      return sendJson(res, 201, { notebook: notebookForClient(store.getNotebook(meta.id)) });
     }
 
     // 整本导入：把一份导出包还原成一本新的学习。包可能带制品/素材，放宽请求体上限。
@@ -867,13 +876,13 @@ const server = http.createServer(async (req, res) => {
 
     m = /^\/api\/notebooks\/([^/]+)$/.exec(pathname);
     if (m && method === 'GET') {
-      return sendJson(res, 200, { notebook: store.getNotebook(decodeURIComponent(m[1])) });
+      return sendJson(res, 200, { notebook: notebookForClient(store.getNotebook(decodeURIComponent(m[1]))) });
     }
     if (m && method === 'PATCH') {
       const id = decodeURIComponent(m[1]);
       const body = await readBody(req);
       store.touchNotebook(id, body);
-      return sendJson(res, 200, { notebook: store.getNotebook(id) });
+      return sendJson(res, 200, { notebook: notebookForClient(store.getNotebook(id)) });
     }
     if (m && method === 'DELETE') {
       const id = decodeURIComponent(m[1]);
@@ -1280,12 +1289,11 @@ const server = http.createServer(async (req, res) => {
             decision: await decisionOptsFromStore(),
             onSession: (session) => {
               turn.session = session;
-              // 待办落盘：刷新页面后右侧页签还要能看见
+              // 待办落盘：只为下一回合的快照能读到（界面不画它，也不推事件）
               const flushTodos = () => {
                 if (session.todosDirty) {
                   store.saveTodos(id, session.todos);
                   session.todosDirty = false;
-                  emit({ type: 'todo', todos: session.todos });
                 }
               };
               session.flushTodos = flushTodos;
@@ -1452,7 +1460,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true });
     }
 
-    // 后台任务 / 分身的常驻事件流：右栏的「后台任务」页签开着就一直订阅，
+    // 后台任务 / 分身的常驻事件流：台面现状条的「后台任务」开着就一直订阅，
     // 回合结束之后到达的任务事件也走这条（所以它不能挂在 TurnHandle 上）。
     m = /^\/api\/notebooks\/([^/]+)\/task-stream$/.exec(pathname);
     if (m && method === 'GET') {

@@ -483,7 +483,7 @@ export function buildTools() {
     {
       name: TOOL_NAMES.RUN_SCENE,
       description:
-        '导演台的手：把这一「场」开出来、换相位、把旧道具摆回台上、定这一场共用的数。一场 = 一段连续的教学（一个概念的讲→做→验），不是每条消息一场——一个回合通常只开一场。action: open | phase | place | remove | params；phase 取 open/teach/practice/assess/close。**台子没有时钟**：你不点它，相位就停在那儿，学习者的沉默不是换场信号。open 要给一句学习者看得懂的场名（如「变量的盒子」），并把正在取景的概念 id 带上——中栏按场分段，正文、题卡、道具都落进这一场的格子里。share_artifact 交付的道具自动上台，不必 place；place 只用来把**以前那场**的道具再摆回来（跨场接着玩）。学习者扔掉的道具摆不回来，那是他的决定。**params 定这一场共用的几个数**（如人数 / 单价 / 本金）：围栏里写 `uses: 人数` 的 calculator / form 会先用它，几件界面就不会各写各的数；它只收数，整体替换（传空数组 = 这场不再共用），换场照旧带着。',
+        '导演台的手：把这一「场」开出来、换相位、把旧道具摆回台上、定这一场共用的数。一场 = 一段连续的教学（一个概念的讲→做→验），不是每条消息一场——一个回合通常只开一场。action: open | phase | place | remove | params；phase 取 open/teach/practice/assess/close。**台子没有时钟**：你不点它，相位就停在那儿，学习者的沉默不是换场信号。open 要给一句学习者看得懂的场名（如「变量的盒子」），并把正在取景的概念 id 带上——台面（对话流）按场分段，正文、题卡、道具都落进这一场的格子里。share_artifact 交付的道具自动上台，不必 place；place 只用来把**以前那场**的道具再摆回来（跨场接着玩）。学习者扔掉的道具摆不回来，那是他的决定。**params 定这一场共用的几个数**（如人数 / 单价 / 本金）：围栏里写 `uses: 人数` 的 calculator / form 会先用它，几件界面就不会各写各的数；它只收数，整体替换（传空数组 = 这场不再共用），换场照旧带着。',
       parameters: Type.Object({
         action: Type.String({ description: 'open | phase | place | remove | params' }),
         title: Type.Optional(Type.String({ description: 'action=open 必填：一句话场名，学习者看得懂' })),
@@ -1631,7 +1631,7 @@ export class TeachingSession {
   execUpdateTodo(args) {
     this.todos = normaliseTodos(args.todos);
     this.todosDirty = true;
-    this.emit({ type: 'todo', todos: this.todos });
+    // 不再往界面推 todo 事件：界面不画待办（第七十七轮），只落盘供下一回合的快照读。
     const done = this.todos.filter((t) => t.status === 'completed').length;
     return {
       ok: true,

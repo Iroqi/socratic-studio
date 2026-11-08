@@ -288,9 +288,9 @@ export function getNotebook(id) {
     todos: readTodos(id),
     notes: readNotes(id),
     scene: readSceneState(id),
-    // 续学锚点：上次判错、还没判对的题（同一份候选，prompt 快照与前端都从这里取）。
+    // 回马枪候选：上次判错、还没判对的题（prompt 快照从这里取；不进浏览器快照）。
     retests: retestCandidates(progress?.artifact_evidence || []),
-    // 判定账本的可读摘要（审计视图，只出词不出数字——见 readDecisions 注释）。
+    // 判定账本的可读摘要（审计辅助用，只出词不出数字——见 readDecisions 注释；不进浏览器快照）。
     decisions: readDecisions(id),
   };
 }
@@ -479,8 +479,8 @@ export function stateWord(state) {
  * 证据记录里没有时间戳（`agent.mjs` 归一化时就没这个字段），所以间隔只能按回合算：
  * 这一轮读到候选、下一轮重测，本身就隔着至少一次完整回合。别把它当成"隔了几天"的间隔重复。
  *
- * 它住在数据层而不是 prompt 层，是因为前端也要读它（右栏「上次还差这些」续学卡）——
- * 同一份候选只算一次，两种出口不会长出不同的事实。prompt.mjs 的快照从这里取。
+ * 它住在数据层而不是 prompt 层，是因为它同时供给 prompt 快照与 store.getNotebook()——
+ * 两份出口共用同一份候选，不会长出不同的事实。浏览器快照不寄它（续学卡随右栏一起没了）。
  */
 export function retestCandidates(evidence, cap = 3) {
   const byQuestion = new Map();
@@ -533,7 +533,7 @@ export function appendDecisionJournal(id, entry) {
   return journal;
 }
 
-// 判定账本的可读出口（右栏「判定记录」审计视图）。只给结论，不给数字：
+// 判定账本的可读出口（脚本 / 测试的审计读回；浏览器快照里不带它）。只给结论，不给数字：
 // value / probability / margin 是这次判定的置信度，不是学习量（Invariant 4 的
 // 违规指纹 ① 是"掌握度/理解度/进度的数值化形态"，概率数字放在学习者可见面上
 // 有被读成"你掌握了 28%"的风险，所以可见面只出词）。完整记录（含输入输出）
@@ -1681,7 +1681,7 @@ const ARTIFACT_KIND_WORDS = {
  *
  * 与整本导出（JSON，机器可读、完整备份）的分工：导出是数据，小结是文字。
  * 内容是结论不是过程：目标、概念结构（按依赖序 + 状态词）、笔记、制品清单——
- * 事件流水不进小结（那是过程，右栏「事件」就是它的去处，和小结/轨迹的分界同一套）。
+ * 事件流水不进小结（那是过程——事件留在 chats/事件流水里，和小结/轨迹的分界同一套）。
  *
  * Invariant 4 在这里是硬约束：状态一律用词（待学 / 正在学习 / 已学懂 / 正在练习 / 已掌握），
  * 绝不出百分比、分数、进度条、比率。概念行"—— 已学懂"是词不是数字；制品清单只列

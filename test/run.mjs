@@ -1697,7 +1697,7 @@ check('活回合收得下扔掉事件（本回合内 read_artifact_evidence 就�
   session.recordArtifactEvidence(retireEvent) === true &&
     session.liveArtifacts.get(liveArtifact.id).events.length === railBefore + 1,
   `events ${railBefore} → ${session.liveArtifacts.get(liveArtifact.id)?.events?.length}`);
-check('它作为 artifact_event 广播出去（画布那一行提示与右栏靠这条）',
+check('它作为 artifact_event 广播出去（画布那一行提示与台面现状条靠这条）',
   events.filter((e) => e.type === 'artifact_event' && e.name === 'artifact_retired').length === 1);
 check('同一个动作重播两次只算一条（name+at 去重，别把一次点击说成两次）',
   session.recordArtifactEvidence(retireEvent) === false);
@@ -1715,7 +1715,8 @@ check('update_todo_list 回报完成度', (() => {
   });
   return r.ok === true && r.note.includes('1/3');
 })());
-check('todo 事件发给前端', events.some((e) => e.type === 'todo' && e.todos.length === 3));
+check('todo 更新不再往界面推事件（只落盘供下一回合快照）',
+  session.todos.length === 3 && !events.some((e) => e.type === 'todo'));
 check('非法 status 归一到 pending', (() => {
   session.execUpdateTodo({ todos: [{ id: 'x', content: 'y', status: 'weird' }] });
   return session.todos[0].status === 'pending';
@@ -4112,7 +4113,8 @@ check('prompt 判定指引要求「先 read_artifact_evidence 再判、缺证据
   check('摘要里没有判定置信度数字（value/probability 不进可见面）',
     !JSON.stringify(decs).includes('probability') && !JSON.stringify(decs).includes('"value"') && !JSON.stringify(decs).includes('0.91'),
     JSON.stringify(decs));
-  check('getNotebook 带判定摘要（前端渲染用它）', Array.isArray(store.getNotebook(decId).decisions) && store.getNotebook(decId).decisions.length === 3);
+  check('getNotebook 仍带判定摘要（服务端审计读回；浏览器快照会把它剥离）',
+    Array.isArray(store.getNotebook(decId).decisions) && store.getNotebook(decId).decisions.length === 3);
 
   // 12j-2 损坏文件取证：体检点名之后原件拿得到；只允许报告里的路径。
   const corruptId = store.createNotebook({ topic: '取证', goal: null, pace: 'normal' }).id;

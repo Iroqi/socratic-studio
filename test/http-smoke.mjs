@@ -615,8 +615,9 @@ try {
 
   console.log('\n15. 看不见的看得见：判定账本 / 回马枪候选 / 损坏取证（真服务）');
   const nbFull = (await jfetch(`${BASE}/api/notebooks/${id}`)).data.notebook;
-  check('GET /api/notebooks/:id 带回马枪候选字段（前端续学卡的数据源）',
-    Array.isArray(nbFull.retests) && nbFull.retests.length === 0 && Array.isArray(nbFull.decisions), JSON.stringify({ retests: nbFull.retests, decisions: nbFull.decisions }).slice(0, 120));
+  check('GET /api/notebooks/:id 不寄右栏时代的三个派生字段（todos / retests / decisions）',
+    nbFull.todos === undefined && nbFull.retests === undefined && nbFull.decisions === undefined,
+    JSON.stringify({ todos: nbFull.todos, retests: nbFull.retests, decisions: nbFull.decisions }).slice(0, 120));
   // 造一处损坏：chat.json 写坏，体检点名 → 取证下载原样字节
   const corruptRel = `${id}/chat.json`;
   const corruptBytes = Buffer.from('{ 半截 JSON ← 取证原样');
