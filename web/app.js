@@ -194,6 +194,8 @@ function setStatus(text, { live = false, spinner = true } = {}) {
 const state = {
   notebooks: [],
   notebook: null,
+  navigation: 0,
+  sendingTurn: false,
   config: { subscriptions: [], custom: null, availableModels: [] },
   settings: { activeModel: null },
   pendingAttachments: [],
@@ -662,13 +664,15 @@ function applyComposer() {
  * 文件正要去这个新会话里发出去，既不 stash 也不换回来，原样留着。
  */
 async function openNotebook(id, { carryComposer = false } = {}) {
+  const generation = ++state.navigation;
   let notebook;
   try {
     ({ notebook } = await api('GET', `/api/notebooks/${id}`));
   } catch (err) {
-    toast(`打不开这个学习：${err.message}`, true);
+    if (generation === state.navigation) toast(`打不开这个学习：${err.message}`, true);
     return;
   }
+  if (generation !== state.navigation) return;
   // 切会话不再丢草稿：它停在侧栏，点回去接着写。这里只收"活的"东西 + 换输入框。
   if (carryComposer) state.composerStore.delete(DRAFT_KEY);
   else stashComposer();
@@ -694,7 +698,7 @@ async function openNotebook(id, { carryComposer = false } = {}) {
   scrollToBottom(true);
   subscribeTaskStream();
   hydrateTasks(id);
-  syncOrphanTurn();
+  syncOrphanTurn(id, generation);
 }
 
 /**
@@ -735,14 +739,15 @@ function hydrateTasks(notebookId) {
  * 现在先直接接回去（rejoinTurn 重放整条缓冲，接着打字、题卡照旧能答）；
  * 接不上才退回横幅＋轮询，等它跑完自动重载，并给出「强制中断」的出口。
  */
-async function syncOrphanTurn() {
-  if (!state.notebook?.id || state.turn) return;
+async function syncOrphanTurn(notebookId = state.notebook?.id, generation = state.navigation) {
+  if (!notebookId || state.notebook?.id !== notebookId || generation !== state.navigation || state.turn) return;
   let state1;
   try {
-    state1 = await api('GET', `/api/notebooks/${state.notebook.id}/turn-state`);
+    state1 = await api('GET', `/api/notebooks/${notebookId}/turn-state`);
   } catch {
     return; // 老服务没这个接口就算了，不阻塞打开
   }
+  if (generation !== state.navigation || state.notebook?.id !== notebookId || state.turn) return;
   if (!state1?.active) {
     // 服务端没有活回合：回放出来的未答题已经没人收了，封掉（点它只会回 409）
     sealUnanswered();
@@ -750,21 +755,24 @@ async function syncOrphanTurn() {
   }
   // 服务端还活着 → 先试着接回去，而不是亮一条横幅让他干等
   if (await rejoinTurn()) return;
+  if (generation !== state.navigation || state.notebook?.id !== notebookId) return;
   showOrphanBanner();
   state.orphanTimer = setInterval(async () => {
+    if (generation !== state.navigation || state.notebook?.id !== notebookId) return;
     let s;
     try {
-      s = await api('GET', `/api/notebooks/${state.notebook.id}/turn-state`);
+      s = await api('GET', `/api/notebooks/${notebookId}/turn-state`);
     } catch {
       return;
     }
-    if (s?.active) return;
+    if (generation !== state.navigation || state.notebook?.id !== notebookId || s?.active) return;
     clearInterval(state.orphanTimer);
     state.orphanTimer = null;
     hideOrphanBanner();
     // 回合跑完了：从磁盘重新装载，增量落盘的正文此时才可见
     try {
-      const { notebook } = await api('GET', `/api/notebooks/${state.notebook.id}`);
+      const { notebook } = await api('GET', `/api/notebooks/${notebookId}`);
+      if (generation !== state.navigation || state.notebook?.id !== notebookId) return;
       state.notebook = notebook;
       renderThread();
       sealUnanswered(); // 回合已经跑完：还留着没答的题作废
@@ -772,7 +780,7 @@ async function syncOrphanTurn() {
       renderNotebookList();
       toast('上一个回合已经跑完了，内容已恢复');
     } catch (err) {
-      toast(`重新装载失败：${err.message}`, true);
+      if (generation === state.navigation && state.notebook?.id === notebookId) toast(`重新装载失败：${err.message}`, true);
     }
   }, 3000);
 }
@@ -789,6 +797,7 @@ async function syncOrphanTurn() {
  */
 async function rejoinTurn() {
   const id = state.notebook?.id;
+  const generation = state.navigation;
   if (!id || state.turn) return false;
   const messages = state.notebook?.chat?.messages || [];
   const through = messages.map((m) => m.role).lastIndexOf('user') + 1;
@@ -798,11 +807,14 @@ async function rejoinTurn() {
   const turn = beginTurnBeat();
   try {
     const res = await fetch(`/api/notebooks/${id}/stream`, { signal: turn.controller.signal });
+    if (generation !== state.navigation || state.notebook?.id !== id) return false;
     if (!res.ok) return fallbackToPoll(turn);
     await drainTurnStream(res, turn);
+    if (generation !== state.navigation || state.notebook?.id !== id) return false;
     // 收尾事件没等到就说明这一回合还活着，只是这条连接断了——继续轮询等它落盘
     return turn.settled ? true : fallbackToPoll(turn);
   } catch (err) {
+    if (generation !== state.navigation || state.notebook?.id !== id) return false;
     if (err.name === 'AbortError') return fallbackToPoll(turn);
     appendTail(turn, `<p style="color:var(--danger)">⚠ 接回上一回合失败：${escapeHtml(err.message)}</p>`);
     return fallbackToPoll(turn);
@@ -1192,7 +1204,7 @@ function reconcileDesk() {
     let sceneId = null;
     for (let p = node.parentNode; p; p = p.parentNode) {
       if (p.dataset?.sceneId) {
-        sceneId = p.dataset.sceneId === NO_SCENE ? null : p.dataset.sceneId;
+        sceneId = p.dataset.sceneId;
         break;
       }
     }
@@ -1392,6 +1404,14 @@ function resetDesk() {
  * 实时回合挂进这一拍的流（顺序由 appendCard 管），回放或没有活回合时落进那一场的当前一拍。
  * `evt` 的形状与 SSE 的 ask 事件一致；`answer`（可选）是刷新回放时带的作答结果。
  */
+function activateAskCard(card) {
+  for (const b of deepByClass(card, 'ask-option')) b.disabled = false;
+  const actions = deepByClass(card, 'ask-actions')[0];
+  for (const b of actions?.children || []) {
+    if (b.dataset?.uiAskSubmit !== undefined || b.dataset?.uiAskSkip !== undefined) b.disabled = false;
+  }
+}
+
 function showQuestion(evt, answer, sceneId = null) {
   if (!(evt?.questionId || evt?.question)) return null;
   // 第三十九轮：question 是 ```ui 的档——围栏在流里先把题卡长出来，ask 事件只负责
@@ -1402,16 +1422,10 @@ function showQuestion(evt, answer, sceneId = null) {
   let card;
   if (existing) {
     card = existing;
-    for (const b of deepByClass(card, 'ask-option')) b.disabled = false;
-    const actions = deepByClass(card, 'ask-actions')[0];
-    if (actions) {
-      const submit = actions.querySelector?.('[data-ui-ask-submit]');
-      const skip = actions.querySelector?.('[data-ui-ask-skip]');
-      if (submit) submit.disabled = false;
-      if (skip) skip.disabled = false;
-    }
+    activateAskCard(card);
   } else {
     card = renderAskCard(evt);
+    activateAskCard(card);
     if (state.turn) appendCard(state.turn, card);
     else flowFor(sceneId ?? (currentScene()?.id || null))?.append(card);
   }
@@ -1578,9 +1592,11 @@ function artifactRetired(id) {
  */
 async function setArtifactLifetime(id, retired) {
   const nbId = state.notebook?.id;
+  const generation = state.navigation;
   if (!nbId || !id) return false;
   try {
     const data = await api('POST', `/api/notebooks/${nbId}/artifacts/${encodeURIComponent(id)}/lifetime`, { retired });
+    if (generation !== state.navigation || state.notebook?.id !== nbId) return false;
     const list = state.notebook.artifacts || [];
     const i = list.findIndex((a) => a.id === id);
     // 整件替换，不许 merge：服务端抹掉 retiredAt 后返回的那一条根本没有这个键，
@@ -1615,17 +1631,22 @@ async function retireArtifact(id, title) {
 
 /** 放回：先改寿命，再拿它自己的稳定地址把 HTML 端回当前这一场（1a 那条地址就是为这一步存在的）。 */
 async function restoreArtifact(id) {
-  if (!(await setArtifactLifetime(id, false))) return;
-  clearRetireCue();
+  const nbId = state.notebook?.id;
+  const generation = state.navigation;
   const item = (state.notebook?.artifacts || []).find((a) => a.id === id);
+  if (!nbId || !(await setArtifactLifetime(id, false))) return;
+  if (generation !== state.navigation || state.notebook?.id !== nbId) return;
+  clearRetireCue();
   try {
-    const res = await fetch(`/api/notebooks/${encodeURIComponent(state.notebook?.id)}/artifacts/${encodeURIComponent(id)}`);
+    const res = await fetch(`/api/notebooks/${encodeURIComponent(nbId)}/artifacts/${encodeURIComponent(id)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    pushArtifact({ id, title: item?.title, kind: item?.kind, rel: item?.rel, html: await res.text() });
+    const html = await res.text();
+    if (generation !== state.navigation || state.notebook?.id !== nbId) return;
+    pushArtifact({ id, title: item?.title, kind: item?.kind, rel: item?.rel, html });
   } catch (err) {
-    toast(`寿命放回去了，但这份 HTML 取不到：${err.message}`, true);
+    if (generation === state.navigation && state.notebook?.id === nbId) toast(`寿命放回去了，但这份 HTML 取不到：${err.message}`, true);
   }
-  renderDeskState();
+  if (generation === state.navigation && state.notebook?.id === nbId) renderDeskState();
 }
 
 /**
@@ -1941,6 +1962,14 @@ function paintProseBlock(block, turn) {
   // 渲染器据此摆占位而不是降级说明；settled 之后那一刷才允许说"这一段没编出来"。
   block.node.innerHTML = renderMarkdown(block.text, { partial: !turn?.settled });
   adoptUiSlots(block.node);
+  // ask 可能先于围栏编译落地；后到的同题围栏不能复制出第二张可作答卡。
+  const root = deskRootEl() || document.body;
+  for (const fresh of [...(block.node.querySelectorAll?.('.ask-card') || [])]) {
+    const id = fresh.dataset?.questionId;
+    const kept = id && [...deepByClass(root, 'ask-card')].find((c) =>
+      c !== fresh && !within(c, block.node) && c.dataset?.questionId === id);
+    if (kept) fresh.remove?.();
+  }
   heldProse.delete(block.node);
 }
 
@@ -2195,37 +2224,50 @@ function setSending(on) {
   $('input').disabled = false;
 }
 
-async function sendTurn() {
-  const text = $('input').value.trim();
-  if (!text && !state.pendingAttachments.length && !state.pendingFiles.length) return;
-  if (!state.notebook) {
-    // 没有打开学习 → 用这条消息新建一个
-    return createNotebookFromMessage(text);
-  }
-  if (state.turn) {
-    toast('上一条还在处理中，先等它结束或点中断', true);
+async function sendTurn({ reserved = false } = {}) {
+  if (state.sendingTurn && !reserved) {
+    toast('上一条正在发送，先等它开始', true);
     return;
   }
-  const model = currentModelRef();
-  if (!model) {
-    toast('还没有接入模型。先打开「模型配置」保存一个订阅的 API key。', true);
-    openConfig();
-    return;
+  if (!reserved) state.sendingTurn = true;
+  const generation = state.navigation;
+  const notebookId = state.notebook?.id;
+  try {
+    const text = $('input').value.trim();
+    if (!text && !state.pendingAttachments.length && !state.pendingFiles.length) return;
+    if (!state.notebook) {
+      // 没有打开学习 → 用这条消息新建一个
+      return await createNotebookFromMessage(text);
+    }
+    if (state.turn) {
+      toast('上一条还在处理中，先等它结束或点中断', true);
+      return;
+    }
+    const model = currentModelRef();
+    if (!model) {
+      toast('还没有接入模型。先打开「模型配置」保存一个订阅的 API key。', true);
+      openConfig();
+      return;
+    }
+
+    const message = text || '（我上传了素材，请先看看）';
+    if (state.pendingFiles.length) await flushPendingFiles(); // 草稿态攒下的文件，进这条消息之前先传完
+    if (generation !== state.navigation || state.notebook?.id !== notebookId || state.turn) return;
+    const attachments = state.pendingAttachments.map((a) => ({ name: a.name, rel: a.rel, kind: a.kind }));
+    $('input').value = '';
+    autosize();
+    state.pendingAttachments = [];
+    renderAttachments();
+
+    appendChatTurn(null, { role: 'user', content: text, attachments, timestamp: Date.now() });
+    state.notebook.chat.messages.push({ role: 'user', content: text, attachments, timestamp: Date.now() });
+    scrollToBottom(true);
+
+    state.sendingTurn = false;
+    await streamTurn({ message, attachments, model });
+  } finally {
+    if (!reserved) state.sendingTurn = false;
   }
-
-  const message = text || '（我上传了素材，请先看看）';
-  if (state.pendingFiles.length) await flushPendingFiles(); // 草稿态攒下的文件，进这条消息之前先传完
-  const attachments = state.pendingAttachments.map((a) => ({ name: a.name, rel: a.rel, kind: a.kind }));
-  $('input').value = '';
-  autosize();
-  state.pendingAttachments = [];
-  renderAttachments();
-
-  appendChatTurn(null, { role: 'user', content: text, attachments, timestamp: Date.now() });
-  state.notebook.chat.messages.push({ role: 'user', content: text, attachments, timestamp: Date.now() });
-  scrollToBottom(true);
-
-  await streamTurn({ message, attachments, model });
 }
 
 /** 起一个 live 回合：老师当前这一拍就是它写字的地方。发新回合与切回来"接上"都从这里起。 */
@@ -2298,23 +2340,31 @@ async function streamTurn({ message, attachments, model }) {
   // 上一轮遗留下来、还没答的题已经不是"当前问题"了（刷新回放带出来的旧题就是这种，
   // 服务端早没有这道题，点它只会报错）。开新一轮之前整列封掉。
   sealUnanswered();
+  const notebookId = state.notebook.id;
+  const generation = state.navigation;
   const turn = beginTurnBeat();
 
   try {
-    const res = await fetch(`/api/notebooks/${state.notebook.id}/turn`, {
+    const res = await fetch(`/api/notebooks/${notebookId}/turn`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, attachments, model }),
       signal: turn.controller.signal,
     });
+    if (generation !== state.navigation || state.notebook?.id !== notebookId) return;
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.error || `请求失败（${res.status}）`);
     }
     await drainTurnStream(res, turn);
+    if (turn.offline && generation === state.navigation && state.notebook?.id === notebookId) {
+      await syncOrphanTurn(notebookId, generation);
+    }
   } catch (err) {
+    if (generation !== state.navigation || state.notebook?.id !== notebookId) return;
     if (err.name !== 'AbortError') {
       appendTail(turn, `<p style="color:var(--danger)">⚠ ${escapeHtml(err.message)}</p>`);
+      await syncOrphanTurn(notebookId, generation);
     }
     endTurn(turn);
   }
@@ -5879,14 +5929,16 @@ async function uploadFiles(files) {
 }
 
 async function uploadToNotebook(file) {
+  const notebookId = state.notebook.id;
   const blob = await file.arrayBuffer();
-  const res = await fetch(`/api/notebooks/${state.notebook.id}/uploads`, {
+  const res = await fetch(`/api/notebooks/${notebookId}/uploads`, {
     method: 'POST',
     headers: { 'x-filename': encodeURIComponent(file.name), 'Content-Type': 'application/octet-stream' },
     body: blob,
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || '上传失败');
+  if (state.notebook?.id !== notebookId) return;
   state.pendingAttachments.push({ name: data.upload.name, rel: data.upload.rel, kind: data.upload.kind });
   state.notebook.uploads = data.uploads;
   renderDeskState();
@@ -6091,10 +6143,10 @@ async function createNotebookFromMessage(text) {
   if (text) {
     $('input').value = text;
     autosize();
-    return sendTurn();
+    return sendTurn({ reserved: true });
   }
   // 只选了素材、没写字：会话已经建好，照样发出去（sendTurn 会补传攒下的文件）
-  if (state.pendingFiles.length) return sendTurn();
+  if (state.pendingFiles.length) return sendTurn({ reserved: true });
   return undefined;
 }
 
@@ -7078,6 +7130,11 @@ export const __hooks = {
   setCamera,
   releaseCamera,
   rejoinTurn,
+  syncOrphanTurn,
+  sendTurn,
+  setArtifactLifetime,
+  restoreArtifact,
+  forwardArtifactMessage,
   showQuestion,
   markAskAnswered,
   handleTurnEvent,

@@ -282,7 +282,10 @@ try {
   // 它读写的是内存里那一份，不同步就把刚扔掉的那件又写回台上。
   const SCRIPT4 = [
     [{ type: 'text', text: '我先把这件撤下来，接着往下讲？\n\n```ui\nkind: question\nid: live:q_drop\nconceptId: closures\nheader: 看一下台面\nquestion: 我先把这件撤下来，接着往下讲？\noption: 嗯，接着讲 — 撤吧\noption: 先停这儿 — 再看一眼\n```' }],
-    [{ type: 'toolCall', name: 'run_scene', arguments: { action: 'phase', phase: 'teach' } }],
+    [
+      { type: 'toolCall', name: 'run_scene', arguments: { action: 'place', artifact_id: artId } },
+      { type: 'toolCall', name: 'run_scene', arguments: { action: 'phase', phase: 'teach' } },
+    ],
     [{ type: 'text', text: '接着往下讲。' }],
   ];
   await loadScript("SCRIPT4", SCRIPT4);
@@ -316,6 +319,9 @@ try {
   check('扔掉那一刻盘上台面空了', propsMid === 0, `props=${propsMid}`);
   const deskEnd = (await jfetch(`${BASE}/api/notebooks/${id}`)).data.notebook.scene;
   check('模型接着推相位也没把那件写回台上（内存里那一份跟着手势走）', deskEnd.current.props.length === 0 && deskEnd.current.phase === 'teach', `台上 ${deskEnd.current.props.length} 件｜相位=${deskEnd.current.phase}`);
+  check('活回合 run_scene 拒绝重新摆已退役道具（同步的是 manifest，不只是 scene）',
+    ev4.some((e) => e.type === 'tool_end' && e.name === 'run_scene' && e.ok === false && /被学习者扔掉了/.test(JSON.stringify(e.result))),
+    JSON.stringify(ev4.filter((e) => e.type === 'tool_end').map((e) => e.result)));
   const scenePush4 = ev4.filter((e) => e.type === 'scene');
   check('推给前端那一份也是空的台面（不是只改了盘、前端还摆着旧的那件）', scenePush4.length === 1 && scenePush4[scenePush4.length - 1].scene.props.length === 0, `次数=${scenePush4.length} 件=${scenePush4[scenePush4.length - 1]?.scene?.props?.length}`);
 
@@ -333,6 +339,9 @@ try {
   const csp = fetched.headers.get('content-security-policy') || '';
   const body = await fetched.text();
   check('那条地址真能取回 HTML，而且宿主给了不透明源（CSP sandbox + nosniff）', csp.includes('sandbox') && body.includes('data-socratic-runtime'), `csp=${csp}`);
+  check('直接 HTTP 响应也执行制品网络边界（不只是 iframe meta）',
+    /script-src[^;]*'unsafe-inline'/.test(csp) && /connect-src\s+'none'/.test(csp) && /form-action\s+'none'/.test(csp),
+    csp);
 } finally {
   server.kill();
   await sleep(400);

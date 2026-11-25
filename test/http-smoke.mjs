@@ -464,6 +464,95 @@ try {
   const after4 = await jfetch(`${BASE}/api/notebooks/${id4}`);
   check('回合结束后服务端已释放（不再 409）', after4.status === 200, `status=${after4.status}`);
 
+  console.log('\n7b. POST SSE 断开后回合继续收尾，不永久锁住学习');
+  {
+    const dropNb = await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: 'SSE 断开回归' }) });
+    const dropId = dropNb.data?.notebook?.id;
+    await jfetch(`${BASE}/api/__faux`, { method: 'POST', headers: H, body: scriptBody([[
+      { type: 'text', text: '先等这道题。\n\n```ui\nkind: question\nid: drop:q\nconceptId: none\nquestion: 断开后换个入口回答。\noption: 继续 — 接着讲\n```' },
+    ], [{ type: 'text', text: '收到，原来的连接已经断开也会收尾。' }]]) });
+    const dropCtrl = new AbortController();
+    const dropRes = await fetch(`${BASE}/api/notebooks/${dropId}/turn`, {
+      method: 'POST', headers: H, signal: dropCtrl.signal,
+      body: JSON.stringify({ message: '开始', model: { provider: 'faux', model: fauxModelId } }),
+    });
+    let droppedQuestion = null;
+    try {
+      await readSSE(dropRes, {
+        deadlineMs: 30000,
+        onEvent: (e) => {
+          if (e.type === 'ask' && e.questionId === 'drop:q') {
+            droppedQuestion = e;
+            dropCtrl.abort();
+          }
+        },
+      });
+    } catch (err) {
+      if (err?.name !== 'AbortError') throw err;
+    }
+    check('断开前 POST 回合确实活跃在阻塞题上', Boolean(droppedQuestion));
+    const activeWhileDropped = (await jfetch(`${BASE}/api/notebooks/${dropId}/turn-state`)).data;
+    check('客户端断开不会把服务端回合误判成已结束', activeWhileDropped?.active === true, JSON.stringify(activeWhileDropped));
+    // 跨过心跳周期：死响应若没 detach，这里会继续向已销毁的 response 写 ping。
+    await sleep(700);
+    const answerDropped = await jfetch(`${BASE}/api/notebooks/${dropId}/answer`, {
+      method: 'POST', headers: H,
+      body: JSON.stringify({ questionId: 'drop:q', selected: ['继续'] }),
+    });
+    check('断开后仍可通过 HTTP 回答阻塞题', answerDropped.status === 200, `status=${answerDropped.status}`);
+    let dropState = null;
+    for (let i = 0; i < 50; i += 1) {
+      dropState = (await jfetch(`${BASE}/api/notebooks/${dropId}/turn-state`)).data;
+      if (dropState?.active === false) break;
+      await sleep(100);
+    }
+    check('模型/工具完成后自动 inactive（断开的响应不占着锁）', dropState?.active === false, JSON.stringify(dropState));
+    await jfetch(`${BASE}/api/__faux`, { method: 'POST', headers: H, body: scriptBody([[{ type: 'text', text: '第二回合能正常开始。' }]]) });
+    const nextDropRes = await fetch(`${BASE}/api/notebooks/${dropId}/turn`, {
+      method: 'POST', headers: H,
+      body: JSON.stringify({ message: '继续', model: { provider: 'faux', model: fauxModelId } }),
+    });
+    const nextDropEvents = await readSSE(nextDropRes, { deadlineMs: 30000 });
+    check('断开后的下一回合不再 409，并正常收到 done', nextDropRes.status === 200 && nextDropEvents.some((e) => e.type === 'done'), `status=${nextDropRes.status}`);
+    check('死响应心跳与收尾写入没有弄坏服务进程', server.exitCode === null);
+  }
+
+  console.log('\n7c. 后续模型失败时，首次接触进度与审计事件仍先落盘');
+  {
+    const failNb = await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '失败收尾回归' }) });
+    const failId = failNb.data?.notebook?.id;
+    await jfetch(`${BASE}/api/__faux`, { method: 'POST', headers: H, body: scriptBody([
+      [{ type: 'toolCall', name: 'update_learning_graph', arguments: { topic: '失败收尾', goal: '验证持久化', pedagogy: 'general', concepts: [{ id: 'cleanup-concept', name: '首次接触', summary: '作答后记 Seen', depends_on: [] }] } }],
+      [{ type: 'text', text: '先回答一个探针。\n\n```ui\nkind: question\nid: cleanup:q\nconceptId: cleanup-concept\nquestion: 你之前见过它吗？\noption: 见过 — 继续\n```' }],
+      [{ type: 'error', message: 'scripted model failure after first contact' }],
+    ]) });
+    const failRes = await fetch(`${BASE}/api/notebooks/${failId}/turn`, {
+      method: 'POST', headers: H,
+      body: JSON.stringify({ message: '开始', model: { provider: 'faux', model: fauxModelId } }),
+    });
+    const failEvents = await readSSE(failRes, {
+      deadlineMs: 30000,
+      onEvent: async (e) => {
+        if (e.type === 'ask' && e.questionId === 'cleanup:q') {
+          await jfetch(`${BASE}/api/notebooks/${failId}/answer`, {
+            method: 'POST', headers: H,
+            body: JSON.stringify({ questionId: e.questionId, selected: ['见过'] }),
+          });
+        }
+      },
+    });
+    const failTypes = failEvents.map((e) => e.type);
+    check('失败路径发出 error + turn_end(error)，不会伪装成 done',
+      failTypes.includes('error') && failTypes.includes('turn_end') && !failTypes.includes('done') &&
+      failEvents.find((e) => e.type === 'turn_end')?.outcome === 'error',
+      failTypes.join(','));
+    const failedProgress = (await jfetch(`${BASE}/api/notebooks/${failId}`)).data.notebook.progress;
+    check('后续模型失败没有抹掉首次接触 Seen', failedProgress?.concepts?.['cleanup-concept']?.state === 'seen', JSON.stringify(failedProgress?.concepts?.['cleanup-concept']));
+    check('后续模型失败没有抹掉首次接触审计事件',
+      (failedProgress?.events || []).some((e) => e.concept_id === 'cleanup-concept' && e.kind === 'observed' && /首次接触/.test(e.summary)),
+      JSON.stringify(failedProgress?.events));
+  }
+
   console.log('\n8. 分身：taskRunner 必须真的接到工具上（组合根回归）');
   // 以前 runTurn 收了 taskRunner 却没往下传给 TeachingSession，TaskRunner 的 registry
   // 一直是 null——六个任务类工具在真实应用里一律回"没有配置任务运行器"。
@@ -804,6 +893,9 @@ try {
     const types19 = events19.map((e) => e.type);
     check('中断后这条流拿到终止事件（不再无限转圈）',
       types19.includes('turn_end') && types19.includes('closed'), types19.join(','));
+    check('宿主把中断结果发成 turn_end(aborted)，不是 done',
+      events19.find((e) => e.type === 'turn_end')?.outcome === 'aborted' && !types19.includes('done'),
+      types19.join(','));
     const delOk = await jfetch(`${BASE}/api/notebooks/${delId}`, { method: 'DELETE' });
     check('回合结束后 DELETE 成功（200 ok）', delOk.status === 200 && delOk.data?.ok === true, `status=${delOk.status}`);
     check('删完 GET 404（目录真没了）', (await jfetch(`${BASE}/api/notebooks/${delId}`)).status === 404);
@@ -1183,7 +1275,7 @@ try {
      * `../../settings/notebook.json` 本来就查无此文件。这里拿一个**盘上真存在、形状却不合法**
      * 的目录走 HTTP 问一遍——不合法就是 400，绝不因为"盘上碰巧有"就认它是一本学习。
      */
-    const weird24 = 'a:b';
+    const weird24 = '_invalid';
     fs.mkdirSync(path.join(dataDir, 'notebooks', weird24), { recursive: true });
     fs.writeFileSync(path.join(dataDir, 'notebooks', weird24, 'notebook.json'),
       JSON.stringify({ id: weird24, title: '形状不合法的那一本' }, null, 2));
@@ -1312,7 +1404,7 @@ try {
       settingsArr.status === 400, `status=${settingsArr.status}`);
 
     // 形状不合法的目录（探针 22-E）：列表不许发一张点进去 400 的地址
-    const weird25 = 'c:d';
+    const weird25 = '_invalid25';
     fs.mkdirSync(path.join(dataDir, 'notebooks', weird25), { recursive: true });
     fs.writeFileSync(path.join(dataDir, 'notebooks', weird25, 'notebook.json'),
       JSON.stringify({ id: weird25, title: '形状不合法的一本', createdAt: '2026-10-09T00:00:00.000Z', updatedAt: '2026-10-09T00:00:00.000Z' }, null, 2));
@@ -1573,6 +1665,70 @@ try {
       !p28.ui_trace.entries['art-page'] && Object.keys(p28.ui_trace.entries).length === 1,
       JSON.stringify(Object.keys(p28.ui_trace.entries)));
     fs.rmSync(path.join(dataDir, 'notebooks', nb28), { recursive: true, force: true });
+  }
+
+  // 28b. 题卡阻塞期间的制品回报，必须扛过后续状态快照。
+  {
+    const nb28b = (await jfetch(`${BASE}/api/notebooks`, { method: 'POST', headers: H, body: JSON.stringify({ topic: '活回合证据不丢' }) })).data.notebook.id;
+    const post28b = (body) => jfetch(`${BASE}/api/notebooks/${nb28b}/artifact-message`, {
+      method: 'POST', headers: H, body: JSON.stringify(body),
+    });
+    const liveScript = [
+      [
+        { type: 'text', text: '先停一下。\n\n```ui\nkind: question\nid: live:q\nconceptId: none\nquestion: 要继续吗？\noption: 继续 — 保存后继续\n```' },
+        { type: 'toolCall', name: 'update_learning_graph', arguments: {
+          topic: '活回合证据不丢', pedagogy: 'general',
+          concepts: [{ id: 'live-race', name: '并发记录', summary: '两个入口同时写同一份学习记录', depends_on: [], misconceptions: ['后写的快照覆盖先写的证据'] }],
+        } },
+      ],
+      [
+        { type: 'toolCall', name: 'set_progress_state', arguments: {
+          updates: [{ concept_id: 'live-race', state: 'seen', evidence: '学习者选择继续并提交了可观测记录' }],
+        } },
+        { type: 'text', text: '记录已保存，继续。' },
+      ],
+    ];
+    await jfetch(`${BASE}/api/__faux`, { method: 'POST', headers: H, body: scriptBody(liveScript) });
+    const turn28b = await fetch(`${BASE}/api/notebooks/${nb28b}/turn`, {
+      method: 'POST', headers: H,
+      body: JSON.stringify({ message: '开始', model: { provider: 'faux', model: fauxModelId } }),
+    });
+    let during28b = null;
+    const events28b = await readSSE(turn28b, {
+      deadlineMs: 30000,
+      onEvent: async (evt) => {
+        if (evt.type !== 'ask' || evt.questionId !== 'live:q') return;
+        await post28b({ type: 'state', artifactId: 'ui:live', state: { uiKind: 'calculator', 人数: 12 }, trace: [{ k: '人数', from: 8, to: 12 }] });
+        await post28b({ type: 'event', artifactId: 'ui:live', name: 'settled', payload: { 人数: 12 }, at: '2026-11-25T00:00:00.000Z' });
+        await post28b({ type: 'evidence', artifactId: 'art-live', evidence: {
+          concept_id: 'live-race', question_id: 'q1', interaction_type: 'choice', response: '继续',
+          result: 'recorded', attempts: 1, completed: true,
+        } });
+        during28b = (await jfetch(`${BASE}/api/notebooks/${nb28b}`)).data.notebook.progress;
+        await jfetch(`${BASE}/api/notebooks/${nb28b}/answer`, {
+          method: 'POST', headers: H, body: JSON.stringify({ questionId: 'live:q', selected: ['继续'] }),
+        });
+      },
+    });
+    const after28b = (await jfetch(`${BASE}/api/notebooks/${nb28b}`)).data.notebook.progress;
+    check('阻塞题卡等到答复后回合正常收尾', events28b.some((e) => e.type === 'turn_end'), events28b.map((e) => e.type).join(','));
+    check('后续状态推进真的发生（不是只验证了一个空回合）',
+      after28b?.concepts?.['live-race']?.state === 'seen', JSON.stringify(after28b?.concepts?.['live-race']));
+    check('活回合内收到的界面快照立即落盘',
+      during28b?.artifact_state?.['ui:live']?.人数 === 12, JSON.stringify(during28b?.artifact_state));
+    check('活回合内收到的答卷也立即落盘',
+      during28b?.artifact_evidence?.some((e) => e.artifact_id === 'art-live' && e.response === '继续'),
+      JSON.stringify(during28b?.artifact_evidence));
+    check('后续状态快照不抹掉界面经过',
+      after28b?.ui_trace?.entries?.['ui:live']?.steps?.some((s) => s.d?.[0]?.to === 12),
+      JSON.stringify(after28b?.ui_trace));
+    check('后续状态快照不抹掉制品离散事件',
+      after28b?.artifact_events?.some((e) => e.artifact_id === 'ui:live' && e.name === 'settled'),
+      JSON.stringify(after28b?.artifact_events));
+    check('后续状态快照不抹掉已落盘的答卷证据',
+      after28b?.artifact_evidence?.some((e) => e.artifact_id === 'art-live' && e.response === '继续'),
+      JSON.stringify(after28b?.artifact_evidence));
+    fs.rmSync(path.join(dataDir, 'notebooks', nb28b), { recursive: true, force: true });
   }
 } finally {
   server.kill();

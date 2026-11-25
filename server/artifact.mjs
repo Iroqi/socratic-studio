@@ -50,14 +50,12 @@ function insertAtHeadStart(body, tag) {
 export const ARTIFACT_CSP =
   "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'";
 
-/** 自己已经写了 CSP meta 的制品不覆盖（尊重显式声明，别叠两条互相打架的策略）。 */
+// 宿主策略必须注入；制品自带 CSP 只会取交集，不能替宿主放行。
 export function injectArtifactCsp(html) {
   const body = String(html ?? '');
-  if (/http-equiv\s*=\s*["']?\s*content-security-policy/i.test(body)) return body;
-  return insertAtHeadStart(
-    body,
-    `<meta data-socratic-csp="1" http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`,
-  );
+  const hostPolicy = `<meta data-socratic-csp="1" http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`;
+  if (body.includes(hostPolicy)) return body;
+  return insertAtHeadStart(body, hostPolicy);
 }
 
 /**

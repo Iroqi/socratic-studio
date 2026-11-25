@@ -427,7 +427,7 @@ check('两份都用本地 getter 取年月日时分（不许出现 getUTC*——
 // 契约同一句口号），排查照抄不会 404。
 
 const readmeDoc = fs.readFileSync(path.join(app, 'README.md'), 'utf8');
-const serveSrc = fs.readFileSync(path.join(app, 'server', 'serve.mjs'), 'utf8');
+const serveSrc = fs.readFileSync(path.join(app, 'server', 'serve.mjs'), 'utf8').replace(/\r\n?/g, '\n');
 
 // 参数段统一写成 :id：README 里 $ID / <id> / <nb> / <制品id> / <任意串> / :noteId，
 // serve.mjs 正则里 ([^/]+) / (.+)，是同一个东西在不同文档里的写法。
@@ -826,7 +826,7 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
 // 22-A 实测：id:null 让这本从列表消失而 GET 照旧 200；垃圾键随导出旅行。
 // 这一节的钉子全部对着**读侧取哪一个、写侧认哪几个键**，不认注释。
 {
-  const storeSrc22 = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8');
+  const storeSrc22 = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8').replace(/\r\n?/g, '\n');
   const webSrc22 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
 
   // 读侧：三处出口都必须说目录名那一个地址
@@ -916,7 +916,7 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
 // 导出前那道检查用的必须与体检同一份清单；缺口清单要从 store 一路走到界面。
 // 行为本身由 run.mjs §12a（单元）、http-smoke §26（真服务）、web-smoke（前端）三处钉。
 {
-  const storeSrc23 = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8');
+  const storeSrc23 = fs.readFileSync(path.join(app, 'server', 'store.mjs'), 'utf8').replace(/\r\n?/g, '\n');
   const webSrc23 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
 
   // 1) kind 只有一处认扩展名
@@ -1636,9 +1636,12 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
   check('⑧ 缓存挂在正文节点上，且只留这一帧还出现的键（不攒过期节点）',
     /node\.__uiSlots \|\| \(node\.__uiSlots = new Map\(\)\)/.test(hostSrc65) &&
       /if \(!seen\.has\(key\)\) cache\.delete\(key\)/.test(hostSrc65));
+  const paint65 = /function paintProseBlock[\s\S]*?\n\}/.exec(hostSrc65)?.[0] || '';
   check('⑧ paint 的顺序是「写 innerHTML → 换回旧节点 → 清 hold」',
-    /block\.node\.innerHTML = renderMarkdown\(block\.text, \{ partial: !turn\?\.settled \}\);\s*adoptUiSlots\(block\.node\);/.test(hostSrc65) &&
-      /function paintProseBlock[\s\S]{0,400}heldProse\.delete\(block\.node\)/.test(hostSrc65));
+    paint65.includes('block.node.innerHTML = renderMarkdown') &&
+      paint65.indexOf('adoptUiSlots(block.node)') > paint65.indexOf('block.node.innerHTML') &&
+      paint65.indexOf('heldProse.delete(block.node)') > paint65.indexOf('adoptUiSlots(block.node)'),
+    paint65);
   check('⑤ force 也先过 proseHeld（收尾那一刷不能抢走正在拖的那一下）',
     /function renderChatLive\(turn, force = false\)[\s\S]{0,700}if \(proseHeld\(b\.node\)\) \{[\s\S]{0,240}b\.dirty = true;[\s\S]{0,160}heldProse\.set\(b\.node, \{ block: b, turn \}\);[\s\S]{0,80}continue;/.test(hostSrc65),
     'renderChatLive 的按住判断不在重画之前，或没把 dirty 留到补刷');
@@ -1867,7 +1870,7 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
 //    那一档的图就照旧锁在像素里；宿主自己拼一遍字，两份迟早跟图对不上。
 //    以下契约把这些对照钉死——名单、话术、样式、提示四处必须说同一件事。
 {
-  const uiSrc80 = fs.readFileSync(path.join(app, 'web', 'ui-compile.js'), 'utf8');
+  const uiSrc80 = fs.readFileSync(path.join(app, 'web', 'ui-compile.js'), 'utf8').replace(/\r\n?/g, '\n');
   const hostSrc80 = fs.readFileSync(path.join(app, 'web', 'app.js'), 'utf8');
   const stylesSrc80 = fs.readFileSync(path.join(app, 'web', 'styles.css'), 'utf8');
   const promptSrc80 = fs.readFileSync(path.join(app, 'server', 'prompt.mjs'), 'utf8');
@@ -1910,9 +1913,9 @@ check('README 是技术文档：十一个章节齐全、不再夹带迭代年表
       Boolean(body) && !/class="sr-only"/.test(body), `${kind} 里还留着第二份文字`);
   }
   check('会动的哪几档把文字交给"此刻"（live 生成器：缓存的那份会停在旧位置）',
-    /live: \(\) => sketchAlt\(readUiState\(id\)/.test(uiSrc80) &&
-      /live: \(\) => markTextLines\(markSlotsFrom\(readUiState\(id\)/.test(uiSrc80) &&
-      /live: \(\) => pinTextLines\(pinView\(readUiState\(id\)/.test(uiSrc80) &&
+    /live: \(\) => sketchAlt\(readUiState\(id\)\?\.state/.test(uiSrc80) &&
+      /live: \(\) => markTextLines\(markSlotsFrom\(readUiState\(id\)\?\.state/.test(uiSrc80) &&
+      /live: \(\) => pinTextLines\(pinView\(readUiState\(id\)\?\.state/.test(uiSrc80) &&
       /live: \(\) => \{\n/.test(uiSrc80), 'sketch / mark / callout 少了一枚 live');
   check('文字版的长法只有一处（altLinesHtml 一处定义，编译与宿主共用）',
     (uiSrc80.match(/function altLinesHtml/g) || []).length === 1 &&

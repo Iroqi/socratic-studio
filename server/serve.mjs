@@ -30,6 +30,7 @@ import {
 import { isCustomEndpointId } from './providers-catalog.mjs';
 import * as store from './store.mjs';
 import { runTurn } from './agent.mjs';
+import { ARTIFACT_CSP } from './artifact.mjs';
 import { buildSystemPrompt } from './prompt.mjs';
 import { validateGraph, describeGraphForLearner, GraphValidationError } from './graph.mjs';
 import { placeProp, removeProp } from './scene.mjs';
@@ -91,8 +92,15 @@ if (process.env.SOCRATIC_ENABLE_FAUX === '1') {
   registry.loadFauxScript = (raw) => {
     const script = typeof raw === 'string' ? JSON.parse(raw) : raw;
     if (!Array.isArray(script)) throw new Error('faux 脚本必须是数组的数组');
-    const responses = script.map((blocks) =>
-      fauxAssistantMessage(
+    const responses = script.map((blocks) => {
+      // 测试专用失败桩：让后续模型请求以 error 收尾，验证终止前的合并落盘。
+      if (blocks.length === 1 && blocks[0]?.type === 'error') {
+        return fauxAssistantMessage([], {
+          stopReason: 'error',
+          errorMessage: String(blocks[0].message || 'faux model failed'),
+        });
+      }
+      return fauxAssistantMessage(
         blocks.map((b) => {
           if (b.type === 'text') return fauxText(b.text);
           if (b.type === 'thinking') return fauxThinking(b.text);
@@ -100,8 +108,8 @@ if (process.env.SOCRATIC_ENABLE_FAUX === '1') {
           throw new Error(`未知的 faux block: ${b.type}`);
         }),
         { stopReason: blocks.some((b) => b.type === 'toolCall') ? 'toolUse' : 'stop' },
-      ),
-    );
+      );
+    });
     faux.setResponses(responses);
     return responses.length;
   };
@@ -369,6 +377,17 @@ const taskRunner = new TaskRunner({
 // 走 taskRunner.list 而不是直接读盘——顺带过一遍 _hydrate + statusFor，导出的状态是真实状态。
 store.setTasksSnapshotFn((notebookId) => taskRunner.list({ notebookId }));
 
+/** SSE 客户端断开后 write 可能静默失败或异步抛错；死的响应不再留在订阅集合里。 */
+function writeSse(res, chunk) {
+  if (!res || res.destroyed || res.writableEnded) return false;
+  try {
+    res.write(chunk);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 class TurnHandle {
   constructor(notebookId) {
     this.notebookId = notebookId;
@@ -386,11 +405,7 @@ class TurnHandle {
     this.beat = setInterval(() => {
       if (this.done || !this.clients.size) return this.stopBeat();
       for (const res of [...this.clients]) {
-        try {
-          res.write(': ping\n\n');
-        } catch {
-          this.clients.delete(res);
-        }
+        if (!writeSse(res, ': ping\n\n')) this.clients.delete(res);
       }
     }, SSE_HEARTBEAT_MS);
     this.beat.unref?.();
@@ -406,21 +421,29 @@ class TurnHandle {
     const payload = JSON.stringify(event);
     this.buffer.push(payload);
     if (this.buffer.length > 4000) this.buffer.splice(0, this.buffer.length - 4000);
-    for (const res of this.clients) {
-      res.write(`data: ${payload}\n\n`);
+    for (const res of [...this.clients]) {
+      if (!writeSse(res, `data: ${payload}\n\n`)) this.clients.delete(res);
     }
   }
 
   attach(res) {
+    if (!res || res.destroyed || res.writableEnded) return;
     this.clients.add(res);
-    res.write('retry: 2000\n\n');
+    if (!writeSse(res, 'retry: 2000\n\n')) {
+      this.detach(res);
+      return;
+    }
     // 从头部整条重放：新接上的客户端只知道盘上已落盘的部分，这一回合的完整剧情
     // （图、正文、题卡）只在这条缓冲里。客户端负责摘掉重叠的那半截，别在这里裁。
-    for (const payload of this.buffer) res.write(`data: ${payload}\n\n`);
+    for (const payload of this.buffer) {
+      if (!writeSse(res, `data: ${payload}\n\n`)) {
+        this.detach(res);
+        return;
+      }
+    }
     if (this.done) {
       this.stopBeat();
-      res.write(`data: ${JSON.stringify({ type: 'closed' })}\n\n`);
-      res.end();
+      if (writeSse(res, `data: ${JSON.stringify({ type: 'closed' })}\n\n`)) res.end();
       return;
     }
     this.startBeat();
@@ -1003,7 +1026,7 @@ const server = http.createServer(async (req, res) => {
       const html = store.readArtifact(decodeURIComponent(m[1]), decodeURIComponent(m[2]));
       res.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
-        'Content-Security-Policy': 'sandbox allow-scripts allow-forms allow-modals allow-popups',
+        'Content-Security-Policy': `sandbox allow-scripts allow-forms allow-modals allow-popups; ${ARTIFACT_CSP}`,
         'X-Content-Type-Options': 'nosniff',
         'X-Frame-Options': 'SAMEORIGIN',
         'Cache-Control': 'no-store',
@@ -1041,6 +1064,9 @@ const server = http.createServer(async (req, res) => {
       }
       const item = store.setArtifactLifetime(id, decodeURIComponent(m[2]), body.retired);
       const notebook = store.getNotebook(id);
+      const live = activeTurns.get(id)?.session;
+      // 寿命变化必须同步活回合的 manifest，否则旧行会把刚退役的道具放回台上。
+      if (live) live.notebook.artifacts = notebook.artifacts;
       const event = {
         type: 'event',
         artifactId: item.id,
@@ -1049,7 +1075,7 @@ const server = http.createServer(async (req, res) => {
         at: new Date().toISOString(),
       };
       // 有活回合就先交给它（本回合内 read_artifact_evidence 读得到），落盘这条无论如何都写
-      activeTurns.get(id)?.session?.recordArtifactEvidence(event);
+      live?.recordArtifactEvidence(event);
       const changed = mergeArtifactMessage(notebook.progress, event);
       if (changed) store.saveProgress(id, notebook.progress);
       // 台子跟着手势走：扔掉的道具离开工作集，放回来的回到当前这一场。
@@ -1062,7 +1088,6 @@ const server = http.createServer(async (req, res) => {
           body.retired ? removeProp(sceneState, item.id) : placeProp(sceneState, item),
         );
         // 活回合内存里那一份也要跟上，不然它下一次 share_artifact 会往旧台面上摆
-        const live = activeTurns.get(id)?.session;
         if (live) live.scene = scene;
       }
       return sendJson(res, 200, { ok: true, artifact: item, changed, scene });
@@ -1225,8 +1250,9 @@ const server = http.createServer(async (req, res) => {
         Connection: 'keep-alive',
         'X-Accel-Buffering': 'no',
       });
+      // 请求 body 读完就会 close；只有 response 的 close 才表示 SSE 客户端离开。
+      res.on('close', () => turn.detach(res));
       turn.attach(res);
-      req.on('close', () => turn.detach(res));
 
       const emit = (event) => turn.emit(event);
 
@@ -1255,6 +1281,11 @@ const server = http.createServer(async (req, res) => {
           if (pending.length) {
             progress.events = [...(stored.events || []), ...pending];
           }
+          // 制品回报走独立 HTTP 入口并已落盘；回合快照是开工时的克隆，不能把它盖回去。
+          progress.artifact_state = stored.artifact_state;
+          progress.artifact_evidence = stored.artifact_evidence;
+          progress.artifact_events = stored.artifact_events;
+          progress.ui_trace = stored.ui_trace;
           store.saveProgress(id, progress);
           snapshot.progressDirty = false;
           if (snapshot.pendingEvents) snapshot.pendingEvents = [];
@@ -1316,11 +1347,13 @@ const server = http.createServer(async (req, res) => {
           turn.session?.flushTodos?.();
           // 注意：这里不单独 emit 'done'。收尾统一由 finally 里的 turn_end 负责，
           // 保证"每条路径恰好一个终止事件"，前端只需要认一个信号。
-          terminal = 'done';
+          terminal = result.outcome === 'aborted' || turn.abort.signal.aborted ? 'aborted' : 'done';
         } catch (err) {
           const detail = err?.stack || String(err);
           console.error(`[turn ${id}] ${detail}`);
           terminal = turn.abort.signal.aborted ? 'aborted' : 'error';
+          // fatal error 也是终止信号：先把本会话已发生的观察合并落盘，再通知前端。
+          persist(turn.session);
           emit({
             type: 'error',
             message: err?.message || String(err),
@@ -1333,6 +1366,8 @@ const server = http.createServer(async (req, res) => {
           // 之前这里漏了：模型输出正文但不调任何工具时，runTurn 正常返回，
           // 谁也没发终止事件，浏览器就一直转圈。
           try {
+            // 异常收尾也要先合并落盘，首次接触与审计事件不能随 result 一起丢。
+            persist(turn.session);
             // 异常收尾也把待办写掉：学习者 UI 上看到的便签刷新后不能消失
             // （以前 flushTodos 只在成功路径，runTurn 一抛错整份待办就丢了）
             turn.session?.flushTodos?.();
@@ -1350,9 +1385,15 @@ const server = http.createServer(async (req, res) => {
             console.error(`[turn ${id}] 收尾失败: ${err?.message}`);
           }
           turn.done = true;
-          for (const client of turn.clients) {
-            client.write(`data: ${JSON.stringify({ type: 'closed' })}\n\n`);
-            client.end();
+          for (const client of [...turn.clients]) {
+            if (writeSse(client, `data: ${JSON.stringify({ type: 'closed' })}\n\n`)) {
+              try {
+                client.end();
+              } catch {
+                // 客户端可能刚好在这一拍断开；订阅集合仍由 close 监听清理。
+              }
+            }
+            turn.detach(client);
           }
           activeTurns.delete(id);
         }
@@ -1379,13 +1420,11 @@ const server = http.createServer(async (req, res) => {
       // 有进行中的回合就交给它（agent 本回合内就能读到）；否则落盘，下一回合再注入
       if (turn?.session) {
         const accepted = turn.session.recordArtifactEvidence(body);
-        // state/event 也要落盘，否则刷新页面就丢
-        if (body?.type === 'state' || body?.type === 'event') {
-          const stored = store.getNotebook(id);
-          if (stored) {
-            mergeArtifactMessage(stored.progress, body);
-            store.saveProgress(id, stored.progress);
-          }
+        // 三种回报都立即落盘；活会话只持有本回合的读回副本，不是持久化边界。
+        const stored = store.getNotebook(id);
+        if (stored) {
+          mergeArtifactMessage(stored.progress, body);
+          store.saveProgress(id, stored.progress);
         }
         return sendJson(res, 200, { ok: true, live: true, accepted });
       }
@@ -1493,8 +1532,8 @@ const server = http.createServer(async (req, res) => {
         'Cache-Control': 'no-cache, no-transform',
         Connection: 'keep-alive',
       });
+      res.on('close', () => turn.detach(res));
       turn.attach(res);
-      req.on('close', () => turn.detach(res));
       return undefined;
     }
 

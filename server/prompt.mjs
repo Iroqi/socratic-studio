@@ -29,7 +29,8 @@ export function loadRulesText({ force = false } = {}) {
   const parts = [];
   for (const [rel, label] of RULE_FILES) {
     try {
-      const text = fs.readFileSync(path.join(RULES_DIR, rel), 'utf8');
+      // Windows checkouts must not change prompt size or source-pattern contracts.
+      const text = fs.readFileSync(path.join(RULES_DIR, rel), 'utf8').replace(/\r\n?/g, '\n');
       parts.push(`\n\n===== ${rel} — ${label} =====\n\n${text}`);
     } catch {
       parts.push(`\n\n===== ${rel} — 读取失败（文件缺失） =====\n`);

@@ -6,7 +6,7 @@
   "description": "Socratic Studio — 苏格拉底式一对一教学 Web 应用",
   "scripts": {
     "start": "node server/serve.mjs",
-    "test": "node test/run.mjs && node test/runtime-unit.mjs && node test/contract-consistency.mjs",
+    "test": "node test/all.mjs",
     "test:all": "node test/all.mjs",
     "test:http": "node test/http-smoke.mjs",
     "test:artifact": "node test/artifact-evidence.mjs",

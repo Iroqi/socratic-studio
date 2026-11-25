@@ -2044,8 +2044,12 @@ export async function runTurn({
 
   // step 提到循环外：循环结束后还要靠它判断"是自然收尾还是撞到步数上限"。
   let step = 0;
+  let outcome = 'done';
   for (; step < MAX_STEPS; step += 1) {
-    if (signal?.aborted) break;
+    if (signal?.aborted) {
+      outcome = 'aborted';
+      break;
+    }
 
     const context = {
       systemPrompt,
@@ -2096,13 +2100,17 @@ export async function runTurn({
 
     // 中断时不再等 stream.result()：流已经被 signal 撕开，result() 可能永远不落地。
     // 这一轮就地收尾，终止事件由调用方的 finally 统一发（每条路径恰好一个）。
-    if (signal?.aborted) break;
+    if (signal?.aborted) {
+      outcome = 'aborted';
+      break;
+    }
 
     const finalMessage = await stream.result();
     if (finalMessage.stopReason === 'error' || finalMessage.stopReason === 'aborted') {
       if (finalMessage.stopReason === 'error') {
         throw new Error(finalMessage.errorMessage || '模型请求失败');
       }
+      outcome = 'aborted';
       break;
     }
 
@@ -2127,6 +2135,8 @@ export async function runTurn({
     const toolCalls = finalMessage.content.filter((b) => b.type === 'toolCall');
 
     for (const call of toolCalls) {
+      // 阻塞工具收到中断后，同一响应里剩余的工具调用一个也不能再派发。
+      if (signal?.aborted) break;
       let args = call.arguments ?? {};
       try {
         args = validateToolCall(tools, {
@@ -2186,6 +2196,7 @@ export async function runTurn({
       });
       // 工具一执行完就落盘：中断/崩溃也不会丢掉刚建立的 Graph 或刚推进的状态
       onPersist?.(session);
+      if (signal?.aborted) break;
     }
 
     // 第三十九轮：```ui 围栏里的 question / canvas 是工具调用的界面版——
@@ -2193,8 +2204,9 @@ export async function runTurn({
     // （share_artifact 那套原样走）。校验与前端共用一个编译器：它说编不出来，这里就不收。
     let fenceAskFired = false;
     const fenceText = stepMessage?.content ?? '';
-    if (fenceText) {
+    if (fenceText && !signal?.aborted) {
       for (const fence of extractUiFences(fenceText)) {
+        if (signal?.aborted) break;
         const kind = fenceKind(fence.lines);
         if (kind === 'question') {
           const r = compileUiBlock(fence.lines, false);
@@ -2305,6 +2317,7 @@ export async function runTurn({
   });
 
   return {
+    outcome: signal?.aborted ? 'aborted' : outcome,
     messages: newMessages,
     progress: session.progress,
     graph: session.graph,

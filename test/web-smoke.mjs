@@ -1538,7 +1538,7 @@ check('没有 props 这本账（老盘 / 没开场）闸门放行',
 // 交付顺序是这道闸门成立的前提，而它是服务端的：分身大件走 serve.mjs 的 task_artifact 分支。
 // 那里若把 artifact 排回 placeOnDesk 之前，前端就会把刚做好的一件当"账上没记"吃掉，
 // 而且客户端没有 HTML 副本，回放之前画面里永远没有它。这条钉子认源码顺序（一条语句挪位置就红）。
-const serveSrc = fs.readFileSync(path.join(here, '..', 'server', 'serve.mjs'), 'utf8');
+const serveSrc = fs.readFileSync(path.join(here, '..', 'server', 'serve.mjs'), 'utf8').replace(/\r\n?/g, '\n');
 const taskBranch = /if \(event\.type === 'task_artifact'\) \{([\s\S]*?)\n    \}\n/.exec(serveSrc)?.[1] || '';
 check('分身交付先记账再上台（serve.mjs 里 scene 排在 artifact 之前）',
   taskBranch.length > 0 &&
@@ -2079,15 +2079,47 @@ check('文件还在原来那个会话里（只是不再被引用，没有偷偷�
   nbDraft.uploads.some((u) => u.name === '备忘录.txt'),
   nbDraft.uploads.map((u) => u.name).join(' | '));
 
+// (a2) 上传请求发出后才切会话：迟到的响应只属于发起它的那一本。
+let releaseLateUpload = null;
+let lateUploadStarted = false;
+responses.set('POST /api/notebooks/nb-draft/uploads', () => {
+  lateUploadStarted = true;
+  return new Promise((resolve) => {
+    releaseLateUpload = () => {
+      const up = { name: '迟到.txt', rel: 'uploads/迟到.txt', kind: 'text' };
+      nbDraft.uploads = [...nbDraft.uploads, up];
+      resolve(json({ upload: up, uploads: nbDraft.uploads }));
+    };
+  });
+});
+await openSession('nb-draft');
+const lateUpload = appModule.__hooks.uploadFiles([
+  { name: '迟到.txt', type: 'text/plain', arrayBuffer: async () => new TextEncoder().encode('迟到').buffer },
+]);
+for (let i = 0; i < 20 && !releaseLateUpload; i += 1) await new Promise((r) => setTimeout(r, 0));
+check('迟到的上传请求确实已经发出', lateUploadStarted && Boolean(releaseLateUpload));
+const otherUploadsBefore = JSON.stringify(nbOther.uploads);
+await openSession('nb-other');
+releaseLateUpload?.();
+await lateUpload;
+check('切会话后到达的上传响应不把附件塞进新会话',
+  state.pendingAttachments.length === 0 && chips().length === 0,
+  `pending=${state.pendingAttachments.length} chips=${chips().length}`);
+check('迟到的上传响应也不覆盖新会话的素材清单',
+  JSON.stringify(nbOther.uploads) === otherUploadsBefore && JSON.stringify(state.notebook.uploads) === otherUploadsBefore,
+  JSON.stringify(state.notebook.uploads));
+
 // (b) 草稿态攒着还没传的文件 → 切会话：草稿带着文件停靠，不跟去别的会话，也不丢
 state.notebook = null;
 state.pendingNew = true;
 state.draftNotebook = { title: '新会话', createdAt: Date.now() };
+input.value = '';
 await appModule.__hooks.uploadFiles([
   { name: '睡眠记录.md', type: 'text/markdown', arrayBuffer: async () => new TextEncoder().encode('# 一周').buffer },
 ]);
 check('草稿态文件攒在浏览器里', state.pendingFiles.length === 1 && chips().length === 1);
 const uploadsBefore = uploadHits;
+state.composerStore.delete('nb-other');
 await openSession('nb-other');
 check('攒着没传的文件不跟去别的会话', state.pendingFiles.length === 0 && chips().length === 0,
   `files=${state.pendingFiles.length} chips=${chips().length}`);
@@ -10371,6 +10403,147 @@ console.log('\n34. 列表「上次聊到」：时间词 / 渲染接线 / 无数�
   globalThis.fetch = realFetch69;
   ui69.resetUiState();
   check('这一节无异常', errors.length === errsBefore69, errors.slice(errsBefore69).join(' | '));
+}
+
+// ─── 70. 异步回报认祖籍：迟到的响应不能改另一本的状态 ───
+{
+  console.log('\n70. 异步边界：导航、发送、制品回报');
+  const errsBefore70 = errors.length;
+  const H = appModule.__hooks;
+  const st = H.state;
+  const originalFetch70 = globalThis.fetch;
+  const tick70 = () => new Promise((r) => setTimeout(r, 0));
+  const makeNb70 = (id) => ({
+    ...sampleNotebook(), id, title: id, chat: { messages: [] }, uploads: [], artifacts: [],
+    scene: { current: null, log: [] }, progress: { artifact_state: {}, artifact_evidence: [], artifact_events: [], ui_trace: [] },
+  });
+
+  const navA = makeNb70('nb-nav-a');
+  const navB = makeNb70('nb-nav-b');
+  let releaseNavA;
+  responses.set('GET /api/notebooks/nb-nav-a', () => new Promise((resolve) => {
+    releaseNavA = () => resolve(json({ notebook: navA }));
+  }));
+  responses.set('GET /api/notebooks/nb-nav-b', () => json({ notebook: navB }));
+  st.notebook = null;
+  const openingA = H.openNotebook('nb-nav-a');
+  await H.openNotebook('nb-nav-b');
+  releaseNavA?.();
+  await openingA;
+  check('先点 A 后点 B：A 的迟到 GET 不能把刚打开的 B 顶掉',
+    st.notebook?.id === 'nb-nav-b', String(st.notebook?.id));
+
+  const lifeA = makeNb70('nb-life-a');
+  lifeA.artifacts = [{ id: 'art-life', title: 'A 的道具', kind: 'canvas', rel: 'artifacts/art-life/index.html' }];
+  lifeA.scene = { current: { id: 'scene-a', index: 1, props: [{ id: 'art-life' }] }, log: [] };
+  const lifeB = makeNb70('nb-life-b');
+  lifeB.scene = { current: { id: 'scene-b', index: 1, props: [] }, log: [] };
+  responses.set('GET /api/notebooks/nb-life-b', () => json({ notebook: lifeB }));
+  let releaseLifetime;
+  responses.set('POST /api/notebooks/nb-life-a/artifacts/art-life/lifetime', () => new Promise((resolve) => {
+    releaseLifetime = () => resolve(json({ ok: true, artifact: { ...lifeA.artifacts[0], retiredAt: '2026-11-25T00:00:00.000Z' }, scene: lifeA.scene }));
+  }));
+  await H.openNotebook('nb-life-a');
+  const lifetime70 = H.setArtifactLifetime('art-life', true);
+  await H.openNotebook('nb-life-b');
+  releaseLifetime?.();
+  await lifetime70;
+  check('A 的迟到寿命回报不能把 B 的场账换成 A 的',
+    st.notebook?.id === 'nb-life-b' && st.notebook.scene.current.id === 'scene-b',
+    `${st.notebook?.id}/${st.notebook?.scene?.current?.id}`);
+
+  const sendNb = makeNb70('nb-send-race');
+  responses.set('POST /api/notebooks/nb-send-race/uploads', () => new Promise((resolve) => {
+    releaseUpload70 = () => {
+      const upload = { name: 'slow.txt', rel: 'uploads/slow.txt', kind: 'text' };
+      sendNb.uploads = [upload];
+      resolve(json({ upload, uploads: sendNb.uploads }));
+    };
+  }));
+  let releaseUpload70;
+  st.notebook = sendNb;
+  st.turn = null;
+  st.sendingTurn = false;
+  st.pendingAttachments = [];
+  st.pendingFiles = [{ name: 'slow.txt', type: 'text/plain', arrayBuffer: async () => new TextEncoder().encode('slow').buffer }];
+  st.settings.activeModel = { provider: 'faux', model: 'faux-1' };
+  input.value = '只发一次';
+  const turnsBefore70 = turnBodies.length;
+  turnQueue.push([{ type: 'done', notebook: sendNb }, { type: 'closed' }]);
+  const firstSend70 = H.sendTurn();
+  await H.sendTurn();
+  for (let i = 0; i < 20 && !releaseUpload70; i += 1) await tick70();
+  releaseUpload70?.();
+  await firstSend70;
+  check('草稿文件上传期间连按两次发送只生成一个回合',
+    turnBodies.length === turnsBefore70 + 1 && sendNb.chat.messages.filter((m) => m.role === 'user').length === 1,
+    `turns=${turnBodies.length - turnsBefore70} users=${sendNb.chat.messages.filter((m) => m.role === 'user').length}`);
+  check('附件跟着唯一一条消息发出，没被第二次清空',
+    JSON.parse(turnBodies.at(-1)).attachments?.[0]?.rel === 'uploads/slow.txt', turnBodies.at(-1));
+
+  st.notebook = { ...makeNb70('nb-no-scene'), scene: { current: { id: 'scene-new', index: 1, props: [] }, log: [] } };
+  H.renderThread();
+  const noneBlock70 = H.sceneBlockEl(H.NO_SCENE);
+  const noneBody70 = noneBlock70 && Array.from(noneBlock70.children).find((n) => n.classList.contains('scene-body'));
+  const oldArtifact70 = doc.createElement('div');
+  oldArtifact70.className = 'artifact';
+  oldArtifact70.dataset.artifactId = 'art-history';
+  noneBody70?.append(oldArtifact70);
+  H.reconcileDesk();
+  check('没开过场的历史制品不会在第一次开新场时被当前 props 误删',
+    Boolean(oldArtifact70.parentNode), oldArtifact70.parentNode ? '还在' : '被删了');
+  H.resetDesk();
+
+  st.notebook = { ...makeNb70('nb-ask-order'), scene: { current: { id: 'scene-ask-order', index: 90, props: [] }, log: [] } };
+  st.turn = null;
+  H.renderThread();
+  st.turn = { blocks: [], flow: null, sceneId: 'scene-ask-order' };
+  st.turn.flow = H.appendChatTurn(st.turn, { role: 'assistant', __live: true, timestamp: Date.now() });
+  H.handleTurnEvent({ type: 'ask', questionId: 'early:q', question: '先到的题还能答吗？', options: [{ label: '能' }], multiSelect: false, allowText: true });
+  const earlyCard70 = () => st.turn?.blocks?.find((b) => b.node?.dataset?.questionId === 'early:q')?.node;
+  const earlyActions70 = () => deepAll(earlyCard70(), 'ask-actions')[0];
+  check('ask 先落地时新建的题卡立即放活提交与跳过',
+    deepAll(earlyCard70(), 'ask-option').every((b) => !b.disabled) &&
+    deepAll(earlyActions70(), 'btn-primary')[0]?.disabled === false &&
+    deepAll(earlyActions70(), 'btn-ghost')[0]?.disabled === false,
+    JSON.stringify({ cls: earlyCard70()?.className, primary: deepAll(earlyActions70(), 'btn-primary')[0]?.disabled, skip: deepAll(earlyActions70(), 'btn-ghost')[0]?.disabled }));
+  H.handleTurnEvent({ type: 'text_delta', delta: '```ui\nkind: question\nid: early:q\nconceptId: none\nquestion: 先到的题还能答吗？\noption: 能 — 继续\n```\n' });
+  H.renderChatLive(st.turn);
+  check('后到的同题围栏不复制第二张卡',
+    deepAll(st.turn.flow, 'ask-card').filter((c) => c.dataset?.questionId === 'early:q').length === 1,
+    String(deepAll(st.turn.flow, 'ask-card').filter((c) => c.dataset?.questionId === 'early:q').length));
+  check('去重后保留的是已放活的那张', earlyCard70() &&
+    deepAll(earlyActions70(), 'btn-primary')[0]?.disabled === false,
+    earlyCard70()?.outerHTML?.slice(0, 200));
+  H.handleTurnEvent({ type: 'answer', questionId: 'early:q', selected: ['能'], text: '' });
+  st.turn = null;
+  H.resetDesk();
+
+  const rejoinNb = makeNb70('nb-rejoin');
+  st.notebook = rejoinNb;
+  st.turn = null;
+  st.sendingTurn = false;
+  st.settings.activeModel = { provider: 'faux', model: 'faux-1' };
+  input.value = '断了也要接回来';
+  const rejoinHits70 = [];
+  globalThis.fetch = async (url, opts = {}) => {
+    if (/\/turn-state$/.test(url)) return json({ active: true });
+    if (/\/stream$/.test(url)) {
+      rejoinHits70.push(url);
+      return sseResponse([{ type: 'done', notebook: rejoinNb }, { type: 'closed' }]);
+    }
+    if (/\/turn$/.test(url)) {
+      turnBodies.push(opts.body);
+      return sseResponse([{ type: 'status', phase: 'thinking', step: 0 }, { type: 'text_delta', delta: '半句' }, { type: 'closed' }]);
+    }
+    return originalFetch70(url, opts);
+  };
+  await H.sendTurn();
+  check('POST 流意外关闭但服务端回合仍活着时自动重连 /stream',
+    rejoinHits70.length === 1 && st.turn === null, `rejoins=${rejoinHits70.length} turn=${Boolean(st.turn)}`);
+  globalThis.fetch = originalFetch70;
+
+  check('这一节无异常', errors.length === errsBefore70, errors.slice(errsBefore70).join(' | '));
 }
 
 fs.rmSync(appUrl.replace('file:///', '').replace(/\//g, path.sep), { force: true });

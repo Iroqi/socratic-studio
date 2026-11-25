@@ -281,6 +281,36 @@ check('落盘消息的 msgId 不重复', new Set(stepMessages.map((m) => m.msgId
   stepMessages.map((m) => m.msgId).join(','));
 check('落盘内容就是返回内容', JSON.stringify(stepMessages) === JSON.stringify(result.messages));
 
+section('4b. 阻塞工具（present_plan）中断后不再派发同一步的剩余工具');
+const abortController = new AbortController();
+const abortEvents = [];
+const abortNotebook = store.getNotebook(store.createNotebook({ topic: '中断回归', goal: '停在该停的地方', pace: 'normal' }).id);
+faux.setResponses([
+  fauxAssistantMessage([
+    fauxToolCall(TOOL_NAMES.PRESENT_PLAN, { plan: '先停一下，等学习者裁决。' }),
+    fauxToolCall(TOOL_NAMES.RECORD_EVENT, { concept_id: 'never', kind: 'observed', summary: '中断后不该发生' }),
+  ], { stopReason: 'toolUse' }),
+  fauxAssistantMessage([fauxText('中断后不该继续调用模型。')]),
+]);
+const abortedTurn = await runTurn({
+  registry,
+  notebook: abortNotebook,
+  history: [{ role: 'user', content: '开始', timestamp: Date.now() }],
+  modelRef: { provider: 'faux', model: fauxModel.id },
+  emit: (e) => {
+    abortEvents.push(e);
+    if (e.type === 'plan') setTimeout(() => abortController.abort(), 0);
+  },
+  signal: abortController.signal,
+  systemPrompt: '（测试用）',
+});
+check('中断结果明确传播为 aborted（宿主不会误报 done）', abortedTurn.outcome === 'aborted', abortedTurn.outcome);
+check('阻塞工具之后的第二个工具没有派发',
+  !abortEvents.some((e) => e.type === 'tool_exec' && e.name === TOOL_NAMES.RECORD_EVENT),
+  JSON.stringify(abortEvents.filter((e) => e.type === 'tool_exec').map((e) => e.name)));
+check('被中断工具的后续审计事件没有落进 progress',
+  !(abortedTurn.progress.events || []).some((e) => e.summary === '中断后不该发生'));
+
 // ─────────────────────────────────────── 5. 非法状态转移被拒
 
 section('5. 非法状态转移被引擎拒绝');
@@ -479,10 +509,18 @@ check(
     injectArtifactRuntime(injectArtifactCsp(bare)).indexOf('data-socratic-runtime'),
 );
 check('重复注入不叠第二条策略', injectArtifactCsp(assembled) === assembled);
+const suppliedCsp = '<html><head><meta http-equiv="content-security-policy" content="default-src \'none\'"></head></html>';
+const intersectedCsp = injectArtifactCsp(suppliedCsp);
 check(
-  '制品自己声明了 CSP 就不覆盖（尊重显式声明，别留两条打架）',
-  injectArtifactCsp('<html><head><meta http-equiv="content-security-policy" content="default-src \'none\'">') ===
-    '<html><head><meta http-equiv="content-security-policy" content="default-src \'none\'">',
+  '制品自己声明 CSP 时仍注入宿主策略（多条策略取交集，不能由制品替宿主放行）',
+  intersectedCsp.includes('http-equiv="Content-Security-Policy"') &&
+    intersectedCsp.includes(`content="${ARTIFACT_CSP}"`) &&
+    intersectedCsp.includes("content=\"default-src 'none'\""),
+  intersectedCsp,
+);
+check(
+  '宿主 CSP 位于制品自带 CSP 之前，运行时脚本出现前就受约束',
+  intersectedCsp.indexOf('data-socratic-csp') < intersectedCsp.indexOf('content="default-src'),
 );
 check('没有 head 的残缺文档也能钉上', /Content-Security-Policy/.test(injectArtifactCsp('<p>裸片段</p>')));
 
@@ -1546,6 +1584,7 @@ check('制品回传契约在场', rulesBlob.includes('SocraticStudio.report'));
 const RULES_CHAR_BUDGET = 65000;
 check(`规则注入不超过 ${RULES_CHAR_BUDGET} 字符`, rulesBlob.length <= RULES_CHAR_BUDGET,
   `实测 ${rulesBlob.length} 字符`);
+check('规则注入统一 LF（Windows 的 CRLF checkout 不改提示体积）', !rulesBlob.includes('\r'), rulesBlob.length);
 
 // 吸收完整性：注册给模型的工具必须在 system prompt 里有映射，否则模型只能按原宿主的说法瞎猜。
 // 这条就是"规则已被应用吸收"这句话的可执行版本。
@@ -2021,11 +2060,11 @@ section('7f-3. 落盘先看学习还在不在：鬼目录造不出来 + 体检�
    * 得拿一个**盘上真存在、但形状不合法**的目录来问：合法形状是判据的一部分，
    * 不是"存在性"之外的另一回事。
    */
-  const weirdDir = path.join(nbRoot, 'a:b');
+  const weirdDir = path.join(nbRoot, '_invalid');
   fs.mkdirSync(weirdDir, { recursive: true });
-  fs.writeFileSync(path.join(weirdDir, 'notebook.json'), JSON.stringify({ id: 'a:b', title: '形状不合法的那一本' }));
+  fs.writeFileSync(path.join(weirdDir, 'notebook.json'), JSON.stringify({ id: '_invalid', title: '形状不合法的那一本' }));
   check('盘上真有这么一个目录，但形状不合法就不算一本学习（判据先过 safeId，再问盘）',
-    fs.existsSync(path.join(weirdDir, 'notebook.json')) && notebookExists('a:b') === false,
+    fs.existsSync(path.join(weirdDir, 'notebook.json')) && notebookExists('_invalid') === false,
     'notebookExists 开始承认非合法形状的 id 了（门与 store 的口径会因此分家）');
   fs.rmSync(weirdDir, { recursive: true, force: true });
 
@@ -2192,7 +2231,7 @@ section('7f-5. 身份只有一个来源：列表发的地址一定打得开，�
  * 界面就拿到一个打不开的地址：
  *   - 改成别人的名字 → 列表两行同一个 id，点哪一行开的都是同一本（B 的行点开是 A）；
  *   - 改成 null → 这本从列表消失（listNotebooks 有 `if (!meta?.id) continue`），GET 整本照旧 200；
- *   - 盘上目录名形状不合法（a:b）→ 列表照样发它，点进去 400；
+ *   - 盘上目录名形状不合法（_invalid）→ 列表照样发它，点进去 400；
  *   - meta 里压根没写 id → 这本对列表隐身，按目录名却取得到。
  * 现在的口径：**目录名就是身份**，meta.id 只是资料；列表只发打得开的地址。
  */
@@ -2231,11 +2270,11 @@ section('7f-5. 身份只有一个来源：列表发的地址一定打得开，�
     store.listNotebooks().some((n) => n.id === ownA && n.title === '正主'),
     store.listNotebooks().map((n) => `${n.id}(${n.title})`).join(','));
   // ④ 形状不合法的目录不可寻址，就不该出现在列表里发一张点不开的链接
-  fs.mkdirSync(dirOfName('a:b'), { recursive: true });
-  fs.writeFileSync(path.join(dirOfName('a:b'), 'notebook.json'), JSON.stringify({ id: 'a:b', title: '形状不合法的一本' }));
+  fs.mkdirSync(dirOfName('_invalid'), { recursive: true });
+  fs.writeFileSync(path.join(dirOfName('_invalid'), 'notebook.json'), JSON.stringify({ id: '_invalid', title: '形状不合法的一本' }));
   const listed22 = store.listNotebooks();
   check('非法形状的目录不进列表（列表不许发点进去 400 的地址）',
-    !listed22.some((n) => n.id === 'a:b'), listed22.map((n) => n.id).join(','));
+    !listed22.some((n) => n.id === '_invalid'), listed22.map((n) => n.id).join(','));
   // ⑤ 体检要把"盘上的 id 与地址分家"点名——修好之前它就是盘上一处该看一眼的事实
   const drift = store.healthCheck().identityDrift || [];
   check('体检点名身份错位（目录名 ≠ 盘上写的 id，含缺字段那种）',
@@ -2249,11 +2288,11 @@ section('7f-5. 身份只有一个来源：列表发的地址一定打得开，�
     JSON.stringify({ reported: store.healthCheck().notebooks }));
   /*
    * ⑤c 身份这一处要真的影响 ok——变异 m10（identityDrift 不进 ok）实测抓到过这里原本只会点头：
-   * 那一句 ok===false 是在 a:b 还挂着的时候打的，红的是不可寻址那笔账，错位进不进 ok 它都绿。
-   * 所以先把 a:b 摘掉，让盘上只剩身份这一处不该存在，再看 ok；然后把两边都对齐，看 ok 翻回来。
+   * 那一句 ok===false 是在 _invalid 还挂着的时候打的，红的是不可寻址那笔账，错位进不进 ok 它都绿。
+   * 所以先把 _invalid 摘掉，让盘上只剩身份这一处不该存在，再看 ok；然后把两边都对齐，看 ok 翻回来。
    * 一红一绿两头都钉住，才是"进了 ok"，否则只是"报了但没人需要管"。
    */
-  fs.rmSync(dirOfName('a:b'), { recursive: true, force: true });
+  fs.rmSync(dirOfName('_invalid'), { recursive: true, force: true });
   const onlyDrift = store.healthCheck();
   check('只剩身份这一处分家时 ok=false（报了却不影响 ok=白报——第二十轮的同一口径）',
     (onlyDrift.unaddressableDirs || []).length === 0 && (onlyDrift.identityDrift || []).length > 0
@@ -2287,7 +2326,7 @@ section('7f-5. 身份只有一个来源：列表发的地址一定打得开，�
   const restoreB = metaOf(ownB); restoreB.id = ownB;
   fs.writeFileSync(path.join(dirOfName(ownB), 'notebook.json'), JSON.stringify(restoreB, null, 2));
 
-  fs.rmSync(dirOfName('a:b'), { recursive: true, force: true });
+  fs.rmSync(dirOfName('_invalid'), { recursive: true, force: true });
   fs.rmSync(dirOfName(clampNb.id), { recursive: true, force: true });
   // 剩下两本留给后面的套件（12c 的"健康目录体检报告 ok"会把它们清掉前先对齐——上面 ⑥ 已对齐）
 }
